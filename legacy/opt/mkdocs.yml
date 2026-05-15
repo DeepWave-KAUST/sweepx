@@ -77,6 +77,7 @@ nav:
       - Trust-Region (TTR/ASTR): optimizers/trust_region.md
       - L-BFGS-B: optimizers/lbfgsb.md
       - Adam-FWI: optimizers/adam_fwi.md
+      - Lion: optimizers/lion.md
   - Preconditioners:
       - Overview: preconditioners/index.md
       - Pseudo-Hessian: preconditioners/pseudo_hessian.md

@@ -72,6 +72,9 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - **AMSGrad**: Reddi, S. J., et al. (2018). "On the convergence of Adam
   and beyond."
   [arXiv:1904.09237](https://arxiv.org/abs/1904.09237).
+- **Lion**: Chen, X., et al. (2023). "Symbolic discovery of optimization
+  algorithms."
+  [arXiv:2302.06675](https://arxiv.org/abs/2302.06675).
 
 ### Tier-1
 

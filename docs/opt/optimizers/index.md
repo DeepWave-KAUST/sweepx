@@ -13,6 +13,7 @@ and tagged by the Tier in which it lands.
 | [Trust-Region (TTR/ASTR)](trust_region.md) | `TrustRegion` | Trust-region | 2 | yes (loss-only) | yes | yes (PCG inner, TTR) |
 | [L-BFGS-B](lbfgsb.md) | `LBFGSB` | Quasi-Newton | 2 | yes | yes (active-set) | yes (as `H_0`) |
 | [Adam-FWI](adam_fwi.md) | `AdamFWI` | Adaptive | 3 | optional | yes | n/a (per-param adaptive) |
+| [Lion](lion.md) | `Lion` | Adaptive (sign-momentum) | 3 | optional | yes | n/a |
 
 The matrix is appended to as new optimizers land. See each algorithm's own
 page for the API, theory, and references.
