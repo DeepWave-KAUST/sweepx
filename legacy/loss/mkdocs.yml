@@ -82,5 +82,6 @@ nav:
       - Frequency / Laplace domain: losses/frequency.md
       - Normalised Integration Method (NIM): losses/nim.md
       - Adaptive Waveform Inversion (AWI): losses/awi.md
+      - Deconvolution (Luo–Sava): losses/deconvolution.md
   - Report (formulas + bibliography): report.md
   - References: references.md

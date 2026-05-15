@@ -26,6 +26,7 @@ from .correlation import (
     global_correlation_loss,
     trace_normalized_l2_loss,
 )
+from .deconvolution import DeconvolutionLoss, deconvolution_loss
 from .envelope import EnvelopeLoss, envelope_loss
 from .frequency import (
     FrequencyAmplitudeLoss,
@@ -69,6 +70,7 @@ __all__ = [
     "BaseFWILoss",
     "CauchyLoss",
     "CrossCorrelationTraveltimeLoss",
+    "DeconvolutionLoss",
     "EnvelopeLoss",
     "EnvelopePhaseLoss",
     "FrequencyAmplitudeLoss",
@@ -91,6 +93,7 @@ __all__ = [
     "awi_loss",
     "cauchy_loss",
     "cross_correlation_traveltime_loss",
+    "deconvolution_loss",
     "envelope_loss",
     "envelope_phase_loss",
     "frequency_amplitude_loss",
