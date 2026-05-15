@@ -70,6 +70,10 @@ from .robust import (
 from .sinkhorn import SinkhornLoss, sinkhorn_loss
 from .soft_dtw import SoftDTWLoss, soft_dtw_loss
 from .student_t import StudentTLoss, student_t_loss
+from .tf_phase import (
+    TimeFrequencyPhaseLoss,
+    time_frequency_phase_loss,
+)
 from .traveltime import (
     CrossCorrelationTraveltimeLoss,
     cross_correlation_traveltime_loss,
@@ -107,6 +111,7 @@ __all__ = [
     "SinkhornLoss",
     "SoftDTWLoss",
     "StudentTLoss",
+    "TimeFrequencyPhaseLoss",
     "TraceNormalizedL2Loss",
     "TukeyLoss",
     "Wasserstein1Loss",
@@ -139,6 +144,7 @@ __all__ = [
     "sinkhorn_loss",
     "soft_dtw_loss",
     "student_t_loss",
+    "time_frequency_phase_loss",
     "trace_normalized_l2_loss",
     "tukey_loss",
     "w1_loss",
