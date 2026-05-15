@@ -78,5 +78,6 @@ nav:
       - Trace-normalised L2 / NCC: losses/correlation.md
       - Cross-correlation travel-time: losses/traveltime.md
       - Envelope (Bozdağ / Wu / Chi): losses/envelope.md
+      - Instantaneous phase + Envelope+Phase: losses/inst_phase.md
   - Report (formulas + bibliography): report.md
   - References: references.md

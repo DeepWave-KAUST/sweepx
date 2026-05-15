@@ -26,6 +26,12 @@ from .correlation import (
     trace_normalized_l2_loss,
 )
 from .envelope import EnvelopeLoss, envelope_loss
+from .inst_phase import (
+    EnvelopePhaseLoss,
+    InstantaneousPhaseLoss,
+    envelope_phase_loss,
+    instantaneous_phase_loss,
+)
 from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
@@ -49,10 +55,12 @@ __all__ = [
     "CauchyLoss",
     "CrossCorrelationTraveltimeLoss",
     "EnvelopeLoss",
+    "EnvelopePhaseLoss",
     "GemanMcClureLoss",
     "GlobalCorrelationLoss",
     "HuberLoss",
     "HybridL1L2Loss",
+    "InstantaneousPhaseLoss",
     "L1Loss",
     "L2Loss",
     "PseudoHuberLoss",
@@ -62,10 +70,12 @@ __all__ = [
     "cauchy_loss",
     "cross_correlation_traveltime_loss",
     "envelope_loss",
+    "envelope_phase_loss",
     "geman_mcclure_loss",
     "global_correlation_loss",
     "huber_loss",
     "hybrid_l1l2_loss",
+    "instantaneous_phase_loss",
     "l1_loss",
     "l2_loss",
     "pseudo_huber_loss",
