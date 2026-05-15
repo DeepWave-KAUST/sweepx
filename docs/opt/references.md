@@ -25,6 +25,14 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - **Polak-Ribiere formula**: Polak, E., and Ribiere, G. (1969). "Note sur la
   convergence de methodes de directions conjuguees." _RIRO_ 3(R1), 35-43.
   [DOI:10.1051/m2an/196903R100351](https://doi.org/10.1051/m2an/196903R100351).
+- **L-BFGS limited-memory storage**: Nocedal, J. (1980). "Updating quasi-Newton
+  matrices with limited storage." _Mathematics of Computation_ 35(151),
+  773-782.
+  [DOI:10.1090/S0025-5718-1980-0572855-7](https://doi.org/10.1090/S0025-5718-1980-0572855-7).
+- **L-BFGS for large-scale optimization**: Liu, D. C., and Nocedal, J. (1989).
+  "On the limited memory BFGS method for large scale optimization."
+  _Mathematical Programming_ 45, 503-528.
+  [DOI:10.1007/BF01589116](https://doi.org/10.1007/BF01589116).
 
 (Additional algorithms appear here as later commits land.)
 
