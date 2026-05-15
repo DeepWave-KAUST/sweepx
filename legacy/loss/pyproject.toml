@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fwiloss"
+version = "0.1.0"
+description = "A PyTorch library of misfit (loss) functions for Full Waveform Inversion."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Shijun Wang"},
+]
+keywords = ["fwi", "geophysics", "loss", "misfit", "seismic", "pytorch"]
+dependencies = [
+    "torch>=1.13",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "scipy>=1.8"]
+dev  = ["pytest>=7", "scipy>=1.8", "ruff", "black"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
