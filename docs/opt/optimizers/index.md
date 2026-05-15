@@ -8,6 +8,7 @@ and tagged by the Tier in which it lands.
 | [Steepest Descent](steepest_descent.md) | `SteepestDescent` | First-order | 1 | only with `line_search` | yes | yes |
 | [Nonlinear CG (PR+)](ncg.md) | `NCG` | First-order | 1 | yes | yes | yes |
 | [L-BFGS-FWI](lbfgs.md) | `LBFGS` | Quasi-Newton | 1 | yes | yes (projected) | yes (as `H_0`) |
+| [Truncated Newton (HF)](newton.md) | `TruncatedNewton` | Newton-type | 2 | yes (loss-only) | yes | yes (PCG inner) |
 
 The matrix is appended to as new optimizers land. See each algorithm's own
 page for the API, theory, and references.

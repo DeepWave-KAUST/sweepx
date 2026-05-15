@@ -11,6 +11,28 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 
 ## Per-algorithm references
 
+### Tier-2
+
+- **Truncated Newton survey**: Nash, S. G. (2000). "A survey of
+  truncated-Newton methods." _Journal of Computational and Applied
+  Mathematics_ 124(1-2), 45-59.
+  [DOI:10.1016/S0377-0427(00)00426-X](https://doi.org/10.1016/S0377-0427(00)00426-X).
+- **Eisenstat-Walker forcing**: Eisenstat, S. C., and Walker, H. F. (1996).
+  "Choosing the forcing terms in an inexact Newton method." _SIAM J. Sci.
+  Comput._ 17(1), 16-32.
+  [DOI:10.1137/0917003](https://doi.org/10.1137/0917003).
+- **Pearlmutter HVP trick**: Pearlmutter, B. A. (1994). "Fast exact
+  multiplication by the Hessian." _Neural Computation_ 6(1), 147-160.
+  [DOI:10.1162/neco.1994.6.1.147](https://doi.org/10.1162/neco.1994.6.1.147).
+- **Hestenes-Stiefel CG**: Hestenes, M. R., and Stiefel, E. (1952). "Methods
+  of conjugate gradients for solving linear systems." _J. Res. NBS_ 49(6),
+  409-436.
+  [DOI:10.6028/jres.049.044](https://doi.org/10.6028/jres.049.044).
+- **Steihaug truncated CG**: Steihaug, T. (1983). "The conjugate gradient
+  method and trust regions in large scale optimization." _SIAM J. Numer.
+  Anal._ 20(3), 626-637.
+  [DOI:10.1137/0720042](https://doi.org/10.1137/0720042).
+
 ### Tier-1
 
 - **Steepest Descent** + **strong-Wolfe line search**: Nocedal & Wright (2006),
