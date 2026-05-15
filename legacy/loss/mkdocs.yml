@@ -84,6 +84,7 @@ nav:
       - Normalised Integration Method (NIM): losses/nim.md
       - Jensen-Shannon divergence (Yan 2024): losses/jsd.md
       - Adaptive Waveform Inversion (AWI): losses/awi.md
+      - OT of Matching Filter (Sun-Alkhalifah 2019): losses/otmf.md
       - Deconvolution (Luo–Sava): losses/deconvolution.md
       - 1-Wasserstein (Métivier 2016): losses/w1.md
       - 2-Wasserstein (Engquist–Froese / Yang): losses/w2.md

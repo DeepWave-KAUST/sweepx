@@ -53,6 +53,7 @@ from .inst_phase import (
 )
 from .jsd import JensenShannonLoss, jensen_shannon_loss
 from .nim import NIMLoss, nim_loss
+from .otmf import OTMFLoss, otmf_loss
 from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
@@ -101,6 +102,7 @@ __all__ = [
     "LocalSimilarityLoss",
     "LogarithmicShinMinLoss",
     "NIMLoss",
+    "OTMFLoss",
     "PseudoHuberLoss",
     "SinkhornLoss",
     "SoftDTWLoss",
@@ -131,6 +133,7 @@ __all__ = [
     "laplace_l2_loss",
     "local_similarity_loss",
     "nim_loss",
+    "otmf_loss",
     "pseudo_huber_loss",
     "shin_min_log_loss",
     "sinkhorn_loss",
