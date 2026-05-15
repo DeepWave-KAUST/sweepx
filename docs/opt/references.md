@@ -32,6 +32,16 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   method and trust regions in large scale optimization." _SIAM J. Numer.
   Anal._ 20(3), 626-637.
   [DOI:10.1137/0720042](https://doi.org/10.1137/0720042).
+- **Truncated Newton for FWI**: Metivier, L., Brossier, R., Virieux, J., and
+  Operto, S. (2013). "Full waveform inversion and the truncated Newton
+  method." _SIAM J. Sci. Comput._ 35(2), B401-B437.
+  [DOI:10.1137/120877854](https://doi.org/10.1137/120877854).
+- **Levenberg-Marquardt damping**: Levenberg, K. (1944).
+  "A method for the solution of certain non-linear problems in least
+  squares." _Quarterly of Applied Mathematics_ 2(2), 164-168.
+  [DOI:10.1090/qam/10666](https://doi.org/10.1090/qam/10666);
+  Marquardt, D. W. (1963).
+  [DOI:10.1137/0111030](https://doi.org/10.1137/0111030).
 
 ### Tier-1
 
