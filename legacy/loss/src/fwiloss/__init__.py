@@ -59,6 +59,7 @@ from .robust import (
     geman_mcclure_loss,
     tukey_loss,
 )
+from .sinkhorn import SinkhornLoss, sinkhorn_loss
 from .student_t import StudentTLoss, student_t_loss
 from .traveltime import (
     CrossCorrelationTraveltimeLoss,
@@ -89,6 +90,7 @@ __all__ = [
     "LogarithmicShinMinLoss",
     "NIMLoss",
     "PseudoHuberLoss",
+    "SinkhornLoss",
     "StudentTLoss",
     "TraceNormalizedL2Loss",
     "TukeyLoss",
@@ -114,6 +116,7 @@ __all__ = [
     "nim_loss",
     "pseudo_huber_loss",
     "shin_min_log_loss",
+    "sinkhorn_loss",
     "student_t_loss",
     "trace_normalized_l2_loss",
     "tukey_loss",

@@ -85,5 +85,6 @@ nav:
       - Deconvolution (Luo–Sava): losses/deconvolution.md
       - 1-Wasserstein (Métivier 2016): losses/w1.md
       - 2-Wasserstein (Engquist–Froese / Yang): losses/w2.md
+      - Sinkhorn / entropic OT: losses/sinkhorn.md
   - Report (formulas + bibliography): report.md
   - References: references.md
