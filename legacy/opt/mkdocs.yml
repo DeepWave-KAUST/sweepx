@@ -79,7 +79,9 @@ nav:
   - Preconditioners:
       - Overview: preconditioners/index.md
       - Pseudo-Hessian: preconditioners/pseudo_hessian.md
+      - Depth weighting: preconditioners/depth_weighting.md
   - Parameterization:
       - Overview: parameterization/index.md
+      - Bounds (sigmoid / log / perturbation): parameterization/bounds.md
   - Marmousi report: report.md
   - References: references.md

@@ -24,4 +24,7 @@ useful for:
 
 | Name | Class | Tier | Notes |
 |---|---|---|---|
-| _none yet_ | - | - | - |
+| Identity | `IdentityParameterization` | 2 | Pass-through; the default. |
+| [Sigmoid bounds](bounds.md) | `SigmoidBounds` | 2 | Smooth box constraint via logistic. |
+| [Log-velocity](bounds.md) | `LogVelocity` | 2 | Latent in `log(physical)` space. |
+| [Perturbation from background](bounds.md) | `PerturbationFromBackground` | 2 | Latent is the perturbation `dv` around a fixed background. |
