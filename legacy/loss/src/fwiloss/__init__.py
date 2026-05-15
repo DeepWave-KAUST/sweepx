@@ -19,6 +19,12 @@ e.g. ``from fwiloss import L2Loss``.
 from __future__ import annotations
 
 from .base import BaseFWILoss
+from .correlation import (
+    GlobalCorrelationLoss,
+    TraceNormalizedL2Loss,
+    global_correlation_loss,
+    trace_normalized_l2_loss,
+)
 from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
@@ -37,21 +43,25 @@ __all__ = [
     "BaseFWILoss",
     "CauchyLoss",
     "GemanMcClureLoss",
+    "GlobalCorrelationLoss",
     "HuberLoss",
     "HybridL1L2Loss",
     "L1Loss",
     "L2Loss",
     "PseudoHuberLoss",
     "StudentTLoss",
+    "TraceNormalizedL2Loss",
     "TukeyLoss",
     "cauchy_loss",
     "geman_mcclure_loss",
+    "global_correlation_loss",
     "huber_loss",
     "hybrid_l1l2_loss",
     "l1_loss",
     "l2_loss",
     "pseudo_huber_loss",
     "student_t_loss",
+    "trace_normalized_l2_loss",
     "tukey_loss",
 ]
 

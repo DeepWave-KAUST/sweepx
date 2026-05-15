@@ -75,5 +75,6 @@ nav:
       - Hybrid L1/L2 (Bube–Langan): losses/hybrid_l1l2.md
       - Cauchy / Tukey / Geman–McClure: losses/robust.md
       - Student-t NLL: losses/student_t.md
+      - Trace-normalised L2 / NCC: losses/correlation.md
   - Report (formulas + bibliography): report.md
   - References: references.md
