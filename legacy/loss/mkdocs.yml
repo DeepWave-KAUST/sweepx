@@ -79,6 +79,7 @@ nav:
       - Cross-correlation travel-time: losses/traveltime.md
       - Envelope (Bozdağ / Wu / Chi): losses/envelope.md
       - Instantaneous phase + Envelope+Phase: losses/inst_phase.md
+      - Exponentiated phase (Yuan 2020): losses/exponentiated_phase.md
       - Frequency / Laplace domain: losses/frequency.md
       - Normalised Integration Method (NIM): losses/nim.md
       - Adaptive Waveform Inversion (AWI): losses/awi.md
