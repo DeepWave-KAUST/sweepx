@@ -79,5 +79,6 @@ nav:
       - Cross-correlation travel-time: losses/traveltime.md
       - Envelope (Bozdağ / Wu / Chi): losses/envelope.md
       - Instantaneous phase + Envelope+Phase: losses/inst_phase.md
+      - Frequency / Laplace domain: losses/frequency.md
   - Report (formulas + bibliography): report.md
   - References: references.md
