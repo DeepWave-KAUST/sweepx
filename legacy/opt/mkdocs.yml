@@ -69,6 +69,7 @@ nav:
       - Data convention: getting_started/data_convention.md
   - Optimizers:
       - Overview: optimizers/index.md
+      - Steepest Descent: optimizers/steepest_descent.md
   - Preconditioners:
       - Overview: preconditioners/index.md
   - Parameterization:

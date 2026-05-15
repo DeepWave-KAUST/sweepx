@@ -107,13 +107,18 @@ def born_illumination_1d() -> Tuple[Tensor, Tensor, Tensor]:
 # ---------------------------------------------------------------------------
 # Helpers shared by line-search tests.
 # ---------------------------------------------------------------------------
-def make_closure(f: Callable[[Tensor], Tensor], param: Tensor) -> Callable[[], Tensor]:
-    """Build a torch.optim-compatible closure around f and a single tensor parameter."""
-    def closure() -> Tensor:
-        if param.grad is not None:
-            param.grad.zero_()
-        loss = f(param)
-        loss.backward()
-        return loss
+@pytest.fixture
+def make_closure():
+    """Factory: build a torch.optim-compatible closure around f and a tensor param."""
 
-    return closure
+    def _make(f: Callable[[Tensor], Tensor], param: Tensor) -> Callable[[], Tensor]:
+        def closure() -> Tensor:
+            if param.grad is not None:
+                param.grad.zero_()
+            loss = f(param)
+            loss.backward()
+            return loss
+
+        return closure
+
+    return _make

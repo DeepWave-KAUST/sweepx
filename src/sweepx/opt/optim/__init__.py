@@ -1,3 +1,5 @@
 """First-order, quasi-Newton, Newton-type, and modern adaptive optimizers for FWI."""
 
-__all__ = []
+from sweep_opt.optim.steepest_descent import SteepestDescent
+
+__all__ = ["SteepestDescent"]

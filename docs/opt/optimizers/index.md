@@ -5,7 +5,7 @@ and tagged by the Tier in which it lands.
 
 | Algorithm | Class | Category | Tier | Closure required? | Bounds | Preconditioner |
 |---|---|---|---|---|---|---|
-| _none yet_ | - | - | - | - | - | - |
+| [Steepest Descent](steepest_descent.md) | `SteepestDescent` | First-order | 1 | only with `line_search` | yes | yes |
 
 The matrix is appended to as new optimizers land. See each algorithm's own
 page for the API, theory, and references.

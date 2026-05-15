@@ -11,7 +11,14 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 
 ## Per-algorithm references
 
-References are added to this page as each optimizer commits land. See:
+### Tier-1
+
+- **Steepest Descent** + **strong-Wolfe line search**: Nocedal & Wright (2006),
+  _Numerical Optimization_, Algorithms 3.5-3.6. See above for DOI.
+
+(Additional algorithms appear here as later commits land.)
+
+### Topic indices
 
 - [Optimizers](optimizers/index.md)
 - [Preconditioners](preconditioners/index.md)
