@@ -28,6 +28,7 @@ from .correlation import (
 )
 from .deconvolution import DeconvolutionLoss, deconvolution_loss
 from .envelope import EnvelopeLoss, envelope_loss
+from .gsot import GSOTLoss, gsot_loss
 from .frequency import (
     FrequencyAmplitudeLoss,
     FrequencyDomainL2Loss,
@@ -79,6 +80,7 @@ __all__ = [
     "FrequencyAmplitudeLoss",
     "FrequencyDomainL2Loss",
     "FrequencyPhaseLoss",
+    "GSOTLoss",
     "GemanMcClureLoss",
     "GlobalCorrelationLoss",
     "HuberLoss",
@@ -107,6 +109,7 @@ __all__ = [
     "frequency_phase_loss",
     "geman_mcclure_loss",
     "global_correlation_loss",
+    "gsot_loss",
     "huber_loss",
     "hybrid_l1l2_loss",
     "instantaneous_phase_loss",
