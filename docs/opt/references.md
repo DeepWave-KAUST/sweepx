@@ -78,6 +78,12 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - **SAM**: Foret, P., et al. (2021). "Sharpness-aware minimization for
   efficiently improving generalization." ICLR.
   [arXiv:2010.01412](https://arxiv.org/abs/2010.01412).
+- **Shampoo**: Gupta, V., Koren, T., and Singer, Y. (2018). "Shampoo:
+  Preconditioned stochastic tensor optimization." ICML.
+  [PMLR](https://proceedings.mlr.press/v80/gupta18a/gupta18a.pdf).
+- **SOAP**: Vyas, N., et al. (2024). "SOAP: Improving and stabilizing
+  Shampoo using Adam."
+  [arXiv:2409.11321](https://arxiv.org/abs/2409.11321).
 
 ### Tier-1
 

@@ -79,6 +79,8 @@ nav:
       - Adam-FWI: optimizers/adam_fwi.md
       - Lion: optimizers/lion.md
       - SAM: optimizers/sam.md
+      - Shampoo: optimizers/shampoo.md
+      - SOAP: optimizers/soap.md
   - Preconditioners:
       - Overview: preconditioners/index.md
       - Pseudo-Hessian: preconditioners/pseudo_hessian.md

@@ -8,6 +8,8 @@ from sweep_opt.optim.lion import Lion
 from sweep_opt.optim.ncg import NCG
 from sweep_opt.optim.newton import TruncatedNewton
 from sweep_opt.optim.sam import SAM
+from sweep_opt.optim.shampoo import Shampoo
+from sweep_opt.optim.soap import SOAP
 from sweep_opt.optim.steepest_descent import SteepestDescent
 from sweep_opt.optim.trust_region import TrustRegion
 
@@ -18,6 +20,8 @@ __all__ = [
     "Lion",
     "NCG",
     "SAM",
+    "SOAP",
+    "Shampoo",
     "SteepestDescent",
     "TrustRegion",
     "TruncatedGaussNewton",
