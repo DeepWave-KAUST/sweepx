@@ -28,4 +28,4 @@ multiplied by depth weighting); see the per-algorithm pages.
 
 | Name | Class | Tier | Notes |
 |---|---|---|---|
-| _none yet_ | - | - | - |
+| [Pseudo-Hessian](pseudo_hessian.md) | `PseudoHessianPrecond` | 1 | Plessix-Mulder diagonal; needs source / receiver illumination. |

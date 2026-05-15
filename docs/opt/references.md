@@ -15,6 +15,10 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 
 - **Steepest Descent** + **strong-Wolfe line search**: Nocedal & Wright (2006),
   _Numerical Optimization_, Algorithms 3.5-3.6. See above for DOI.
+- **Pseudo-Hessian preconditioner**: Plessix, R.-E., and Mulder, W. A. (2004).
+  "Frequency-domain finite-difference amplitude-preserving migration."
+  _Geophysical Journal International_ 157(3), 975-987.
+  [DOI:10.1111/j.1365-246X.2004.02289.x](https://doi.org/10.1111/j.1365-246X.2004.02289.x).
 
 (Additional algorithms appear here as later commits land.)
 
