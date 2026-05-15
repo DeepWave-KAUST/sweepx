@@ -1,0 +1,149 @@
+"""Soft-DTW (dynamic time warping) FWI misfit (Cuturi & Blondel 2017).
+
+Soft-DTW is a smoothed version of classical Dynamic Time Warping that
+makes the warping cost *differentiable*:
+
+.. math::
+
+    \\mathrm{sDTW}_\\gamma(d_s, d_o) \\;=\\; -\\gamma\\,\\log\\!\\sum_{A \\in \\mathcal A}
+        \\exp\\!\\bigl(-\\tfrac{1}{\\gamma}\\,\\langle A, \\Delta\\rangle\\bigr),
+
+where :math:`\\Delta_{ij} = (d_s(t_i) - d_o(t_j))^2` is the pointwise cost
+and :math:`\\mathcal A` is the set of monotone alignment paths.  As
+:math:`\\gamma \\to 0^+` we recover the classical DTW; as
+:math:`\\gamma \\to \\infty` we recover :math:`-\\gamma\\log|\\mathcal A|` + a
+soft-min of all path costs.
+
+This package implements the **O(nt^2)** time, **O(nt^2)** memory forward
+recursion of Cuturi & Blondel (2017, alg. 1).  Gradients are obtained
+automatically via PyTorch autograd through the soft-min recursion.
+
+Soft-DTW has been used as a kinematic FWI misfit by Wang, Sava &
+Sripanich (2023) and by Sava (2014) (classical hard DTW) and is one of
+the most powerful misfits for matching wavetrains under unknown,
+**non-stationary** time warps.
+
+References
+----------
+* Cuturi, M. & Blondel, M. (2017). *Soft-DTW: a differentiable loss
+  function for time-series.*  ICML 70, 894-903.  arXiv:1703.01541
+* Sava, P. (2014). *3D dynamic time warping for traveltime inversion.*
+  SEG Tech. Progr. Expanded Abstracts, pp. 4830-4834.
+  doi:10.1190/segam2014-1452.1
+* Ma, Y. & Hale, D. (2013). *Wave-equation reflection traveltime
+  inversion with dynamic warping and full-waveform inversion.*
+  **Geophysics** 78 (6), R223-R233.
+  doi:10.1190/geo2013-0058.1
+"""
+
+from __future__ import annotations
+
+import torch
+
+from .base import BaseFWILoss, flatten_traces, to_canonical
+
+
+def _soft_min(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, gamma: float) -> torch.Tensor:
+    """Soft-min of three tensors with temperature gamma.
+
+    soft-min_gamma(a, b, c) = -gamma * log(exp(-a/gamma) + exp(-b/gamma) + exp(-c/gamma))
+    """
+    # Stack to (N, 3) then logsumexp for numerical stability.
+    stack = torch.stack([-a / gamma, -b / gamma, -c / gamma], dim=-1)
+    return -gamma * torch.logsumexp(stack, dim=-1)
+
+
+def _soft_dtw_forward(D: torch.Tensor, gamma: float) -> torch.Tensor:
+    """Forward Soft-DTW recursion.
+
+    Parameters
+    ----------
+    D
+        Pointwise cost ``(N, nt_s, nt_o)``.
+    gamma
+        Soft-min temperature; ``gamma -> 0`` recovers classical DTW.
+
+    Returns
+    -------
+    ``(N,)`` Soft-DTW value per batch entry.
+    """
+    N, n, m = D.shape
+    # Padded DP table with +inf on the boundary so the recursion is clean.
+    R = torch.full((N, n + 2, m + 2), float("inf"), device=D.device, dtype=D.dtype)
+    R[:, 0, 0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            R[:, i, j] = D[:, i - 1, j - 1] + _soft_min(
+                R[:, i - 1, j], R[:, i, j - 1], R[:, i - 1, j - 1], gamma
+            )
+    return R[:, n, m]
+
+
+class SoftDTWLoss(BaseFWILoss):
+    """Soft-DTW FWI misfit (Cuturi & Blondel 2017).
+
+    Parameters
+    ----------
+    gamma
+        Soft-min temperature.  ``gamma -> 0`` is classical DTW (not
+        differentiable); ``gamma = 1`` (default) is the smooth Cuturi-
+        Blondel setting.
+    normalize_by_length
+        If True (default), divide the per-trace cost by ``nt`` so the
+        loss does not scale with trace length.  Cuturi & Blondel define
+        Soft-DTW without this normalisation.
+    """
+
+    def __init__(
+        self,
+        gamma: float = 1.0,
+        normalize_by_length: bool = True,
+        reduction: str = "mean",
+        mask: "torch.Tensor | None" = None,
+    ) -> None:
+        super().__init__(reduction=reduction, mask=mask)
+        if gamma <= 0:
+            raise ValueError(f"gamma must be > 0, got {gamma}")
+        self.gamma = float(gamma)
+        self.normalize_by_length = bool(normalize_by_length)
+
+    def forward(self, syn: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
+        syn_c, _ = to_canonical(syn)
+        obs_c, _ = to_canonical(obs)
+        if syn_c.shape != obs_c.shape:
+            raise ValueError(
+                f"shape mismatch: syn={tuple(syn.shape)} obs={tuple(obs.shape)}"
+            )
+        s, _ = flatten_traces(syn_c)
+        o, _ = flatten_traces(obs_c)
+        N, nt = s.shape
+
+        # Pointwise cost matrix Delta[i, j] = (s[i] - o[j])^2 per trace.
+        D = (s.unsqueeze(-1) - o.unsqueeze(-2)) ** 2
+
+        per_trace = _soft_dtw_forward(D, self.gamma)
+        if self.normalize_by_length:
+            per_trace = per_trace / nt
+
+        if self.reduction == "mean":
+            return per_trace.mean()
+        if self.reduction == "sum":
+            return per_trace.sum()
+        return per_trace
+
+
+def soft_dtw_loss(
+    syn,
+    obs,
+    gamma: float = 1.0,
+    normalize_by_length: bool = True,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    return SoftDTWLoss(
+        gamma=gamma,
+        normalize_by_length=normalize_by_length,
+        reduction=reduction,
+    )(syn, obs)
+
+
+__all__ = ["SoftDTWLoss", "soft_dtw_loss"]

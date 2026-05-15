@@ -87,5 +87,6 @@ nav:
       - 2-Wasserstein (Engquist–Froese / Yang): losses/w2.md
       - Sinkhorn / entropic OT: losses/sinkhorn.md
       - Graph-space OT (Métivier 2018): losses/gsot.md
+      - Soft-DTW (Cuturi-Blondel 2017): losses/soft_dtw.md
   - Report (formulas + bibliography): report.md
   - References: references.md

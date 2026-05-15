@@ -61,6 +61,7 @@ from .robust import (
     tukey_loss,
 )
 from .sinkhorn import SinkhornLoss, sinkhorn_loss
+from .soft_dtw import SoftDTWLoss, soft_dtw_loss
 from .student_t import StudentTLoss, student_t_loss
 from .traveltime import (
     CrossCorrelationTraveltimeLoss,
@@ -93,6 +94,7 @@ __all__ = [
     "NIMLoss",
     "PseudoHuberLoss",
     "SinkhornLoss",
+    "SoftDTWLoss",
     "StudentTLoss",
     "TraceNormalizedL2Loss",
     "TukeyLoss",
@@ -120,6 +122,7 @@ __all__ = [
     "pseudo_huber_loss",
     "shin_min_log_loss",
     "sinkhorn_loss",
+    "soft_dtw_loss",
     "student_t_loss",
     "trace_normalized_l2_loss",
     "tukey_loss",
