@@ -6,11 +6,14 @@ from sweep_opt.parameterization.bounds import (
     PerturbationFromBackground,
     SigmoidBounds,
 )
+from sweep_opt.parameterization.dip import DIPParameterization, SmallUNet2D
 
 __all__ = [
+    "DIPParameterization",
     "IdentityParameterization",
     "LogVelocity",
     "Parameterization",
     "PerturbationFromBackground",
     "SigmoidBounds",
+    "SmallUNet2D",
 ]

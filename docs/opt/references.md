@@ -84,6 +84,13 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - **SOAP**: Vyas, N., et al. (2024). "SOAP: Improving and stabilizing
   Shampoo using Adam."
   [arXiv:2409.11321](https://arxiv.org/abs/2409.11321).
+- **Deep Image Prior**: Lempitsky, V., Vedaldi, A., and Ulyanov, D. (2018).
+  "Deep Image Prior." CVPR.
+  [DOI:10.1109/CVPR.2018.00984](https://doi.org/10.1109/CVPR.2018.00984).
+- **DIP-FWI (geophysics)**: He, T., et al. (2024). "Deep image prior
+  full-waveform inversion." _JGR: Machine Learning and Computation_ 1,
+  e2024JH000227.
+  [DOI:10.1029/2024JH000227](https://doi.org/10.1029/2024JH000227).
 
 ### Tier-1
 
