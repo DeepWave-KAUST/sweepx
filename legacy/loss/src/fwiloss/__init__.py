@@ -19,15 +19,20 @@ e.g. ``from fwiloss import L2Loss``.
 from __future__ import annotations
 
 from .base import BaseFWILoss
+from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .l1 import L1Loss, l1_loss
 from .l2 import L2Loss, l2_loss
 
 __all__ = [
     "BaseFWILoss",
+    "HuberLoss",
     "L1Loss",
     "L2Loss",
+    "PseudoHuberLoss",
+    "huber_loss",
     "l1_loss",
     "l2_loss",
+    "pseudo_huber_loss",
 ]
 
 __version__ = "0.1.0"
