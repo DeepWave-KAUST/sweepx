@@ -64,6 +64,7 @@ from .traveltime import (
     CrossCorrelationTraveltimeLoss,
     cross_correlation_traveltime_loss,
 )
+from .w1 import Wasserstein1Loss, w1_loss
 
 __all__ = [
     "AWILoss",
@@ -90,6 +91,7 @@ __all__ = [
     "StudentTLoss",
     "TraceNormalizedL2Loss",
     "TukeyLoss",
+    "Wasserstein1Loss",
     "awi_loss",
     "cauchy_loss",
     "cross_correlation_traveltime_loss",
@@ -113,6 +115,7 @@ __all__ = [
     "student_t_loss",
     "trace_normalized_l2_loss",
     "tukey_loss",
+    "w1_loss",
 ]
 
 __version__ = "0.1.0"
