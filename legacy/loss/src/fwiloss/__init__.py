@@ -32,7 +32,6 @@ from .exponentiated_phase import (
     ExponentiatedPhaseLoss,
     exponentiated_phase_loss,
 )
-from .gsot import GSOTLoss, gsot_loss
 from .frequency import (
     FrequencyAmplitudeLoss,
     FrequencyDomainL2Loss,
@@ -45,6 +44,9 @@ from .frequency import (
     laplace_l2_loss,
     shin_min_log_loss,
 )
+from .gsot import GSOTLoss, gsot_loss
+from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
+from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .inst_phase import (
     EnvelopePhaseLoss,
     InstantaneousPhaseLoss,
@@ -52,13 +54,11 @@ from .inst_phase import (
     instantaneous_phase_loss,
 )
 from .jsd import JensenShannonLoss, jensen_shannon_loss
-from .nim import NIMLoss, nim_loss
-from .otmf import OTMFLoss, otmf_loss
-from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
-from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
 from .l2 import L2Loss, l2_loss
 from .local_similarity import LocalSimilarityLoss, local_similarity_loss
+from .nim import NIMLoss, nim_loss
+from .otmf import OTMFLoss, otmf_loss
 from .robust import (
     CauchyLoss,
     GemanMcClureLoss,

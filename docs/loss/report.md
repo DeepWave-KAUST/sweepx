@@ -19,18 +19,18 @@ with residual $r = d_{\mathrm s} - d_{\mathrm o}$.
 | **A.** Data-domain Lp / robust M-estimators | L2, L1, Huber, pseudo-Huber, hybrid L1/L2, Cauchy, Tukey, Geman-McClure, Student-t |
 | **B.** Correlation / amplitude-normalised   | trace-normalised L2, global correlation (NCC) |
 | **C.** Travel-time / picking                | cross-correlation travel-time |
-| **D.** Envelope & instantaneous phase       | envelope (p=1,2 / log / squared), instantaneous-phase, envelope+phase combined |
+| **D.** Envelope & phase                     | envelope (p=1,2 / log / squared), instantaneous-phase, **exponentiated phase**, envelope+phase combined, **time-frequency phase/envelope** |
 | **E.** Frequency / Laplace domain           | freq-L2 (Pratt), phase-only, amplitude-only, Shin-Min log, Laplace L2 |
-| **F.** Convolution / matching filter        | Adaptive Waveform Inversion (Warner-Guasch), Luo-Sava deconvolution |
-| **G.** Normalised Integration Method        | NIM (Liu / Donno) |
+| **F.** Convolution / matching filter        | Adaptive Waveform Inversion (Warner-Guasch), Luo-Sava deconvolution, **OT of Matching Filter (OTMF)** |
+| **G.** Density-domain divergences           | NIM (Liu / Donno), **Jensen-Shannon divergence (Yan 2024)** |
 | **H.** Optimal transport                    | W1 (Métivier), W2 via CDF (Engquist-Froese / Yang), Sinkhorn divergence, GSOT (graph-space) |
 | **I.** Dynamic warping                      | Soft-DTW |
 | **J.** Local attribute                      | local similarity (Fomel) |
 
-A total of **30 named misfits across 26 PyTorch loss classes** are
-implemented (the variants of `EnvelopeLoss`, `FrequencyXxxLoss` and
-`SinkhornLoss(debiased=...)` count as separate misfits in the
-literature).
+A total of **34 PyTorch loss classes** implementing **≈ 38 named misfits**
+across families A-J (the variants of `EnvelopeLoss`, `FrequencyXxxLoss`,
+`SinkhornLoss(debiased=...)`, `OTMFLoss(order=1|2)` count as separate
+misfits in the literature).
 
 > All references below carry a DOI link. Sections D-H reference the same
 > "anti-cycle-skipping property" — these are misfits that remain monotone
@@ -255,7 +255,25 @@ $$
   665-685.
   doi:[10.1111/j.1365-246X.2008.03923.x](https://doi.org/10.1111/j.1365-246X.2008.03923.x)
 
-### D.3 Envelope + phase combined — `EnvelopePhaseLoss`
+### D.3 Exponentiated phase — `ExponentiatedPhaseLoss`
+
+Normalised analytic signal $\tilde s(t) = a(t)/E_s(t) = e^{i\phi_s(t)}$:
+
+$$
+\chi_{\mathrm{EP}} = \tfrac{1}{2}\sum\int_0^T |\Re\tilde s-\Re\tilde d|^2 + |\Im\tilde s-\Im\tilde d|^2 \,dt.
+$$
+
+* Yuan, Y. O., Bozdağ, E., Ciardelli, C., Gao, F. & Simons, F. J. (2020).
+  *The exponentiated phase measurement, and objective-function
+  hybridisation for adjoint waveform tomography.* **Geophys. J. Int.**
+  221 (2), 1145-1164.
+  doi:[10.1093/gji/ggaa063](https://doi.org/10.1093/gji/ggaa063)
+* Gao, F., Yuan, Y. O., Ciardelli, C., Simons, F. J., Bozdağ, E. &
+  Tromp, J. (2023). *Review of misfit functions for adjoint full waveform
+  inversion in seismology.* **Geophys. J. Int.** 235 (3), 2794-2820.
+  doi:[10.1093/gji/ggad372](https://doi.org/10.1093/gji/ggad372)
+
+### D.4 Envelope + phase combined — `EnvelopePhaseLoss`
 
 $$
 \mathcal J_{E+\phi} = (1-\alpha)\,\mathcal J_E + \alpha\,\mathcal J_\phi.
@@ -264,6 +282,27 @@ $$
 * Yuan, Y. O., Simons, F. J. & Tromp, J. (2016). *Double-difference
   adjoint seismic tomography.* **Geophys. J. Int.** 206 (3), 1599-1618.
   doi:[10.1093/gji/ggw233](https://doi.org/10.1093/gji/ggw233)
+
+### D.5 Time-Frequency phase / envelope — `TimeFrequencyPhaseLoss`
+
+Gabor STFT $G_s, G_o$ with magnitude $A$ and phase $\phi$. Envelope
+term $\tfrac{1}{2}\sum_{t,\omega}(|G_s|-|G_o|)^2$; phase term uses the
+unit-circle residual $|e^{i\phi_s}-e^{i\phi_o}|^2$ weighted by $|G_o|$.
+Mixed by $\alpha$.
+
+* Fichtner, A., Kennett, B. L. N., Igel, H. & Bunge, H.-P. (2008).
+  *Theoretical background for continental- and global-scale full-waveform
+  inversion in the time-frequency domain.* **Geophys. J. Int.** 175 (2),
+  665-685.
+  doi:[10.1111/j.1365-246X.2008.03923.x](https://doi.org/10.1111/j.1365-246X.2008.03923.x)
+* Kristeková, M., Kristek, J. & Moczo, P. (2009). *Time-frequency misfit
+  and goodness-of-fit criteria for quantitative comparison of time
+  signals.* **Geophys. J. Int.** 178 (2), 813-825.
+  doi:[10.1111/j.1365-246X.2009.04177.x](https://doi.org/10.1111/j.1365-246X.2009.04177.x)
+* Kristeková, M., Kristek, J., Moczo, P. & Day, S. M. (2006). *Misfit
+  criteria for quantitative comparison of seismograms.* **Bull. Seismol.
+  Soc. Am.** 96 (5), 1836-1850.
+  doi:[10.1785/0120060012](https://doi.org/10.1785/0120060012)
 
 ---
 
@@ -354,7 +393,28 @@ $$
   inversion: practice.* **Geophysics** 84 (3), R447-R461.
   doi:[10.1190/geo2018-0377.1](https://doi.org/10.1190/geo2018-0377.1)
 
-### F.2 Deconvolution-based — `DeconvolutionLoss`
+### F.2 Optimal Transport of Matching Filter — `OTMFLoss`
+
+Compute the Wiener matching filter $w(\tau)$ as in AWI, preprocess to a
+density $\hat w$, then measure Wasserstein distance to the Dirac at zero
+lag:
+
+$$
+W_2^2(\hat w, \delta_0) = \int \tau^2\,\hat w(\tau)\,d\tau, \qquad W_1(\hat w, \delta_0) = \int |\tau|\,\hat w(\tau)\,d\tau.
+$$
+
+* Sun, B. & Alkhalifah, T. (2018). *Adaptive traveltime inversion.*
+  **Geophysics** 84 (4), U13-U29.
+  doi:[10.1190/geo2018-0595.1](https://doi.org/10.1190/geo2018-0595.1)
+* Sun, B. & Alkhalifah, T. (2019). *The application of an optimal
+  transport to a preconditioned data matching function for robust
+  waveform inversion.* **Geophysics** 84 (6), R923-R945.
+  doi:[10.1190/geo2018-0413.1](https://doi.org/10.1190/geo2018-0413.1)
+* Sun, B. & Alkhalifah, T. (2019). *Stereo optimal transport of the
+  matching filter.*  SEG Tech. Progr. Expanded Abstracts, pp. 1505-1509.
+  doi:[10.1190/segam2019-3199662.1](https://doi.org/10.1190/segam2019-3199662.1)
+
+### F.3 Deconvolution-based — `DeconvolutionLoss`
 
 $$
 \Psi(\tau) = \mathcal F^{-1}\!\Bigl(\tfrac{D_{\mathrm o}}{D_{\mathrm s}+\epsilon}\Bigr),\quad
@@ -373,9 +433,9 @@ $$
 
 ---
 
-## G. Normalised Integration Method
+## G. Density-domain divergences
 
-### G.1 NIM — `NIMLoss`
+### G.1 NIM (CDF distance) — `NIMLoss`
 
 $$
 f = \sigma(d),\quad F(t) = \tfrac{\int_0^t f}{\int_0^T f},\quad \mathcal J_{\mathrm{NIM}} = \tfrac12 \sum \int_0^T (F_{\mathrm s}-F_{\mathrm o})^2\, dt.
@@ -387,6 +447,25 @@ $$
   doi:[10.1111/j.1365-2478.2011.00993.x](https://doi.org/10.1111/j.1365-2478.2011.00993.x)
 * Donno, D., Chauris, H. & Calandra, H. (2013). 75th EAGE Conf.
   doi:[10.3997/2214-4609.20130411](https://doi.org/10.3997/2214-4609.20130411)
+
+### G.2 Jensen-Shannon divergence — `JensenShannonLoss`
+
+$$
+\mathrm{JSD}(p, q) = \tfrac12\mathrm{KL}(p\|m) + \tfrac12\mathrm{KL}(q\|m),\quad m = \tfrac12(p+q).
+$$
+
+Symmetric, bounded by $\log 2$.
+
+* Yan, Z., Mostefai, F., Ouattara, K., et al. (2024). *Multiparameter
+  shallow-seismic waveform inversion based on the Jensen-Shannon
+  divergence.* **Geophys. J. Int.** 238 (1), 132-148.
+  doi:[10.1093/gji/ggae131](https://doi.org/10.1093/gji/ggae131)
+* Endres, D. M. & Schindelin, J. E. (2003). *A new metric for
+  probability distributions.* **IEEE T. Inf. Theory** 49 (7), 1858-1860.
+  doi:[10.1109/TIT.2003.813506](https://doi.org/10.1109/TIT.2003.813506)
+* Lin, J. (1991). *Divergence measures based on the Shannon entropy.*
+  **IEEE T. Inf. Theory** 37 (1), 145-151.
+  doi:[10.1109/18.61115](https://doi.org/10.1109/18.61115)
 
 ---
 

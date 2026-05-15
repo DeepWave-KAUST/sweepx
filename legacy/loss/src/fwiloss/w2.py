@@ -57,7 +57,7 @@ def _inverse_cdf(F: torch.Tensor, dt: float, z: torch.Tensor) -> torch.Tensor:
     # We use torch.searchsorted on each row.  searchsorted returns the
     # first index where z could be inserted while keeping F sorted, which
     # is what we want (right-most index k+1 such that F[k] <= z).
-    idx = torch.searchsorted(F, z.expand(N, M), right=True)
+    idx = torch.searchsorted(F.contiguous(), z.expand(N, M).contiguous(), right=True)
     idx = idx.clamp(min=1, max=nt - 1)
     idx_low = idx - 1
     idx_high = idx
