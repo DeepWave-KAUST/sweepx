@@ -20,16 +20,19 @@ from __future__ import annotations
 
 from .base import BaseFWILoss
 from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
+from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
 from .l2 import L2Loss, l2_loss
 
 __all__ = [
     "BaseFWILoss",
     "HuberLoss",
+    "HybridL1L2Loss",
     "L1Loss",
     "L2Loss",
     "PseudoHuberLoss",
     "huber_loss",
+    "hybrid_l1l2_loss",
     "l1_loss",
     "l2_loss",
     "pseudo_huber_loss",
