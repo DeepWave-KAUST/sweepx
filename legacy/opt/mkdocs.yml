@@ -76,6 +76,7 @@ nav:
       - Truncated Gauss-Newton: optimizers/gauss_newton.md
       - Trust-Region (TTR/ASTR): optimizers/trust_region.md
       - L-BFGS-B: optimizers/lbfgsb.md
+      - Adam-FWI: optimizers/adam_fwi.md
   - Preconditioners:
       - Overview: preconditioners/index.md
       - Pseudo-Hessian: preconditioners/pseudo_hessian.md

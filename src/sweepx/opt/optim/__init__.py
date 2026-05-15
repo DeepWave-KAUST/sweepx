@@ -1,5 +1,6 @@
 """First-order, quasi-Newton, Newton-type, and modern adaptive optimizers for FWI."""
 
+from sweep_opt.optim.adam_fwi import AdamFWI
 from sweep_opt.optim.gauss_newton import TruncatedGaussNewton
 from sweep_opt.optim.lbfgs import LBFGS
 from sweep_opt.optim.lbfgsb import LBFGSB
@@ -9,6 +10,7 @@ from sweep_opt.optim.steepest_descent import SteepestDescent
 from sweep_opt.optim.trust_region import TrustRegion
 
 __all__ = [
+    "AdamFWI",
     "LBFGS",
     "LBFGSB",
     "NCG",

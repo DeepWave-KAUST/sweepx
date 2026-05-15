@@ -55,6 +55,24 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   550-560.
   [DOI:10.1145/279232.279236](https://doi.org/10.1145/279232.279236).
 
+### Tier-3
+
+- **Adam**: Kingma, D. P., and Ba, J. (2015). "Adam: A method for
+  stochastic optimization."
+  [arXiv:1412.6980](https://arxiv.org/abs/1412.6980).
+- **AdamW**: Loshchilov, I., and Hutter, F. (2019). "Decoupled weight
+  decay regularization." ICLR.
+  [arXiv:1711.05101](https://arxiv.org/abs/1711.05101).
+- **RAdam**: Liu, L., et al. (2019). "On the variance of the adaptive
+  learning rate and beyond."
+  [arXiv:1908.03265](https://arxiv.org/abs/1908.03265).
+- **NAdam**: Dozat, T. (2016). "Incorporating Nesterov momentum into
+  Adam."
+  [openreview](https://openreview.net/pdf?id=OM0jvwB8jIp57ZJjtNEZ).
+- **AMSGrad**: Reddi, S. J., et al. (2018). "On the convergence of Adam
+  and beyond."
+  [arXiv:1904.09237](https://arxiv.org/abs/1904.09237).
+
 ### Tier-1
 
 - **Steepest Descent** + **strong-Wolfe line search**: Nocedal & Wright (2006),
