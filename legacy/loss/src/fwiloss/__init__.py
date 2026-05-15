@@ -51,6 +51,7 @@ from .inst_phase import (
     envelope_phase_loss,
     instantaneous_phase_loss,
 )
+from .jsd import JensenShannonLoss, jensen_shannon_loss
 from .nim import NIMLoss, nim_loss
 from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
@@ -93,6 +94,7 @@ __all__ = [
     "HuberLoss",
     "HybridL1L2Loss",
     "InstantaneousPhaseLoss",
+    "JensenShannonLoss",
     "L1Loss",
     "L2Loss",
     "LaplaceL2Loss",
@@ -123,6 +125,7 @@ __all__ = [
     "huber_loss",
     "hybrid_l1l2_loss",
     "instantaneous_phase_loss",
+    "jensen_shannon_loss",
     "l1_loss",
     "l2_loss",
     "laplace_l2_loss",

@@ -82,6 +82,7 @@ nav:
       - Exponentiated phase (Yuan 2020): losses/exponentiated_phase.md
       - Frequency / Laplace domain: losses/frequency.md
       - Normalised Integration Method (NIM): losses/nim.md
+      - Jensen-Shannon divergence (Yan 2024): losses/jsd.md
       - Adaptive Waveform Inversion (AWI): losses/awi.md
       - Deconvolution (Luo–Sava): losses/deconvolution.md
       - 1-Wasserstein (Métivier 2016): losses/w1.md
