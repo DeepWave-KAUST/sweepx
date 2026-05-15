@@ -42,6 +42,10 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   [DOI:10.1090/qam/10666](https://doi.org/10.1090/qam/10666);
   Marquardt, D. W. (1963).
   [DOI:10.1137/0111030](https://doi.org/10.1137/0111030).
+- **Adaptive Subspace Trust-Region (ASTR)**: Wang, Y., and Rao, Y. (2015).
+  "Reflection seismic waveform tomography in transversely isotropic media."
+  _Geophysical Journal International_ 202(2), 1362-1373.
+  [DOI:10.1093/gji/ggv226](https://doi.org/10.1093/gji/ggv226).
 
 ### Tier-1
 
