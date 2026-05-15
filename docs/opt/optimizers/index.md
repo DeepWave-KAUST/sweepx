@@ -14,6 +14,7 @@ and tagged by the Tier in which it lands.
 | [L-BFGS-B](lbfgsb.md) | `LBFGSB` | Quasi-Newton | 2 | yes | yes (active-set) | yes (as `H_0`) |
 | [Adam-FWI](adam_fwi.md) | `AdamFWI` | Adaptive | 3 | optional | yes | n/a (per-param adaptive) |
 | [Lion](lion.md) | `Lion` | Adaptive (sign-momentum) | 3 | optional | yes | n/a |
+| [SAM](sam.md) | `SAM` | Wrapper (sharpness-aware) | 3 | yes | inherited | inherited |
 
 The matrix is appended to as new optimizers land. See each algorithm's own
 page for the API, theory, and references.

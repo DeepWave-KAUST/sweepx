@@ -75,6 +75,9 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - **Lion**: Chen, X., et al. (2023). "Symbolic discovery of optimization
   algorithms."
   [arXiv:2302.06675](https://arxiv.org/abs/2302.06675).
+- **SAM**: Foret, P., et al. (2021). "Sharpness-aware minimization for
+  efficiently improving generalization." ICLR.
+  [arXiv:2010.01412](https://arxiv.org/abs/2010.01412).
 
 ### Tier-1
 

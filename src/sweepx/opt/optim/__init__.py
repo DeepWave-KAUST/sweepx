@@ -7,6 +7,7 @@ from sweep_opt.optim.lbfgsb import LBFGSB
 from sweep_opt.optim.lion import Lion
 from sweep_opt.optim.ncg import NCG
 from sweep_opt.optim.newton import TruncatedNewton
+from sweep_opt.optim.sam import SAM
 from sweep_opt.optim.steepest_descent import SteepestDescent
 from sweep_opt.optim.trust_region import TrustRegion
 
@@ -16,6 +17,7 @@ __all__ = [
     "LBFGSB",
     "Lion",
     "NCG",
+    "SAM",
     "SteepestDescent",
     "TrustRegion",
     "TruncatedGaussNewton",

@@ -78,6 +78,7 @@ nav:
       - L-BFGS-B: optimizers/lbfgsb.md
       - Adam-FWI: optimizers/adam_fwi.md
       - Lion: optimizers/lion.md
+      - SAM: optimizers/sam.md
   - Preconditioners:
       - Overview: preconditioners/index.md
       - Pseudo-Hessian: preconditioners/pseudo_hessian.md
