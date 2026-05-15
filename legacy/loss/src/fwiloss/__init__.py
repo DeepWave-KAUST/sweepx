@@ -18,6 +18,7 @@ e.g. ``from fwiloss import L2Loss``.
 
 from __future__ import annotations
 
+from .awi import AWILoss, awi_loss
 from .base import BaseFWILoss
 from .correlation import (
     GlobalCorrelationLoss,
@@ -64,6 +65,7 @@ from .traveltime import (
 )
 
 __all__ = [
+    "AWILoss",
     "BaseFWILoss",
     "CauchyLoss",
     "CrossCorrelationTraveltimeLoss",
@@ -86,6 +88,7 @@ __all__ = [
     "StudentTLoss",
     "TraceNormalizedL2Loss",
     "TukeyLoss",
+    "awi_loss",
     "cauchy_loss",
     "cross_correlation_traveltime_loss",
     "envelope_loss",
