@@ -46,6 +46,14 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   "Reflection seismic waveform tomography in transversely isotropic media."
   _Geophysical Journal International_ 202(2), 1362-1373.
   [DOI:10.1093/gji/ggv226](https://doi.org/10.1093/gji/ggv226).
+- **L-BFGS-B (active-set)**: Byrd, R. H., Lu, P., Nocedal, J., and Zhu, C.
+  (1995). "A limited memory algorithm for bound constrained optimization."
+  _SIAM J. Sci. Comput._ 16(5), 1190-1208.
+  [DOI:10.1137/0916069](https://doi.org/10.1137/0916069).
+- **L-BFGS-B (Fortran)**: Zhu, C., Byrd, R. H., Lu, P., and Nocedal, J.
+  (1997). "Algorithm 778: L-BFGS-B." _ACM Trans. Math. Soft._ 23(4),
+  550-560.
+  [DOI:10.1145/279232.279236](https://doi.org/10.1145/279232.279236).
 
 ### Tier-1
 

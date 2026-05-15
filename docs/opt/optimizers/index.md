@@ -11,6 +11,7 @@ and tagged by the Tier in which it lands.
 | [Truncated Newton (HF)](newton.md) | `TruncatedNewton` | Newton-type | 2 | yes (loss-only) | yes | yes (PCG inner) |
 | [Truncated Gauss-Newton](gauss_newton.md) | `TruncatedGaussNewton` | Newton-type | 2 | yes (residual) | yes | yes (PCG inner) |
 | [Trust-Region (TTR/ASTR)](trust_region.md) | `TrustRegion` | Trust-region | 2 | yes (loss-only) | yes | yes (PCG inner, TTR) |
+| [L-BFGS-B](lbfgsb.md) | `LBFGSB` | Quasi-Newton | 2 | yes | yes (active-set) | yes (as `H_0`) |
 
 The matrix is appended to as new optimizers land. See each algorithm's own
 page for the API, theory, and references.
