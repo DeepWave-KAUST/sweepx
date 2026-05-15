@@ -31,6 +31,7 @@ from .robust import (
     geman_mcclure_loss,
     tukey_loss,
 )
+from .student_t import StudentTLoss, student_t_loss
 
 __all__ = [
     "BaseFWILoss",
@@ -41,6 +42,7 @@ __all__ = [
     "L1Loss",
     "L2Loss",
     "PseudoHuberLoss",
+    "StudentTLoss",
     "TukeyLoss",
     "cauchy_loss",
     "geman_mcclure_loss",
@@ -49,6 +51,7 @@ __all__ = [
     "l1_loss",
     "l2_loss",
     "pseudo_huber_loss",
+    "student_t_loss",
     "tukey_loss",
 ]
 
