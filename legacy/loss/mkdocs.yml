@@ -88,5 +88,6 @@ nav:
       - Sinkhorn / entropic OT: losses/sinkhorn.md
       - Graph-space OT (Métivier 2018): losses/gsot.md
       - Soft-DTW (Cuturi-Blondel 2017): losses/soft_dtw.md
+      - Local similarity (Fomel 2007): losses/local_similarity.md
   - Report (formulas + bibliography): report.md
   - References: references.md

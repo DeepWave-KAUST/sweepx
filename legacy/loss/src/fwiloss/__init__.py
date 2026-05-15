@@ -52,6 +52,7 @@ from .huber import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 from .hybrid_l1l2 import HybridL1L2Loss, hybrid_l1l2_loss
 from .l1 import L1Loss, l1_loss
 from .l2 import L2Loss, l2_loss
+from .local_similarity import LocalSimilarityLoss, local_similarity_loss
 from .robust import (
     CauchyLoss,
     GemanMcClureLoss,
@@ -90,6 +91,7 @@ __all__ = [
     "L1Loss",
     "L2Loss",
     "LaplaceL2Loss",
+    "LocalSimilarityLoss",
     "LogarithmicShinMinLoss",
     "NIMLoss",
     "PseudoHuberLoss",
@@ -118,6 +120,7 @@ __all__ = [
     "l1_loss",
     "l2_loss",
     "laplace_l2_loss",
+    "local_similarity_loss",
     "nim_loss",
     "pseudo_huber_loss",
     "shin_min_log_loss",
