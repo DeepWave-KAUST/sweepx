@@ -33,7 +33,7 @@ and $\tilde h_\delta(r) \approx \delta |r| - \delta^2$ for $|r| \gg \delta$.
   outlier resistance.
 
 `delta` plays the role of the L1/L2 transition.  A common rule of thumb is
-$\delta \approx 1.345 \sigma$ where $\sigma$ is the robust noise scale
+$\delta \approx 1.345\,\sigma$ where $\sigma$ is the robust noise scale
 (Huber 1981).
 
 ## API
@@ -59,10 +59,14 @@ psh   = PseudoHuberLoss(delta=0.5, reduction="mean")(syn, obs)
 
 * Huber, P. J. (1964). *Robust estimation of a location parameter.*
   Ann. Math. Stat. 35 (1), 73-101.
+  doi:[10.1214/aoms/1177703732](https://doi.org/10.1214/aoms/1177703732)
 * Guitton, A. & Symes, W. W. (2003). *Robust inversion of seismic data using
   the Huber norm.* **Geophysics** 68 (4), 1310-1319.
+  doi:[10.1190/1.1598124](https://doi.org/10.1190/1.1598124)
 * Bube, K. P. & Langan, R. T. (1997). *Hybrid L1/L2 minimisation with
   applications to tomography.* **Geophysics** 62 (4), 1183-1195.
+  doi:[10.1190/1.1444219](https://doi.org/10.1190/1.1444219)
 * Charbonnier, P., Blanc-Feraud, L., Aubert, G. & Barlaud, M. (1997).
   *Deterministic edge-preserving regularisation in computed imaging.* IEEE
   Trans. Image Process. 6 (2), 298-311.
+  doi:[10.1109/83.551699](https://doi.org/10.1109/83.551699)

@@ -40,8 +40,24 @@ loss.backward()
 
 ## Implemented losses
 
-See [`REPORT.md`](REPORT.md) for the full list of misfit formulas with
-references. Each loss has its own page under [`docs/losses/`](docs/losses/).
+See [`docs/report.md`](docs/report.md) (also rendered on the mkdocs site,
+see below) for the full list of misfit formulas with **DOI-linked
+references**. Each loss also has its own page under
+[`docs/losses/`](docs/losses/).
+
+## Documentation site
+
+The repository ships with an [MkDocs](https://www.mkdocs.org/) +
+[Material](https://squidfunk.github.io/mkdocs-material/) site:
+
+```bash
+pip install mkdocs mkdocs-material
+mkdocs serve   # http://127.0.0.1:8000
+# or
+mkdocs build   # outputs to ./site
+```
+
+The site is configured in `mkdocs.yml`; pages live under `docs/`.
 
 ## Installation
 

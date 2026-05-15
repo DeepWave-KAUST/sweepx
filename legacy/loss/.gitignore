@@ -23,6 +23,9 @@ htmlcov/
 *.swp
 *.swo
 
+# mkdocs build output
+/site/
+
 # data / figures
 *.npy
 *.npz

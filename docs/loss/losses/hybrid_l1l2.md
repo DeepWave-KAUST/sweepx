@@ -40,6 +40,8 @@ loss = HybridL1L2Loss(delta=0.5)(syn, obs)
 
 * Bube, K. P. & Langan, R. T. (1997). *Hybrid L1/L2 minimisation with
   applications to tomography.* **Geophysics** 62 (4), 1183-1195.
+  doi:[10.1190/1.1444219](https://doi.org/10.1190/1.1444219)
 * Ha, T., Chung, W. & Shin, C. (2009). *Waveform inversion using a
-  back-propagation algorithm and a Huber function norm.* **Geophysics**
-  74 (3), R15-R24.
+  back-propagation algorithm and a Huber function norm.*
+  **Geophysics** 74 (3), R15-R24.
+  doi:[10.1190/1.3112572](https://doi.org/10.1190/1.3112572)

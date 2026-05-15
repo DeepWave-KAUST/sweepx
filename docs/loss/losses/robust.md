@@ -25,7 +25,7 @@ $$
 $$
 
 The gradient $\rho_{\mathrm{T}}'(r)= r\,(1-(r/c)^2)^2 \mathbf 1_{|r|\le c}$ is
-**identically zero** for $|r|>c$ - hence "outlier rejection".
+**identically zero** for $|r|>c$ — hence "outlier rejection".
 
 **Geman–McClure** (Geman & McClure 1985):
 
@@ -63,14 +63,20 @@ GemanMcClureLoss(c=0.5)(syn, obs)
 ## References
 
 * Beaton, A. E. & Tukey, J. W. (1974). *The fitting of power series, meaning
-  polynomials, illustrated on band-spectroscopic data.* Technometrics 16, 147-185.
-* Black, M. J. & Anandan, P. (1996). *The robust estimation of multiple motions.*
-  Computer Vision and Image Understanding 63 (1), 75-104.
-* Bube, K. P. & Nemeth, T. (2007). *Fast line searches for the robust solution of
-  linear systems in the hybrid l1/l2 and Huber norms.* **Geophysics** 72 (2),
-  A13-A17.
-* Crase, E., Pica, A., Noble, M., McDonald, J. & Tarantola, A. (1990).  *Robust
-  elastic nonlinear waveform inversion: application to real data.*
+  polynomials, illustrated on band-spectroscopic data.* **Technometrics** 16,
+  147-185.
+  doi:[10.1080/00401706.1974.10489171](https://doi.org/10.1080/00401706.1974.10489171)
+* Black, M. J. & Anandan, P. (1996). *The robust estimation of multiple
+  motions: parametric and piecewise-smooth flow fields.*  CVIU 63 (1),
+  75-104.  doi:[10.1006/cviu.1996.0006](https://doi.org/10.1006/cviu.1996.0006)
+* Bube, K. P. & Nemeth, T. (2007). *Fast line searches for the robust
+  solution of linear systems in the hybrid l1/l2 and Huber norms.*
+  **Geophysics** 72 (2), A13-A17.
+  doi:[10.1190/1.2431639](https://doi.org/10.1190/1.2431639)
+* Crase, E., Pica, A., Noble, M., McDonald, J. & Tarantola, A. (1990).
+  *Robust elastic nonlinear waveform inversion: application to real data.*
   **Geophysics** 55 (5), 527-538.
-* Geman, S. & McClure, D. E. (1985).  *Bayesian image analysis: An application to
-  single photon emission tomography.*  Proc. Stat. Comp. Sect., ASA, 12-18.
+  doi:[10.1190/1.1442864](https://doi.org/10.1190/1.1442864)
+* Geman, S. & McClure, D. E. (1985). *Bayesian image analysis: an application
+  to single photon emission tomography.*  Proc. Stat. Comp. Sect., ASA, 12-18.
+  *(no DOI; see [permanent record](https://www.dam.brown.edu/people/geman/Homepage/Society%20publications/85GemanMcClure.pdf))*
