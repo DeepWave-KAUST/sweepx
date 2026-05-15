@@ -38,10 +38,15 @@ from .robust import (
     tukey_loss,
 )
 from .student_t import StudentTLoss, student_t_loss
+from .traveltime import (
+    CrossCorrelationTraveltimeLoss,
+    cross_correlation_traveltime_loss,
+)
 
 __all__ = [
     "BaseFWILoss",
     "CauchyLoss",
+    "CrossCorrelationTraveltimeLoss",
     "GemanMcClureLoss",
     "GlobalCorrelationLoss",
     "HuberLoss",
@@ -53,6 +58,7 @@ __all__ = [
     "TraceNormalizedL2Loss",
     "TukeyLoss",
     "cauchy_loss",
+    "cross_correlation_traveltime_loss",
     "geman_mcclure_loss",
     "global_correlation_loss",
     "huber_loss",
