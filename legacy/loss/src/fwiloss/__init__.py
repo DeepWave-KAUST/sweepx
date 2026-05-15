@@ -19,9 +19,12 @@ e.g. ``from fwiloss import L2Loss``.
 from __future__ import annotations
 
 from .base import BaseFWILoss
+from .l2 import L2Loss, l2_loss
 
 __all__ = [
     "BaseFWILoss",
+    "L2Loss",
+    "l2_loss",
 ]
 
 __version__ = "0.1.0"
