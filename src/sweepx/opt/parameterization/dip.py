@@ -84,9 +84,11 @@ class DIPParameterization(Parameterization):
 
     def random_latent(self, scale: float = 0.1, device=None,
                       dtype: torch.dtype = torch.float32) -> Tensor:
-        """Return a randomly-initialised latent of the right shape."""
-        return scale * torch.randn(*self.latent_shape, dtype=dtype, device=device,
-                                   requires_grad=True)
+        """Return a randomly-initialised latent of the right shape (leaf tensor)."""
+        z = torch.empty(*self.latent_shape, dtype=dtype, device=device)
+        z.normal_(mean=0.0, std=scale)
+        z.requires_grad_(True)
+        return z
 
 
 class SmallUNet2D(nn.Module):
