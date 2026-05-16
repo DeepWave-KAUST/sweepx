@@ -475,23 +475,14 @@ def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
 
 
 def _build_scheduler(sched_spec, optimizer, total_epochs):
-    import torch
+    """Dispatch the LR scheduler via `sweep_runner.scheduler.build`.
 
-    kind = sched_spec.kind
-    if kind == "constant":
-        return None
-    if kind == "step":
-        return torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=sched_spec.step_size, gamma=sched_spec.gamma,
-        )
-    if kind == "exp":
-        return torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=sched_spec.gamma)
-    if kind == "cosine":
-        t_max = sched_spec.t_max if sched_spec.t_max is not None else max(int(total_epochs), 1)
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=t_max, eta_min=sched_spec.eta_min,
-        )
-    raise ValueError(f"Unknown scheduler kind '{kind}'.")
+    The runner's `build()` accepts any object with the right `kind` +
+    field attributes, so our Pydantic `Scheduler*` discriminated union
+    plugs in directly without conversion.
+    """
+    from sweep_runner.scheduler import build as build_scheduler
+    return build_scheduler(sched_spec, optimizer, total_epochs)
 
 
 def _remember_initial_lrs(optimizer) -> list[float]:
