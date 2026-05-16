@@ -319,13 +319,18 @@ def _load_segy_index_payload(
 ):
     """Load a pre-built SEGYIndex and materialise per-shot obs.
 
-    ``lazy=False`` (default): read every shot eagerly and stack into a single
-    ``(nshots, nrec, nt)`` tensor — same shape as ``ObsSpec.npy_path``.
-    ``lazy=True``: return an :class:`IndexedShotGatherDataset` for incremental
-    consumption. Not yet wired through the runner's training loop — see
-    Gap 3 in the Viking REPORT — so for now ``lazy=True`` raises.
+    ``lazy=False`` (default): read every shot eagerly, in input order, into
+    a single ``(nshots, nrec, nt)`` tensor.
+
+    ``lazy=True``: same final layout, but each shot is read by a background
+    :class:`sweep_io.prefetch.Prefetcher` worker — useful when SEG-Y access
+    is slow (network mount, cold cache) so the GIL-releasing I/O overlaps
+    with whatever the consumer is doing at task-start. True per-step
+    streaming during training is a future task: the dataset object is built
+    but the materialised tensor is still what the train loop indexes.
     """
     from sweep_io.segy_index import SEGYIndex, IndexedShotGatherDataset
+    from sweep_io.prefetch import Prefetcher
 
     key = (str(Path(index_path).resolve()), tuple(shot_ids) if shot_ids else None,
            bool(lazy), int(coalesce_gap))
@@ -337,15 +342,14 @@ def _load_segy_index_payload(
         np.asarray(shot_ids, dtype=np.int64)
         if shot_ids is not None else np.asarray(idx.shot_ids, dtype=np.int64)
     )
-    if lazy:
-        raise NotImplementedError(
-            "ObsSegyIndexConfig.lazy=True is not yet wired into the runner's "
-            "training loop. Set lazy=False (eager load) for now. See Gap 3 in "
-            "the Viking integration REPORT."
-        )
 
     ds = IndexedShotGatherDataset(idx, shot_ids=sids, coalesce_gap=coalesce_gap)
-    obs = np.stack([ds[i]["obs"] for i in range(len(ds))], axis=0)
+    if lazy:
+        # Background-thread reader; results stay in input order.
+        with Prefetcher((ds[i]["obs"] for i in range(len(ds))), queue_depth=2) as pf:
+            obs = np.stack(list(pf), axis=0)
+    else:
+        obs = np.stack([ds[i]["obs"] for i in range(len(ds))], axis=0)
     ds.close()
 
     pg = idx.to_physical_geometry(shot_ids=sids)

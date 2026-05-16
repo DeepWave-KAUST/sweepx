@@ -674,13 +674,15 @@ def test_fwi_stages_per_stage_dh_and_bandpass_runs(tmp_path):
     )
 
 
-def test_fwi_obs_segy_index_lazy_not_implemented(tmp_path):
-    """`lazy=True` is accepted but raises NotImplementedError for now (Gap 3)."""
+def test_fwi_obs_segy_index_lazy_prefetched_load(tmp_path):
+    """`lazy=True` now uses a background Prefetcher during the index→tensor
+    materialisation. End-to-end runner output is identical to lazy=False.
+    """
     import numpy as np
     from sweep_io.segy_index import build_segy_index
 
     segy = tmp_path / "tinyC.segy"
-    _write_tiny_segy(segy, nshots=2, nrec=4, nt=32, dh_m=10.0)
+    _write_tiny_segy(segy, nshots=3, nrec=4, nt=32, dh_m=10.0)
     idx = build_segy_index([segy], source_depth_m_override=10.0,
                            receiver_depth_m_override=10.0, num_workers=1)
     idx_path = tmp_path / "tinyC.index.npz"
@@ -689,7 +691,7 @@ def test_fwi_obs_segy_index_lazy_not_implemented(tmp_path):
     vp = np.full((32, 32), 2000.0, dtype="float32")
     np.save(tmp_path / "vp.npy", vp)
 
-    spec_dict = {
+    base = {
         "task_type": "fwi", "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 32},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
@@ -699,11 +701,17 @@ def test_fwi_obs_segy_index_lazy_not_implemented(tmp_path):
                     "source_type": ["h1"], "receiver_type": ["h1"]},
         "backend": {"impl": "eager", "use_ckpt": False},
         "init_model": {"name": "vp", "path": str(tmp_path / "vp.npy")},
-        "obs": {"segy_index": {"index_path": str(idx_path), "lazy": True}},
         "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
         "epochs": 1, "batchsize": 1, "show_every": 1,
     }
-    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "lazy.yaml")))
-    assert result.status.state == "failed"
-    msg = result.status.error or ""
-    assert "lazy=True" in msg or "not yet wired" in msg
+
+    eager = {**base, "task_id": "eager", "obs": {"segy_index": {"index_path": str(idx_path)}}}
+    lazy  = {**base, "task_id": "lazy",  "obs": {"segy_index": {"index_path": str(idx_path), "lazy": True}}}
+
+    r_eager = TaskRunner().run(load_task(_write(eager, tmp_path / "eager.yaml")))
+    r_lazy  = TaskRunner().run(load_task(_write(lazy,  tmp_path / "lazy.yaml")))
+    assert r_eager.status.state == "success", r_eager.status.error
+    assert r_lazy.status.state == "success", r_lazy.status.error
+    losses_eager = np.load(Path(base["output_dir"]) / "eager" / "output" / "loss.npy")
+    losses_lazy  = np.load(Path(base["output_dir"]) / "lazy" / "output" / "loss.npy")
+    np.testing.assert_allclose(losses_eager, losses_lazy, rtol=1e-5)
