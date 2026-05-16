@@ -410,11 +410,16 @@ def _from_file_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
     return sources, receivers
 
 
-def _build_wavelet(wavelet_spec, time_spec) -> "np.ndarray":
-    """Dispatch on wavelet.kind. Returned array has length time.nt."""
+def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
+                   override_nt: int | None = None) -> "np.ndarray":
+    """Dispatch on wavelet.kind. Returned array has length nt.
 
-    nt = int(time_spec.nt)
-    dt = float(time_spec.dt)
+    ``override_dt`` / ``override_nt`` let the runner pass in effective
+    values when DataPlan / per-stage dt-sync changes the solver grid.
+    """
+
+    nt = int(override_nt) if override_nt is not None else int(time_spec.nt)
+    dt = float(override_dt) if override_dt is not None else float(time_spec.dt)
     kind = getattr(wavelet_spec, "kind", None)
     if kind == "ricker":
         t = np.arange(nt, dtype=np.float32) * dt
@@ -463,6 +468,29 @@ def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, s
                 "must match so the (syn - obs) residual is well-defined."
             )
     return wavelet, sources, receivers, True
+
+
+def _cfl_check(vmax_m_s: float, dh_m: float, dt_s: float, *, threshold: float = 0.85) -> None:
+    """Warn / raise if the FD time step violates the Courant condition.
+
+    For 8th-order acoustic FD in 2D the practical safe range is roughly
+    ``vmax * dt / dh ≤ 0.5–0.6``. We warn at 0.85 and raise above 1.0
+    because anything above 1.0 will produce NaNs on the first step.
+    """
+    cfl = float(vmax_m_s) * float(dt_s) / float(dh_m)
+    if cfl > 1.0:
+        raise ValueError(
+            f"CFL violation: vmax({vmax_m_s:.0f}) * dt({dt_s}) / dh({dh_m}) = "
+            f"{cfl:.3f} > 1.0 — the forward propagator will produce NaNs. "
+            f"Lower `time.dt` (try {0.6 * dh_m / vmax_m_s:.4f}s) or coarsen "
+            f"`grid.dh`."
+        )
+    if cfl > threshold:
+        print(
+            f"[cfl] WARNING: vmax * dt / dh = {cfl:.3f} > {threshold:.2f}. "
+            f"Stable forward modeling is not guaranteed; consider dt <= "
+            f"{0.6 * dh_m / vmax_m_s:.4f}s for vmax={vmax_m_s:.0f} m/s."
+        )
 
 
 def _build_solver(physics: PhysicsSpec, backend, shape: tuple[int, ...], dh: float, dt: float,
@@ -1087,10 +1115,43 @@ class TaskRunner:
             shape = tuple(np.load(init_models[0].path, mmap_mode="r").shape)
 
         # 3) Build solver, wavelet, geometry.
+        #    Gap 1: when data_plan.dt_target_s is set, the obs gets resampled
+        #    to that dt — so the solver must run at the same dt or syn/obs
+        #    will mismatch. Auto-sync here (preserves total time = dt * nt).
+        effective_dt = float(spec.time.dt)
+        effective_nt = int(spec.time.nt)
+        if spec.data_plan is not None and spec.data_plan.dt_target_s is not None:
+            target_dt = float(spec.data_plan.dt_target_s)
+            if abs(target_dt - effective_dt) > 1e-12:
+                new_nt = int(round(effective_dt * effective_nt / target_dt))
+                if dist_info.is_root:
+                    print(f"[fwi] data_plan.dt_target_s={target_dt}s → auto-sync "
+                          f"solver: dt {effective_dt} -> {target_dt}, nt "
+                          f"{effective_nt} -> {new_nt}")
+                effective_dt = target_dt
+                effective_nt = new_nt
+
+        # CFL pre-check from the init_model vmax (cheap mmap peek).
+        try:
+            ref = init_models[0]
+            if ref.path is not None:
+                vmax_estimate = float(np.load(ref.path, mmap_mode="r").max())
+            elif ref.constant is not None:
+                vmax_estimate = float(ref.constant)
+            else:
+                vmax_estimate = 0.0
+            if vmax_estimate > 0 and dist_info.is_root:
+                _cfl_check(vmax_estimate, float(spec.grid.dh), effective_dt)
+        except FileNotFoundError:
+            pass
+
         solver = _build_solver(
-            spec.physics, spec.backend, shape, spec.grid.dh, spec.time.dt, spec.time.nt, dev
+            spec.physics, spec.backend, shape, spec.grid.dh, effective_dt, effective_nt, dev
         )
-        wavelet = _build_wavelet(spec.wavelet, spec.time)
+        wavelet = _build_wavelet(
+            spec.wavelet, spec.time,
+            override_dt=effective_dt, override_nt=effective_nt,
+        )
         # Shared cache so SEG-Y-backed geometry + obs don't scan the file twice.
         segy_cache: dict = {}
         sources, receivers = _build_geometry_2d(
