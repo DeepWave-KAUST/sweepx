@@ -1,6 +1,6 @@
 site_name: sweep-opt
 site_description: "PyTorch optimizers tailored for Full Waveform Inversion (FWI)."
-site_author: "Shijun Wang"
+site_author: "Shaowen Wang"
 repo_url: "https://github.com/DeepWave-KAUST/sweep-opt"
 edit_uri: ""
 
