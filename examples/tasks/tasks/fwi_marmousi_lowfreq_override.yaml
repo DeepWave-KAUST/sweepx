@@ -1,0 +1,44 @@
+# Mirrors fwi_marmousi.yaml but with `modeling_override.wavelet` so the
+# synthetic observed data is generated at 3 Hz while the inversion solver
+# itself still works with a 5 Hz Ricker. This is the canonical "low-freq
+# obs for low-frequency FWI" pattern; useful when initial models are far
+# from the truth and only the lowest frequencies converge reliably.
+task_type: fwi
+output_dir: ./sweep_tasks
+device: auto
+seed: 0
+
+grid:    { dh: 25.0 }
+time:    { dt: 0.002, nt: 2500 }
+
+# Inversion forward uses 5 Hz dominant frequency.
+wavelet: { kind: ricker, fm: 5.0, delay: 0.256, scale: 1.0 }
+
+geometry:
+  kind: line
+  sources:   { step: 2, depth: 1 }
+  receivers: { step: 1, depth: 18 }
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: cpmlr
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend: { impl: eager, use_ckpt: false }
+
+init_model: { name: vp, path: ../models/marmousi/smooth.npy }
+obs:
+  synthetic_from: { name: vp, path: ../models/marmousi/true.npy }
+
+# Observed-data synthesis uses a different (lower) Ricker frequency.
+modeling_override:
+  wavelet: { kind: ricker, fm: 3.0, delay: 0.5, scale: 1.0 }
+
+optimizer: { kind: adam, lr: 25.0, eps: 1.0e-22 }
+epochs: 101
+batchsize: 8
+show_every: 10

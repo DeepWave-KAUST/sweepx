@@ -1,0 +1,47 @@
+# FWI on Marmousi with the compiled CUDA binding and chunk-mode
+# checkpointing. Stores `chunks` evenly-spaced wavefield snapshots
+# during forward, then replays each chunk on demand during backward.
+# Trade more compute for less GPU memory than boundary saving when the
+# wavefield itself (not just the boundary) is the bottleneck.
+task_type: fwi
+output_dir: ./sweep_tasks
+device: auto
+seed: 0
+
+grid:    { dh: 25.0 }
+time:    { dt: 0.002, nt: 2500 }
+wavelet: { kind: ricker, fm: 5.0, delay: 0.256, scale: 1.0 }
+
+geometry:
+  kind: line
+  sources:   { step: 2, depth: 1 }
+  receivers: { step: 1, depth: 18 }
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: cpmlr
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: ckpt
+      ckpt:
+        mode: chunk
+        chunks: 64               # 64 snapshots across the nt timeline
+        storage: gpu             # snapshots held in device memory
+        # For storage: cpu, set pinned_memory: true
+
+init_model: { name: vp, path: ../models/marmousi/smooth.npy }
+obs:
+  synthetic_from: { name: vp, path: ../models/marmousi/true.npy }
+
+optimizer: { kind: adam, lr: 25.0, eps: 1.0e-22 }
+epochs: 101
+batchsize: 8
+show_every: 10

@@ -1,0 +1,36 @@
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# data — never check into the I/O library
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.segy
+*.sgy
+*.su
+
+# mkdocs build output
+/site/

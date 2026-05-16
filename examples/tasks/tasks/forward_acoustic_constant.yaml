@@ -1,0 +1,46 @@
+task_type: forward
+output_dir: ./sweep_tasks
+device: auto
+seed: 0
+
+grid:
+  dh: 5.0
+time:
+  dt: 0.001
+  nt: 500
+wavelet:
+  kind: ricker
+  fm: 18.0
+  delay: 0.12
+  scale: 1.0e6
+
+geometry:
+  kind: line
+  sources:
+    step: 1
+    depth: 4
+    start: 90
+    stop: 91
+  receivers:
+    step: 1
+    depth: 8
+    start: 8
+    stop: null
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: cpmlr
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: eager
+  use_ckpt: false
+
+models:
+  - name: vp
+    constant: 2200.0
+    shape: [120, 180]

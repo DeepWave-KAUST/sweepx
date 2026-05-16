@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweep-tasks"
+version = "0.1.0"
+description = "Typed, YAML-driven task layer for sweep — FWI/LSRTM/forward/wavefield tasks with a Pydantic schema, sync TaskRunner, distributed (torchrun) support, and a CLI suitable for LLM / programmatic invocation."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Shijun Wang"},
+]
+keywords = ["fwi", "lsrtm", "geophysics", "task", "yaml", "pydantic", "llm", "cli"]
+dependencies = [
+    "sweep",
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+    "numpy>=1.20",
+    "torch>=1.13",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+dev  = ["pytest>=7", "ruff", "black"]
+
+[project.scripts]
+sweep-tasks = "sweep_tasks.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
