@@ -579,31 +579,85 @@ def _validate_single_model(equation_cls: type, ref: ModelRef) -> None:
 
 # ---------- FWI / LSRTM training helpers ---------------------------------
 
+def _apply_model_plan_to_fwi(
+    spec, init_models_loaded: list[tuple[str, "np.ndarray"]],
+    sources_idx, receivers_idx, dh: float,
+):
+    """Apply ``spec.model_plan`` (Gap 2): crop each loaded vp array to the
+    window + shift / drop sources / receivers so their grid indices line up
+    with the cropped model.
+
+    Returns:
+        cropped_vp_by_name: dict[name -> cropped ndarray]
+        sources_idx_new, receivers_idx_new (or unchanged if no plan / no drop)
+        keep_shots_mask (None when drop_outside_sources is False)
+    """
+    if spec.model_plan is None:
+        return ({name: vp for name, vp in init_models_loaded},
+                sources_idx, receivers_idx, None)
+
+    plan = spec.model_plan
+    from sweep_io.plan import ModelPlan, apply_model_plan
+    from sweep_io.geometry import PhysicalGeometry
+
+    # Lift current grid-index geometry into meters using `dh`.
+    pg = PhysicalGeometry(
+        sources_xyz_m=sources_idx.astype("float64") * float(dh),
+        receivers_xyz_m=receivers_idx.astype("float64") * float(dh),
+        dt=float(spec.time.dt), nt=int(spec.time.nt),
+    )
+
+    dp = ModelPlan(
+        x_window_m=plan.x_window_m,
+        y_window_m=plan.y_window_m,
+        z_window_m=plan.z_window_m,
+        drop_outside_sources=plan.drop_outside_sources,
+        drop_outside_receivers=plan.drop_outside_receivers,
+    )
+
+    cropped_by_name: dict = {}
+    new_pg = pg
+    keep_mask = None
+    # Apply the same crop to every model tensor. Geometry is rebased only on
+    # the FIRST pass (subsequent calls would double-shift).
+    first = True
+    for name, vp in init_models_loaded:
+        if vp.ndim == 2:
+            vp_dh = (float(dh), float(dh))
+        elif vp.ndim == 3:
+            vp_dh = (float(dh), float(dh), float(dh))
+        else:
+            raise ValueError(f"ModelPlan: unsupported vp ndim {vp.ndim} for {name!r}")
+        vp_out, geom_out, src_keep = apply_model_plan(
+            dp, vp.astype("float32", copy=False), dh=vp_dh,
+            geom=new_pg if first else None,
+        )
+        cropped_by_name[name] = vp_out
+        if first and geom_out is not None:
+            new_pg = geom_out
+            keep_mask = src_keep
+        first = False
+
+    # Re-snap to grid indices at the SAME dh, no dedupe (positions are exact).
+    gg, _ = new_pg.to_grid(
+        dh=(float(dh),) * pg.ndim, dedupe=False,
+    )
+    return cropped_by_name, gg.sources.astype(np.int64), gg.receivers.astype(np.int64), keep_mask
+
+
 def _apply_data_plan_to_fwi(
     spec, sources_idx, receivers_idx, obs, dh: float, dt: float, nt: int, dev
 ):
-    """Apply ``spec.data_plan`` (and validate / reject ``spec.model_plan``).
+    """Apply ``spec.data_plan``.
 
     Subsets shots / receivers / time *after* obs has been generated. Lifts
     the grid-index geometry into ``sweep_io.PhysicalGeometry`` so the
     offset filter works in real meters, then drops back to grid indices.
 
-    ModelPlan is intentionally not handled in the runner today — apply it
-    upstream (crop your vp .npy and trim your geometry YAML) and re-run.
-    A future commit will fold it into the runner so the resume / checkpoint
-    metadata records the cropped domain. For now, a non-None ``model_plan``
-    raises a clear error.
-
     Receiver-axis subsetting requires a uniform mask across shots (typical
     for streamers). A non-uniform mask (offset filter where each shot picks
     a different receiver set) raises a clear error.
     """
-    if spec.model_plan is not None:
-        raise NotImplementedError(
-            "FWISpec.model_plan is accepted in the schema but not yet "
-            "applied by TaskRunner — preprocess your vp arrays and "
-            "geometry YAML upstream, or wait for a follow-up patch."
-        )
     if spec.data_plan is None:
         return sources_idx, receivers_idx, obs
 
@@ -681,9 +735,15 @@ def _normalize_fwi_init_models(spec) -> list:
     return [spec.init_model]
 
 
-def _build_inv_tensors(init_models: list, dev, equation_cls):
+def _build_inv_tensors(init_models: list, dev, equation_cls,
+                       *, overrides: dict[str, "np.ndarray"] | None = None):
     """Load each ModelRef as a requires_grad=True tensor and return both
-    ordered list (per equation MODEL_SPECS) and name-keyed dict."""
+    ordered list (per equation MODEL_SPECS) and name-keyed dict.
+
+    ``overrides`` (used by Gap 2 model_plan) maps model name -> already-loaded
+    numpy array; when present, the ModelRef's path / constant fields are
+    ignored for that name.
+    """
 
     required = _model_names_for_equation(equation_cls)
     by_name = {m.name: m for m in init_models}
@@ -701,7 +761,12 @@ def _build_inv_tensors(init_models: list, dev, equation_cls):
     in_order = []
     by_tensor: dict[str, "torch.Tensor"] = {}
     for name in required:
-        t = _load_model_tensor(by_name[name]).to(dev).requires_grad_(True)
+        if overrides is not None and name in overrides:
+            import torch
+            arr = np.ascontiguousarray(overrides[name].astype(np.float32, copy=False))
+            t = torch.from_numpy(arr).to(dev).requires_grad_(True)
+        else:
+            t = _load_model_tensor(by_name[name]).to(dev).requires_grad_(True)
         in_order.append(t)
         by_tensor[name] = t
     return in_order, by_tensor, required
@@ -1370,20 +1435,67 @@ class TaskRunner:
         )
         nshots = int(sources.shape[0])
 
+        # 3c) Gap 2 — apply model_plan if set: crop every loaded model array,
+        # drop out-of-window sources, rebase geometry indices to the crop.
+        model_plan_cropped: dict | None = None
+        model_plan_keep: "np.ndarray | None" = None
+        if spec.model_plan is not None:
+            loaded_originals = []
+            for ref in init_models:
+                if ref.constant is not None:
+                    loaded_originals.append(
+                        (ref.name, np.full(tuple(ref.shape), float(ref.constant), dtype=np.float32))
+                    )
+                else:
+                    loaded_originals.append(
+                        (ref.name, np.load(ref.path).astype(np.float32))
+                    )
+            model_plan_cropped, sources, receivers, model_plan_keep = _apply_model_plan_to_fwi(
+                spec, loaded_originals, sources, receivers, spec.grid.dh,
+            )
+            new_shape = next(iter(model_plan_cropped.values())).shape
+            if dist_info.is_root:
+                print(f"[model_plan] vp shape {shape} -> {new_shape}, "
+                      f"sources kept: {int((model_plan_keep is None) or model_plan_keep.sum())}"
+                      f"/{nshots}")
+            shape = tuple(new_shape)
+            nshots = int(sources.shape[0])
+            # Rebuild solver at the cropped grid.
+            solver = _build_solver(
+                spec.physics, spec.backend, shape, spec.grid.dh,
+                effective_dt, effective_nt, dev,
+            )
+
         # 4) Build inv_tensors (ordered to match equation.MODEL_SPECS).
         inv_in_order, inv_by_name, required_names = _build_inv_tensors(
-            init_models, dev, equation_cls
+            init_models, dev, equation_cls,
+            overrides=model_plan_cropped,
         )
         if dist_info.is_root:
             print(f"[fwi] shape={shape} nshots={nshots} inverted_models={required_names} "
                   f"world_size={dist_info.world_size}")
 
         # 5) Generate or load obs. Every rank does this independently (deterministic).
-        obs = self._fwi_generate_obs(
-            spec, equation_cls, solver, wavelet,
-            sources, receivers, shape, dev, nshots,
-            segy_cache=segy_cache,
-        )
+        # When model_plan dropped shots, the obs loader still produces the
+        # ORIGINAL shot count for npy / SEG-Y paths (they don't know about the
+        # crop). Generate obs at the original nshots first, then mask.
+        if model_plan_keep is not None and (
+            spec.obs.npy_path is not None or spec.obs.segy is not None
+            or spec.obs.segy_index is not None
+        ):
+            original_nshots = int(model_plan_keep.size)
+            obs = self._fwi_generate_obs(
+                spec, equation_cls, solver, wavelet,
+                sources, receivers, shape, dev, original_nshots,
+                segy_cache=segy_cache,
+            )
+            obs = obs[model_plan_keep]
+        else:
+            obs = self._fwi_generate_obs(
+                spec, equation_cls, solver, wavelet,
+                sources, receivers, shape, dev, nshots,
+                segy_cache=segy_cache,
+            )
 
         # 5b) Apply data_plan (and reject unimplemented model_plan) — see
         # _apply_data_plan_to_fwi for the supported subset. Updates
@@ -1663,7 +1775,27 @@ class TaskRunner:
                 f"obs.synthetic_from* model names {sorted(by_name)} must match "
                 f"equation '{equation_cls.__name__}' models {required}."
             )
-        true_in_order = [_load_model_tensor(by_name[n]).to(dev) for n in required]
+        # When model_plan is active, crop the synthetic-from "true" tensors
+        # the same way the init vp was cropped, so the solver (built at the
+        # cropped shape) gets matching inputs.
+        if spec.model_plan is not None:
+            from sweep_io.plan import ModelPlan, apply_model_plan
+            mp = ModelPlan(
+                x_window_m=spec.model_plan.x_window_m,
+                y_window_m=spec.model_plan.y_window_m,
+                z_window_m=spec.model_plan.z_window_m,
+                drop_outside_sources=False,
+                drop_outside_receivers=False,
+            )
+            true_in_order = []
+            for n in required:
+                arr = np.load(by_name[n].path).astype(np.float32) if by_name[n].path is not None \
+                      else np.full(by_name[n].shape, float(by_name[n].constant), dtype=np.float32)
+                dh_tuple = (float(spec.grid.dh),) * arr.ndim
+                cropped, _, _ = apply_model_plan(mp, arr, dh=dh_tuple, geom=None)
+                true_in_order.append(torch.from_numpy(np.ascontiguousarray(cropped)).to(dev))
+        else:
+            true_in_order = [_load_model_tensor(by_name[n]).to(dev) for n in required]
 
         mod_wavelet, mod_sources, mod_receivers, used_override = _resolve_modeling_inputs(
             spec, wavelet, sources, receivers, shape

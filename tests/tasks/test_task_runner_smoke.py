@@ -494,14 +494,19 @@ def test_fwi_data_plan_receiver_stride_reduces_nrec(tmp_path):
     assert result.status.state == "success", result.status.error
 
 
-def test_fwi_model_plan_rejected_with_clear_error(tmp_path):
-    """ModelPlan is accepted by the schema but not yet implemented in the runner."""
+def test_fwi_model_plan_crops_and_runs(tmp_path):
+    """Gap 2: model_plan crops vp in z (receivers stay within the new domain)."""
+    import numpy as np
     spec_dict = _fwi_spec_with(tmp_path, **{
-        "model_plan": {"x_window_m": [50.0, 400.0]},
+        "model_plan": {"z_window_m": [0.0, 100.0]},   # crop z, keep full x
+        "batchsize": 1,
     })
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_mplan.yaml")))
-    assert result.status.state == "failed"
-    assert "model_plan" in (result.status.error or "")
+    assert result.status.state == "success", result.status.error
+    final = np.load(
+        Path(spec_dict["output_dir"]) / result.status.task_id / "output" / "inverted_vp.npy"
+    )
+    assert final.shape[0] < 48, f"z-axis should be cropped; got shape {final.shape}"
 
 
 # ============================================================================
