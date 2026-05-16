@@ -1360,16 +1360,15 @@ def _lsrtm_background_equation(lsrtm_name: str) -> str:
 # ---------- lightweight plotting helpers ---------------------------------
 
 def _plot_loss_curve(losses, path: Path, title: str) -> Path:
+    """Loss curve via `sweep_viz.convergence.plot_loss`."""
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
+    from sweep_viz.convergence import plot_loss
+
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
-    ax.plot(losses)
-    ax.set_yscale("log")
-    ax.set_xlabel("epoch")
-    ax.set_ylabel("loss")
-    ax.set_title(title)
+    plot_loss(list(losses), ax=ax, logy=True, title=title)
     fig.tight_layout()
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -1378,9 +1377,17 @@ def _plot_loss_curve(losses, path: Path, title: str) -> Path:
 
 def _plot_wavefield_snapshots(snapshots_np, snapshot_times, abcn, shape, path,
                               free_surface) -> Path:
+    """Wavefield snapshot grid via `sweep_viz.wavefield.plot_snapshot` (one per panel).
+
+    The PML / absorbing-boundary cropping logic (and the `(nsnap, 1, 1, 1, ...)`
+    sweep-binding tensor layout) is sweep-tasks-specific, so it stays here;
+    each cropped panel is then rendered by sweep_viz.
+    """
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
+
+    from sweep_viz.wavefield import plot_snapshot
 
     nz, nx = int(shape[0]), int(shape[1])
     nsnap = snapshots_np.shape[0]
@@ -1391,9 +1398,8 @@ def _plot_wavefield_snapshots(snapshots_np, snapshot_times, abcn, shape, path,
             panel = panel[:nz, abcn: abcn + nx]
         else:
             panel = panel[abcn: abcn + nz, abcn: abcn + nx]
-        vmax = float(np.abs(panel).max() or 1.0)
-        axes[0, i].imshow(panel, cmap="seismic", vmin=-vmax, vmax=vmax, aspect="auto")
-        axes[0, i].set_title(f"t-step {snapshot_times[i]}")
+        plot_snapshot(panel, ax=axes[0, i], perc=100.0,
+                      cmap="seismic", title=f"t-step {snapshot_times[i]}")
         axes[0, i].set_axis_off()
     fig.tight_layout()
     fig.savefig(path, dpi=200, bbox_inches="tight")
