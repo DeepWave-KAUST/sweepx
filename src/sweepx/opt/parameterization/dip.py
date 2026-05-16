@@ -99,9 +99,10 @@ class SmallUNet2D(nn.Module):
         out_channels: number of channels of the physical model (1 for vp).
         base_channels: width of the feature maps; default 16.
 
-    The output spatial shape equals the input latent's spatial shape, so
-    the user is responsible for choosing a latent whose spatial size
-    matches the desired model grid (or interpolating after).
+    The output spatial shape equals the input latent's spatial shape.
+    Internally, the decoder uses ``F.interpolate(size=encoder.shape[-2:])``
+    rather than ``scale_factor=2``, so the network handles non-even input
+    sizes (e.g. Marmousi's 141 x 681 grid) cleanly.
     """
 
     def __init__(self, in_channels: int = 16, out_channels: int = 1,
@@ -123,14 +124,17 @@ class SmallUNet2D(nn.Module):
         self.dec2 = block(4 * c + 2 * c, 2 * c)
         self.dec1 = block(2 * c + c, c)
         self.out = nn.Conv2d(c, out_channels, kernel_size=1)
-
-        self.pool = nn.AvgPool2d(2)
-        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.pool = nn.AvgPool2d(2, ceil_mode=True)
 
     def forward(self, x: Tensor) -> Tensor:
+        import torch.nn.functional as F
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool(e1))
         b = self.bottleneck(self.pool(e2))
-        d2 = self.dec2(torch.cat([self.up(b), e2], dim=1))
-        d1 = self.dec1(torch.cat([self.up(d2), e1], dim=1))
+        b_up = F.interpolate(b, size=e2.shape[-2:],
+                             mode="bilinear", align_corners=False)
+        d2 = self.dec2(torch.cat([b_up, e2], dim=1))
+        d2_up = F.interpolate(d2, size=e1.shape[-2:],
+                              mode="bilinear", align_corners=False)
+        d1 = self.dec1(torch.cat([d2_up, e1], dim=1))
         return self.out(d1).squeeze(1)
