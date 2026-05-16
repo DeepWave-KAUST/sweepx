@@ -57,6 +57,13 @@ class GlobalCorrelationLoss(BaseFWILoss):
         If True (default) compute :math:`1 - \\langle\\hat d_s, \\hat d_o\\rangle`
         per trace so a perfect match gives 0.  Otherwise return the negative
         correlation directly.
+    demean
+        If True, subtract the per-trace temporal mean before L2-normalising.
+        This makes the misfit insensitive to a DC offset and matches the
+        "trace_cosine" convention in ``fwi_workflow-dev``. For bandpassed
+        data the mean is already ~0, so the effect is marginal; for raw
+        or low-cut-only data, demean is recommended. Default False to
+        preserve the original NCC definition from Choi & Alkhalifah 2012.
     eps
         Small constant to stabilise the L2 normalisation when a trace has
         near-zero amplitude (e.g. muted samples).
@@ -65,12 +72,14 @@ class GlobalCorrelationLoss(BaseFWILoss):
     def __init__(
         self,
         offset_one: bool = True,
+        demean: bool = False,
         eps: float = 1e-12,
         reduction: str = "mean",
         mask: "torch.Tensor | None" = None,
     ) -> None:
         super().__init__(reduction=reduction, mask=mask)
         self.offset_one = bool(offset_one)
+        self.demean = bool(demean)
         self.eps = float(eps)
 
     def forward(self, syn: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
@@ -84,6 +93,9 @@ class GlobalCorrelationLoss(BaseFWILoss):
         # Flatten to (N, nt) and L2-normalise per trace.
         syn_f, canon = flatten_traces(syn_c)
         obs_f, _ = flatten_traces(obs_c)
+        if self.demean:
+            syn_f = syn_f - syn_f.mean(dim=-1, keepdim=True)
+            obs_f = obs_f - obs_f.mean(dim=-1, keepdim=True)
         syn_n = l2_normalize(syn_f, dim=-1, eps=self.eps)
         obs_n = l2_normalize(obs_f, dim=-1, eps=self.eps)
 
@@ -116,20 +128,34 @@ class GlobalCorrelationLoss(BaseFWILoss):
 
 
 class TraceNormalizedL2Loss(BaseFWILoss):
-    """Trace-by-trace amplitude-normalised L2 (Choi & Alkhalifah 2012, eq. 9)."""
+    """Trace-by-trace amplitude-normalised L2 (Choi & Alkhalifah 2012, eq. 9).
+
+    Parameters
+    ----------
+    demean
+        If True, subtract the per-trace temporal mean before L2-normalising.
+        See :class:`GlobalCorrelationLoss` for the rationale.
+    eps
+        Stabilisation constant for the L2 normalisation.
+    """
 
     def __init__(
         self,
+        demean: bool = False,
         eps: float = 1e-12,
         reduction: str = "mean",
         mask: "torch.Tensor | None" = None,
     ) -> None:
         super().__init__(reduction=reduction, mask=mask)
+        self.demean = bool(demean)
         self.eps = float(eps)
 
     def _pointwise(self, syn: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         # L2-normalise per trace along time.  ``syn`` and ``obs`` are
         # canonical (ns, nt, nr, nc).  Time axis = -3.
+        if self.demean:
+            syn = syn - syn.mean(dim=-3, keepdim=True)
+            obs = obs - obs.mean(dim=-3, keepdim=True)
         syn_n = syn / torch.linalg.vector_norm(syn, dim=-3, keepdim=True).clamp_min(
             self.eps
         )
@@ -144,21 +170,25 @@ def global_correlation_loss(
     syn: torch.Tensor,
     obs: torch.Tensor,
     offset_one: bool = True,
+    demean: bool = False,
     eps: float = 1e-12,
     reduction: str = "mean",
 ) -> torch.Tensor:
+    """Functional NCC misfit; see :class:`GlobalCorrelationLoss`."""
     return GlobalCorrelationLoss(
-        offset_one=offset_one, eps=eps, reduction=reduction
+        offset_one=offset_one, demean=demean, eps=eps, reduction=reduction
     )(syn, obs)
 
 
 def trace_normalized_l2_loss(
     syn: torch.Tensor,
     obs: torch.Tensor,
+    demean: bool = False,
     eps: float = 1e-12,
     reduction: str = "mean",
 ) -> torch.Tensor:
-    return TraceNormalizedL2Loss(eps=eps, reduction=reduction)(syn, obs)
+    """Functional trace-normalised L2 misfit; see :class:`TraceNormalizedL2Loss`."""
+    return TraceNormalizedL2Loss(demean=demean, eps=eps, reduction=reduction)(syn, obs)
 
 
 __all__ = [

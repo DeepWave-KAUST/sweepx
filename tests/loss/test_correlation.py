@@ -103,3 +103,52 @@ def test_functional_aliases():
         trace_normalized_l2_loss(syn, obs),
         TraceNormalizedL2Loss()(syn, obs),
     )
+
+
+# -------------------------------------------------------------------------
+# demean option (trace_cosine semantics)
+# -------------------------------------------------------------------------
+def test_ncc_demean_removes_dc_sensitivity():
+    """With demean=True the misfit is invariant to a DC offset; without
+    demean, a DC offset changes the cosine (since it shifts the trace
+    direction in time)."""
+    torch.manual_seed(0)
+    syn = torch.randn(1, 128, 3, 1)
+    obs = syn.clone() + 0.5  # add DC
+
+    # Without demean: DC pollutes the cosine
+    loss_no = GlobalCorrelationLoss(demean=False, reduction="sum")(syn, obs)
+    # With demean: DC removed → perfect match
+    loss_yes = GlobalCorrelationLoss(demean=True, reduction="sum")(syn, obs)
+    assert float(loss_no) > 1e-3
+    assert torch.allclose(loss_yes, torch.tensor(0.0), atol=1e-5)
+
+
+def test_ncc_demean_matches_inline_implementation():
+    """GlobalCorrelationLoss(demean=True) must equal the inline trace_cosine
+    formula from fwi_workflow-dev (demean → unit-norm → 1 - cosine)."""
+    torch.manual_seed(1)
+    syn = torch.randn(2, 256, 4, 1)
+    obs = torch.randn_like(syn)
+
+    # Reference inline impl (mirrors fwi_workflow-dev trace_cosine_loss).
+    s_c = syn - syn.mean(dim=-3, keepdim=True)
+    o_c = obs - obs.mean(dim=-3, keepdim=True)
+    s_n = s_c / s_c.norm(dim=-3, keepdim=True).clamp_min(1e-12)
+    o_n = o_c / o_c.norm(dim=-3, keepdim=True).clamp_min(1e-12)
+    ref_per_trace = 1.0 - (s_n * o_n).sum(dim=-3)   # (ns, nrec, 1)
+    expected_mean = ref_per_trace.mean()
+
+    got = GlobalCorrelationLoss(offset_one=True, demean=True, reduction="mean")(syn, obs)
+    assert torch.allclose(got, expected_mean, rtol=1e-5, atol=1e-6)
+
+
+def test_tnl2_demean_matches_ncc_demean():
+    """With demean=True, TraceNormalizedL2Loss and GlobalCorrelationLoss
+    remain equivalent per trace (the demean step is identical for both)."""
+    torch.manual_seed(2)
+    syn = torch.randn(2, 128, 3, 1) + 0.3  # add DC to verify demean kicks in
+    obs = torch.randn_like(syn) - 0.2
+    a = TraceNormalizedL2Loss(demean=True, reduction="sum")(syn, obs)
+    b = GlobalCorrelationLoss(offset_one=True, demean=True, reduction="sum")(syn, obs)
+    assert torch.allclose(a, b, rtol=1e-5, atol=1e-6)

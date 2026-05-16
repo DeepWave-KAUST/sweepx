@@ -1,6 +1,6 @@
 site_name: sweep_loss
 site_description: "A PyTorch library of misfit (loss) functions for Full Waveform Inversion."
-site_author: "Shijun Wang"
+site_author: "Shaowen Wang"
 repo_url: "https://github.com/DeepWave-KAUST/sweep-loss"
 edit_uri: ""
 
