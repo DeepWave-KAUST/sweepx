@@ -376,6 +376,94 @@ def _validate_single_model(equation_cls: type, ref: ModelRef) -> None:
 
 # ---------- FWI / LSRTM training helpers ---------------------------------
 
+def _apply_data_plan_to_fwi(
+    spec, sources_idx, receivers_idx, obs, dh: float, dt: float, nt: int, dev
+):
+    """Apply ``spec.data_plan`` (and validate / reject ``spec.model_plan``).
+
+    Subsets shots / receivers / time *after* obs has been generated. Lifts
+    the grid-index geometry into ``sweep_io.PhysicalGeometry`` so the
+    offset filter works in real meters, then drops back to grid indices.
+
+    ModelPlan is intentionally not handled in the runner today — apply it
+    upstream (crop your vp .npy and trim your geometry YAML) and re-run.
+    A future commit will fold it into the runner so the resume / checkpoint
+    metadata records the cropped domain. For now, a non-None ``model_plan``
+    raises a clear error.
+
+    Receiver-axis subsetting requires a uniform mask across shots (typical
+    for streamers). A non-uniform mask (offset filter where each shot picks
+    a different receiver set) raises a clear error.
+    """
+    if spec.model_plan is not None:
+        raise NotImplementedError(
+            "FWISpec.model_plan is accepted in the schema but not yet "
+            "applied by TaskRunner — preprocess your vp arrays and "
+            "geometry YAML upstream, or wait for a follow-up patch."
+        )
+    if spec.data_plan is None:
+        return sources_idx, receivers_idx, obs
+
+    import torch
+    from sweep_io.geometry import PhysicalGeometry
+    from sweep_io.plan import DataPlan, apply_data_plan
+
+    dh_f = float(dh)
+    sources_xyz = sources_idx.astype("float64") * dh_f
+    receivers_xyz = receivers_idx.astype("float64") * dh_f
+
+    pg = PhysicalGeometry(
+        sources_xyz_m=sources_xyz,
+        receivers_xyz_m=receivers_xyz,
+        dt=dt,
+        nt=nt,
+    )
+
+    plan_kwargs = spec.data_plan.model_dump(exclude_none=True)
+    plan = DataPlan(**plan_kwargs)
+
+    # obs layout from sweep binding: (nshots, nt, nrec, nchannel).
+    # The runner indexes obs[..., 0] in many places, so receiver axis is -2
+    # when nchannel is present and -1 when not.
+    obs_np = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
+    time_axis = -3 if obs_np.ndim >= 4 else -2
+    receiver_axis = -2 if obs_np.ndim >= 4 else -1
+
+    pg_planned, obs_planned, rcv_mask = apply_data_plan(
+        plan, pg, obs_np, time_axis=time_axis, receiver_axis=receiver_axis,
+    )
+
+    # Receiver-axis subsetting: only handle uniform-across-shots masks.
+    if not np.all(rcv_mask == rcv_mask[0:1]):
+        raise NotImplementedError(
+            "data_plan: non-uniform per-shot receiver mask (typical when an "
+            "offset filter coexists with non-streamer geometry) is not yet "
+            "supported. Drop the offset filter, or apply it upstream."
+        )
+    uniform_keep = rcv_mask[0]
+    if not uniform_keep.all():
+        slicer = [slice(None)] * obs_planned.ndim
+        slicer[receiver_axis] = np.flatnonzero(uniform_keep)
+        obs_planned = obs_planned[tuple(slicer)]
+        # Also drop the same receivers from geometry.
+        pg_planned = PhysicalGeometry(
+            sources_xyz_m=pg_planned.sources_xyz_m,
+            receivers_xyz_m=pg_planned.receivers_xyz_m[:, uniform_keep, :],
+            dt=pg_planned.dt,
+            nt=pg_planned.nt,
+            meta=pg_planned.meta,
+        )
+
+    # Back to grid indices.
+    gg, _ = pg_planned.to_grid(dh=(dh_f,) * pg.ndim, dedupe=False)
+    sources_new = gg.sources
+    receivers_new = gg.receivers
+
+    # If time was resampled, push that into spec.time.nt and the obs.
+    obs_t = torch.as_tensor(obs_planned, device=dev) if isinstance(obs, torch.Tensor) else obs_planned
+    return sources_new, receivers_new, obs_t
+
+
 def _normalize_fwi_init_models(spec) -> list:
     """Return the list of ModelRef objects for FWI, accepting either init_model or init_models."""
 
@@ -836,6 +924,14 @@ class TaskRunner:
         # 5) Generate or load obs. Every rank does this independently (deterministic).
         obs = self._fwi_generate_obs(spec, equation_cls, solver, wavelet,
                                      sources, receivers, shape, dev, nshots)
+
+        # 5b) Apply data_plan (and reject unimplemented model_plan) — see
+        # _apply_data_plan_to_fwi for the supported subset. Updates
+        # `nshots` if shot subsetting kicked in.
+        sources, receivers, obs = _apply_data_plan_to_fwi(
+            spec, sources, receivers, obs, spec.grid.dh, spec.time.dt, spec.time.nt, dev,
+        )
+        nshots = int(sources.shape[0])
 
         # 6) Optimizer + scheduler.
         total_epochs = (sum(s.epochs for s in spec.stages)

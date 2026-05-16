@@ -263,6 +263,48 @@ class LossSpec(_Forbid):
     huber_delta: float = 1.0  # only used when kind="huber"
 
 
+class DataPlanSpec(_Forbid):
+    """Pre-FWI data selection: which shots / receivers / time samples to use.
+
+    All fields are optional; omitted ones inherit the full dataset. Maps 1:1
+    to :class:`sweep_io.plan.DataPlan`. Pure positional / sampling logic;
+    signal-processing knobs (filter / mute / wavelet) stay in sweep-preproc.
+    """
+
+    shot_start: int = 0
+    shot_stop: int | None = None
+    shot_stride: int = Field(ge=1, default=1)
+    shot_indices: list[int] | None = None  # overrides start/stop/stride
+
+    receiver_stride: int = Field(ge=1, default=1)
+    offset_min_m: float | None = None
+    offset_max_m: float | None = None
+    abs_offset: bool = True
+
+    # Mutually exclusive time-axis subsetters (validated in the runner).
+    dt_target_s: float | None = None
+    time_decimate: int | None = Field(default=None, ge=1)
+
+    t_start_s: float | None = None
+    t_end_s: float | None = None
+
+
+class ModelPlanSpec(_Forbid):
+    """Crop the velocity model to a region of interest; drop out-of-window shots.
+
+    Maps 1:1 to :class:`sweep_io.plan.ModelPlan`. Receivers outside the
+    window are kept by default (sweep's PML absorbs them) — set
+    ``drop_outside_receivers=True`` only if your acquisition truly stops
+    at the model edge.
+    """
+
+    x_window_m: tuple[float, float] | None = None
+    y_window_m: tuple[float, float] | None = None
+    z_window_m: tuple[float, float] | None = None
+    drop_outside_sources: bool = True
+    drop_outside_receivers: bool = False
+
+
 class ModelBounds(_Forbid):
     """Hard bounds applied via in-place clamp after every optimizer step."""
 
@@ -481,6 +523,14 @@ class FWISpec(BaseTaskSpec):
     save_illumination: bool = False
 
     modeling_override: ModelingOverride | None = None
+
+    # Pre-FWI data selection + model cropping (TASK 009).
+    # `data_plan` subsets shots/receivers/time before the inversion sees obs.
+    # `model_plan` crops the velocity model to a region of interest and
+    # (by default) drops sources whose physical positions land outside.
+    # When omitted, the full dataset / full model is used (current behaviour).
+    data_plan: DataPlanSpec | None = None
+    model_plan: ModelPlanSpec | None = None
 
     @model_validator(mode="after")
     def _exactly_one_init(self):

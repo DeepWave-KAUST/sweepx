@@ -445,3 +445,60 @@ def test_fwi_modeling_override_geometry_shape_mismatch_fails(tmp_path):
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_bad_ov.yaml")))
     assert result.status.state == "failed"
     assert "shots" in (result.status.error or "")
+
+
+def _fwi_spec_with(tmp_path, **overrides):
+    """Tiny FWI spec; overrides splice into the dict."""
+    true_path, init_path, _ = _tiny_grid_models(tmp_path)
+    spec = {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 300},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
+        "geometry": {
+            "kind": "line",
+            "sources": {"step": 6, "depth": 2, "start": 6, "stop": 42},   # 6 shots
+            "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44},  # 20 receivers
+        },
+        "physics": {
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 12,
+            "free_surface": False, "pml_type": "cpmlr",
+            "source_type": ["h1"], "receiver_type": ["h1"],
+        },
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(init_path)},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+        "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
+        "epochs": 2, "batchsize": 2, "show_every": 1,
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_fwi_data_plan_shot_stride_reduces_nshots(tmp_path):
+    """`data_plan.shot_stride=3` over 6 shots should keep 2 shots."""
+    spec_dict = _fwi_spec_with(tmp_path, **{
+        "data_plan": {"shot_stride": 3},
+        "batchsize": 2,    # cannot exceed kept-shots count
+    })
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_plan.yaml")))
+    assert result.status.state == "success", result.status.error
+
+
+def test_fwi_data_plan_receiver_stride_reduces_nrec(tmp_path):
+    spec_dict = _fwi_spec_with(tmp_path, **{
+        "data_plan": {"receiver_stride": 2},
+    })
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_rcvplan.yaml")))
+    assert result.status.state == "success", result.status.error
+
+
+def test_fwi_model_plan_rejected_with_clear_error(tmp_path):
+    """ModelPlan is accepted by the schema but not yet implemented in the runner."""
+    spec_dict = _fwi_spec_with(tmp_path, **{
+        "model_plan": {"x_window_m": [50.0, 400.0]},
+    })
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_mplan.yaml")))
+    assert result.status.state == "failed"
+    assert "model_plan" in (result.status.error or "")

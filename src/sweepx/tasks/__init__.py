@@ -8,10 +8,12 @@ from sweep_tasks.registry import TASK_TYPES
 from sweep_tasks.runner import TaskResult, TaskRunner, TaskStatus
 from sweep_tasks.schemas import (
     BaseTaskSpec,
+    DataPlanSpec,
     ForwardSpec,
     FWISpec,
     IntrospectSpec,
     LSRTMSpec,
+    ModelPlanSpec,
     TaskSpec,
     WavefieldSpec,
 )
@@ -19,10 +21,12 @@ from sweep_tasks.yaml_io import dump_task, load_task, new_template
 
 __all__ = [
     "BaseTaskSpec",
+    "DataPlanSpec",
     "ForwardSpec",
     "FWISpec",
     "IntrospectSpec",
     "LSRTMSpec",
+    "ModelPlanSpec",
     "TASK_TYPES",
     "TaskResult",
     "TaskRunner",
