@@ -1,11 +1,11 @@
-"""Tests for :class:`fwiloss.L1Loss`."""
+"""Tests for :class:`sweep_loss.L1Loss`."""
 
 from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
 
-from fwiloss import L1Loss, l1_loss
+from sweep_loss import L1Loss, l1_loss
 
 
 def test_zero_when_equal(small_gather):
@@ -41,7 +41,7 @@ def test_robust_to_outliers_vs_l2():
     syn = torch.zeros(1, 8, 1, 1)
     obs = torch.zeros(1, 8, 1, 1)
     obs[0, 0, 0, 0] = 1e3
-    from fwiloss import L2Loss
+    from sweep_loss import L2Loss
 
     l1 = L1Loss(reduction="sum")(syn, obs)
     l2 = L2Loss(reduction="sum", half=False)(syn, obs)

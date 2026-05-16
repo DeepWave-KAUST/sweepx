@@ -44,7 +44,7 @@ All three reduce to a quadratic for $|r|\ll c$.
 ## API
 
 ```python
-from fwiloss import CauchyLoss, TukeyLoss, GemanMcClureLoss
+from sweep_loss import CauchyLoss, TukeyLoss, GemanMcClureLoss
 CauchyLoss(c=0.5)(syn, obs)
 TukeyLoss(c=0.5)(syn, obs)
 GemanMcClureLoss(c=0.5)(syn, obs)

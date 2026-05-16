@@ -1,6 +1,9 @@
-# fwiloss
+# sweep-loss
 
 A PyTorch library of misfit (loss) functions for **Full Waveform Inversion (FWI)**.
+Designed as a plugin for the [`sweep`](https://github.com/DeepWave-KAUST/sweep) FWI
+toolkit — but works in any PyTorch-based FWI / inversion workflow because the
+losses are plain `torch.nn.Module` objects.
 
 The package collects, from a single API, the loss functions that have been
 proposed in the FWI literature - from classical least-squares to optimal-transport,
@@ -28,7 +31,7 @@ For convenience every loss also accepts a plain `(nt,)` or `(nt, nrec)` tensor
 
 ```python
 import torch
-from fwiloss import L2Loss
+from sweep_loss import L2Loss
 
 syn = torch.randn(2, 1024, 64, 1, requires_grad=True)   # (nshots, nt, nrec, nchan)
 obs = torch.randn(2, 1024, 64, 1)

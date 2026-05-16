@@ -45,7 +45,7 @@ contribute spurious (1-0)² = 1 to the misfit).
 ## API
 
 ```python
-from fwiloss import LocalSimilarityLoss, local_similarity_loss
+from sweep_loss import LocalSimilarityLoss, local_similarity_loss
 LocalSimilarityLoss(sigma_samples=8.0)(syn, obs)
 local_similarity_loss(syn, obs, sigma_samples=8.0)
 ```

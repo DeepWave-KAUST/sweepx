@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from fwiloss import L2Loss, Wasserstein2Loss, w2_loss
+from sweep_loss import L2Loss, Wasserstein2Loss, w2_loss
 
 
 def _gaussian(t, t0, sigma):

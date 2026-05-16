@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from fwiloss import AWILoss, awi_loss
+from sweep_loss import AWILoss, awi_loss
 
 
 def _ricker(t, t0, fc=15.0):
@@ -55,7 +55,7 @@ def test_awi_monotone_across_l2_cycle_skipping():
     nt, dt = 1024, 1e-3
     t = np.arange(nt) * dt
     o = torch.tensor(_ricker(t, 0.5), dtype=torch.float64).view(1, nt, 1, 1)
-    from fwiloss import L2Loss
+    from sweep_loss import L2Loss
     shifts = [0.0, 0.020, 0.030, 0.040, 0.060, 0.080]
     l2_vals, awi_vals = [], []
     for ms in shifts:

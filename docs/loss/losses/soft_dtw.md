@@ -34,7 +34,7 @@ used for FWI velocity-model building.
 ## API
 
 ```python
-from fwiloss import SoftDTWLoss, soft_dtw_loss
+from sweep_loss import SoftDTWLoss, soft_dtw_loss
 SoftDTWLoss(gamma=0.1)(syn, obs)
 soft_dtw_loss(syn, obs, gamma=0.1, normalize_by_length=True)
 ```

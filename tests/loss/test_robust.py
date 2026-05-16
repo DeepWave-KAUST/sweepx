@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from fwiloss import (
+from sweep_loss import (
     CauchyLoss,
     GemanMcClureLoss,
     L2Loss,

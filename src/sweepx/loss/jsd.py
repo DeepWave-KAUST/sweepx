@@ -28,7 +28,7 @@ Useful properties
   cleaner.
 
 The 1-D positive transform follows the same convention as
-:class:`fwiloss.NIMLoss` / :class:`fwiloss.Wasserstein1Loss`:
+:class:`sweep_loss.NIMLoss` / :class:`sweep_loss.Wasserstein1Loss`:
 ``"square"`` / ``"abs"`` / ``"linear"`` / ``"exp"``.
 
 References

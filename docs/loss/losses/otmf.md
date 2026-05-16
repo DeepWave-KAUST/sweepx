@@ -39,7 +39,7 @@ also absorbs amplitude / waveform discrepancies — OTMF is
 ## API
 
 ```python
-from fwiloss import OTMFLoss, otmf_loss
+from sweep_loss import OTMFLoss, otmf_loss
 OTMFLoss(dt=1e-3, epsilon=1e-4, positive="square", order=2)(syn, obs)
 ```
 

@@ -1,13 +1,14 @@
 # Installation
 
-`fwiloss` is a pure-Python package with PyTorch and NumPy as its only
-required runtime dependencies.
+`sweep-loss` is a pure-Python package with PyTorch and NumPy as its only
+required runtime dependencies.  The importable Python name is `sweep_loss`
+(underscore), the project / repo name is `sweep-loss` (hyphen).
 
 ## From source (recommended while we are pre-release)
 
 ```bash
-git clone <repo-url> fwiloss
-cd fwiloss
+git clone <repo-url> sweep-loss
+cd sweep-loss
 pip install -e .
 ```
 

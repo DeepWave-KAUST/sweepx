@@ -22,7 +22,7 @@ inversions where pure L2 fails on noisy field data.
 ## API
 
 ```python
-from fwiloss import HybridL1L2Loss
+from sweep_loss import HybridL1L2Loss
 loss = HybridL1L2Loss(delta=0.5)(syn, obs)
 ```
 

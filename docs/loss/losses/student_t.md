@@ -38,7 +38,7 @@ to L2).
 ## API
 
 ```python
-from fwiloss import StudentTLoss, student_t_loss
+from sweep_loss import StudentTLoss, student_t_loss
 StudentTLoss(nu=4.0, sigma=0.5)(syn, obs)
 student_t_loss(syn, obs, nu=4.0, sigma=0.5, full_nll=False)
 ```

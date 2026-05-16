@@ -13,8 +13,8 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-from fwiloss import EnvelopeLoss, envelope_loss
-from fwiloss._utils import envelope, hilbert
+from sweep_loss import EnvelopeLoss, envelope_loss
+from sweep_loss._utils import envelope, hilbert
 
 
 def _ricker(t, t0, fc=15.0):
@@ -23,7 +23,7 @@ def _ricker(t, t0, fc=15.0):
 
 
 def test_envelope_matches_scipy():
-    """fwiloss.envelope == |scipy.signal.hilbert| up to the eps stabiliser
+    """sweep_loss.envelope == |scipy.signal.hilbert| up to the eps stabiliser
     we add inside the square root for autograd safety."""
     if not HAS_SCIPY:
         import pytest

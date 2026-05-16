@@ -20,7 +20,7 @@ this is intentional in Luo-Sava (it carries amplitude information that
 AWI's normalised version discards).
 
 For numerical stability we regularise the deconvolution exactly as in
-AWI (see :mod:`fwiloss.awi`).  An ``"awi-style"`` ``normalize=True`` mode
+AWI (see :mod:`sweep_loss.awi`).  An ``"awi-style"`` ``normalize=True`` mode
 divides the per-trace numerator by :math:`\\sum_\\tau \\Psi(\\tau)^2`
 giving the amplitude-invariant version proposed by Choi & Alkhalifah
 (2018).

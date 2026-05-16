@@ -5,7 +5,7 @@ waveform-inversion idea with optimal transport.  For each trace:
 
 1. Compute the **Wiener matching filter** :math:`w(\\tau)` so that
    :math:`d_{\\mathrm s}\\!\\ast\\!w \\approx d_{\\mathrm o}` (regularised Wiener
-   filter, same as in :class:`fwiloss.AWILoss`).
+   filter, same as in :class:`sweep_loss.AWILoss`).
 2. Preprocess :math:`w` to a non-negative density :math:`\\hat w(\\tau)` (by
    squaring, taking absolute value, or shifting; see ``positive``).
 3. Measure the Wasserstein distance between :math:`\\hat w` and the *Dirac

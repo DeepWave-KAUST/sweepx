@@ -8,7 +8,7 @@ import math
 import numpy as np
 import torch
 
-from fwiloss import TimeFrequencyPhaseLoss, time_frequency_phase_loss
+from sweep_loss import TimeFrequencyPhaseLoss, time_frequency_phase_loss
 
 
 def _ricker(t, t0, fc=15.0):

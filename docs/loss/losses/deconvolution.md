@@ -32,7 +32,7 @@ Choi & Alkhalifah (2018).
 ## API
 
 ```python
-from fwiloss import DeconvolutionLoss
+from sweep_loss import DeconvolutionLoss
 DeconvolutionLoss(dt=1e-3, epsilon=1e-4, normalize=True)(syn, obs)
 ```
 

@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from fwiloss import NIMLoss, nim_loss
+from sweep_loss import NIMLoss, nim_loss
 
 
 def _gaussian(t, t0, sigma):
@@ -71,7 +71,7 @@ def test_nim_avoids_cycle_skipping():
     # Half-wavelength shift to put L2 in the cycle-skipping regime
     syn_close = torch.tensor(_ricker(t, 0.5 + 0.005)).view(1, nt, 1, 1).double()
     syn_far = torch.tensor(_ricker(t, 0.5 + 0.06)).view(1, nt, 1, 1).double()
-    from fwiloss import L2Loss
+    from sweep_loss import L2Loss
     L2_close = float(L2Loss(reduction="sum", half=True)(syn_close, obs))
     L2_far = float(L2Loss(reduction="sum", half=True)(syn_far, obs))
     nim_close = float(NIMLoss(positive="square", dt=dt, reduction="sum")(syn_close, obs))

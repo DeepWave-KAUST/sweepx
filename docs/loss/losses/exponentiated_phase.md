@@ -37,7 +37,7 @@ crosses the branch cut: it is everywhere $C^\infty$.
 ## API
 
 ```python
-from fwiloss import ExponentiatedPhaseLoss
+from sweep_loss import ExponentiatedPhaseLoss
 ExponentiatedPhaseLoss(eps=1e-8)(syn, obs)
 ```
 

@@ -1,7 +1,7 @@
 # References
 
 This page is a running, **DOI-rich** bibliography of every misfit that
-`fwiloss` implements (or plans to).  When a loss has multiple
+`sweep_loss` implements (or plans to).  When a loss has multiple
 "foundational" papers all are listed.  Sorted alphabetically by first
 author.
 

@@ -34,7 +34,7 @@ saturates once the shift exceeds half a wavelength; NIM does not.
 ## API
 
 ```python
-from fwiloss import NIMLoss, nim_loss
+from sweep_loss import NIMLoss, nim_loss
 NIMLoss(positive="square", dt=1e-3)(syn, obs)
 nim_loss(syn, obs, positive="linear", dt=1e-3)
 ```

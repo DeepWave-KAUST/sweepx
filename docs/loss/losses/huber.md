@@ -39,7 +39,7 @@ $\delta \approx 1.345\,\sigma$ where $\sigma$ is the robust noise scale
 ## API
 
 ```python
-from fwiloss import HuberLoss, PseudoHuberLoss
+from sweep_loss import HuberLoss, PseudoHuberLoss
 huber = HuberLoss(delta=0.5, reduction="mean")(syn, obs)
 psh   = PseudoHuberLoss(delta=0.5, reduction="mean")(syn, obs)
 ```

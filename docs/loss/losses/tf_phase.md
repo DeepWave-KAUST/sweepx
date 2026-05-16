@@ -40,7 +40,7 @@ TF phase misfit.
 ## API
 
 ```python
-from fwiloss import TimeFrequencyPhaseLoss
+from sweep_loss import TimeFrequencyPhaseLoss
 TimeFrequencyPhaseLoss(alpha=0.5, n_fft=128, sigma_samples=20)(syn, obs)
 ```
 

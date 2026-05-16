@@ -2,7 +2,7 @@
 
 ```python
 import torch
-from fwiloss import L2Loss, L1Loss, HuberLoss
+from sweep_loss import L2Loss, L1Loss, HuberLoss
 
 ns, nt, nr, nc = 2, 1024, 64, 1
 syn = torch.randn(ns, nt, nr, nc, requires_grad=True)

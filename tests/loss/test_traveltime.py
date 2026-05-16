@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from fwiloss import CrossCorrelationTraveltimeLoss, cross_correlation_traveltime_loss
+from sweep_loss import CrossCorrelationTraveltimeLoss, cross_correlation_traveltime_loss
 
 
 def _ricker(t, t0, fc=15.0):

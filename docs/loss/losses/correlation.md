@@ -46,7 +46,7 @@ to write whichever feels natural.
 ## API
 
 ```python
-from fwiloss import GlobalCorrelationLoss, TraceNormalizedL2Loss
+from sweep_loss import GlobalCorrelationLoss, TraceNormalizedL2Loss
 GlobalCorrelationLoss(offset_one=True)(syn, obs)
 TraceNormalizedL2Loss()(syn, obs)
 ```

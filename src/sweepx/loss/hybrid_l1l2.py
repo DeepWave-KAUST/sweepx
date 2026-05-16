@@ -7,7 +7,7 @@ For each residual sample :math:`r = d_{\\mathrm{syn}} - d_{\\mathrm{obs}}`,
     \\rho_{\\delta}(r) = \\delta^2 \\Bigl(\\sqrt{1 + (r/\\delta)^2} - 1\\Bigr).
 
 Despite being numerically identical to the *pseudo-Huber* loss in
-:mod:`fwiloss.huber`, this functional was independently introduced for
+:mod:`sweep_loss.huber`, this functional was independently introduced for
 **seismic tomography / FWI** by Bube & Langan (1997) - the geophysics
 community usually calls it the "hybrid L1-L2 norm" because
 

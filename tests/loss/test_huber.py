@@ -1,4 +1,4 @@
-"""Tests for :class:`fwiloss.HuberLoss` and :class:`fwiloss.PseudoHuberLoss`."""
+"""Tests for :class:`sweep_loss.HuberLoss` and :class:`sweep_loss.PseudoHuberLoss`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from fwiloss import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
+from sweep_loss import HuberLoss, PseudoHuberLoss, huber_loss, pseudo_huber_loss
 
 
 # ----------------------------------------------------------------------------
@@ -41,7 +41,7 @@ def test_huber_reduces_to_l2_for_large_delta():
     syn = torch.randn(1, 64, 3, 1)
     obs = torch.randn_like(syn)
     huber = HuberLoss(delta=1e6, reduction="sum")(syn, obs)
-    from fwiloss import L2Loss
+    from sweep_loss import L2Loss
 
     l2 = L2Loss(half=True, reduction="sum")(syn, obs)
     assert torch.allclose(huber, l2, rtol=1e-5, atol=1e-6)

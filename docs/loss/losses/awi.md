@@ -58,7 +58,7 @@ designed to circumvent.  The behaviour is exercised by
 ## API
 
 ```python
-from fwiloss import AWILoss
+from sweep_loss import AWILoss
 AWILoss(dt=1e-3, epsilon=1e-4)(syn, obs)
 ```
 

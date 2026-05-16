@@ -1,8 +1,8 @@
-# `fwiloss` — formula report & bibliography
+# `sweep_loss` — formula report & bibliography
 
 This document gathers, in one place, the **mathematical definition and
 DOI-linked source paper** of every misfit (loss) implemented in the
-`fwiloss` package.  It is also the canonical landing page for the
+`sweep_loss` package.  It is also the canonical landing page for the
 mkdocs site (`docs/report.md`).
 
 Tensor layout throughout:
@@ -603,7 +603,7 @@ arguments — but the consensus is to treat them as separate inversion
 
 ---
 
-## Plugging `fwiloss` into the `sweep` propagator
+## Plugging `sweep_loss` into the `sweep` propagator
 
 The misfit API matches the one already used in
 `geophyai/examples/FWI/2d/acoustic/torch/_fwi_marmousi_common.py`,
@@ -614,10 +614,10 @@ loss_sum = (syn - obs_batch).pow(2).sum()
 (loss_sum / normalization_elements).backward()
 ```
 
-Replacing it with any `fwiloss` misfit is a two-line change:
+Replacing it with any `sweep_loss` misfit is a two-line change:
 
 ```python
-from fwiloss import HuberLoss          # or any other misfit in this report
+from sweep_loss import HuberLoss          # or any other misfit in this report
 loss_fn = HuberLoss(delta=0.5, reduction="sum")
 
 # inside the training loop:
@@ -632,7 +632,7 @@ For misfits that need extra parameters (`dt`, `epsilon`, `freq_band`,
 
 ## How to cite
 
-> Wang, S. (2026). *fwiloss: a PyTorch library of misfit functions for
+> Wang, S. (2026). *sweep-loss: a PyTorch library of misfit functions for
 > Full Waveform Inversion.*  https://github.com/DeepWave-KAUST/sweep-loss
 
 Per-loss citations: see the DOI links above.

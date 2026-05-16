@@ -1,6 +1,6 @@
 """Base classes and shape utilities for FWI loss functions.
 
-All misfits in :mod:`fwiloss` consume tensors with the shape
+All misfits in :mod:`sweep_loss` consume tensors with the shape
 
     (nshots, nt, nreceivers, nchannel)
 

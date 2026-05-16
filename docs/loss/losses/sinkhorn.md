@@ -33,7 +33,7 @@ $W_2^2$ ($\varepsilon\to 0$) as the regularisation goes to zero.
 ## API
 
 ```python
-from fwiloss import SinkhornLoss, sinkhorn_loss
+from sweep_loss import SinkhornLoss, sinkhorn_loss
 SinkhornLoss(epsilon=(10*dt)**2, n_iter=64, positive="square",
              dt=dt, debiased=True)(syn, obs)
 ```

@@ -31,7 +31,7 @@ multiparameter FWI with surface-wave-dominated gathers.
 ## API
 
 ```python
-from fwiloss import JensenShannonLoss, jensen_shannon_loss
+from sweep_loss import JensenShannonLoss, jensen_shannon_loss
 JensenShannonLoss(positive="square")(syn, obs)
 ```
 

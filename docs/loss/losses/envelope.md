@@ -1,7 +1,7 @@
 # Envelope misfits
 
 Let $E(t)=|a(t)|=\sqrt{d(t)^2+\mathcal H[d](t)^2}$ be the instantaneous
-envelope (modulus of the analytic signal).  `fwiloss` provides four
+envelope (modulus of the analytic signal).  `sweep_loss` provides four
 envelope-based variants, all triggered through a single class
 `EnvelopeLoss` with boolean / integer switches.
 
@@ -38,7 +38,7 @@ need it.
 ## API
 
 ```python
-from fwiloss import EnvelopeLoss
+from sweep_loss import EnvelopeLoss
 EnvelopeLoss(p=2)(syn, obs)                  # Wu 2014
 EnvelopeLoss(log=True)(syn, obs)             # Bozdağ 2011 eq. 14
 EnvelopeLoss(squared=True)(syn, obs)         # Chi 2014

@@ -1,6 +1,6 @@
 # Loss functions — overview
 
-`fwiloss` groups the FWI misfit literature into the following families:
+`sweep_loss` groups the FWI misfit literature into the following families:
 
 | Family | Examples implemented |
 |---|---|

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for fwiloss tests."""
+"""Shared pytest fixtures for sweep_loss tests."""
 
 from __future__ import annotations
 

@@ -1,10 +1,10 @@
-"""Tests for :class:`fwiloss.HybridL1L2Loss`."""
+"""Tests for :class:`sweep_loss.HybridL1L2Loss`."""
 
 from __future__ import annotations
 
 import torch
 
-from fwiloss import HybridL1L2Loss, PseudoHuberLoss, hybrid_l1l2_loss
+from sweep_loss import HybridL1L2Loss, PseudoHuberLoss, hybrid_l1l2_loss
 
 
 def test_matches_pseudo_huber_numerically():

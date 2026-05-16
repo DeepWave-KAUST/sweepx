@@ -1,8 +1,8 @@
-# fwiloss
+# sweep-loss
 
 A PyTorch library of misfit (loss) functions for **Full Waveform Inversion (FWI)**.
 
-`fwiloss` collects, behind a single ergonomic API, the loss functions that
+`sweep-loss` collects, behind a single ergonomic API, the loss functions that
 have been proposed in the geophysical FWI literature — from classical
 least-squares to optimal-transport / adaptive matching-filter / envelope /
 phase variants — and exposes every one of them as a `torch.nn.Module` so
@@ -28,7 +28,7 @@ and citations (every reference carries a DOI).
 
 ```python
 import torch
-from fwiloss import L2Loss, HuberLoss, CauchyLoss
+from sweep_loss import L2Loss, HuberLoss, CauchyLoss
 
 syn = torch.randn(2, 1024, 64, 1, requires_grad=True)   # (ns, nt, nr, nc)
 obs = torch.randn(2, 1024, 64, 1)

@@ -47,7 +47,7 @@ $\le k\cdot dt$.
 ## API
 
 ```python
-from fwiloss import GSOTLoss, gsot_loss
+from sweep_loss import GSOTLoss, gsot_loss
 GSOTLoss(eta=None, dt=1e-3, max_shift_samples=None)(syn, obs)
 gsot_loss(syn, obs, eta=1e3, dt=1e-3, max_shift_samples=20)
 ```

@@ -47,7 +47,7 @@ losses exactly (asserted in the tests).
 ## API
 
 ```python
-from fwiloss import InstantaneousPhaseLoss, EnvelopePhaseLoss
+from sweep_loss import InstantaneousPhaseLoss, EnvelopePhaseLoss
 InstantaneousPhaseLoss(envelope_weight=True)(syn, obs)
 EnvelopePhaseLoss(alpha=0.5, envelope_log=False)(syn, obs)
 ```
