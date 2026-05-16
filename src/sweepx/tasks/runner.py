@@ -214,9 +214,14 @@ def _build_geometry_2d(
             coord_scalar_override=geometry.coord_scalar_override,
             cache=segy_cache,
         )
+        # Initial parse always keeps ALL receivers (dedupe=False internally).
+        # Per-stage dedupe (when ``geometry.dedupe=True``) happens inside
+        # ``_prepare_stage`` against the pristine 120-receiver geometry, so
+        # finer stages can recover the full receiver count even if a coarser
+        # stage drops some.
         sources_idx, receivers_idx, _obs_aligned = _segy_geometry_to_grid_indices(
             payload, float(dh),
-            dedupe=geometry.dedupe, dedup_method=geometry.dedup_method,
+            dedupe=False, dedup_method=geometry.dedup_method,
         )
         return sources_idx, receivers_idx
     if kind == "from_segy_index":
@@ -226,9 +231,14 @@ def _build_geometry_2d(
             geometry.index_path, shot_ids=geometry.shot_ids,
             cache=segy_cache,
         )
+        # Initial parse always keeps ALL receivers (dedupe=False internally).
+        # Per-stage dedupe (when ``geometry.dedupe=True``) happens inside
+        # ``_prepare_stage`` against the pristine 120-receiver geometry, so
+        # finer stages can recover the full receiver count even if a coarser
+        # stage drops some.
         sources_idx, receivers_idx, _obs_aligned = _segy_geometry_to_grid_indices(
             payload, float(dh),
-            dedupe=geometry.dedupe, dedup_method=geometry.dedup_method,
+            dedupe=False, dedup_method=geometry.dedup_method,
         )
         return sources_idx, receivers_idx
     raise ValueError(f"Unknown geometry.kind '{kind}'.")
@@ -368,28 +378,50 @@ def _load_segy_index_payload(
 def _segy_geometry_to_grid_indices(payload, dh: float, *, dedupe: bool, dedup_method: str):
     """Snap a SEG-Y-derived PhysicalGeometry to integer grid indices.
 
-    Returns (sources_idx, receivers_idx, obs_aligned). When dedupe drops
-    receivers, the obs tensor is sliced to keep only the surviving ones
-    (works only when the receiver mask is uniform across shots — the
-    streamer-typical case). Non-uniform masks raise NotImplementedError.
+    Returns ``(sources_idx, receivers_idx, obs_aligned)`` — all rectangular
+    ``(nshots, ...)`` tensors. Two modes:
+
+    * **Uniform-mask path** (``dedupe=False`` or the dedup mask is identical
+      across all shots): obs is sliced once with the shared keep_idx and the
+      receivers_idx is returned post-slice. This is the fast path used by
+      symmetric layouts (a stationary land array, streamer where source
+      offsets are integer multiples of dh, etc.).
+
+    * **Non-uniform-mask path** (``dedupe=True`` and shots disagree on which
+      receivers survive — typical for streamer acquisition where the source
+      shift per shot is not a multiple of dh): build per-shot keep_idx
+      arrays, truncate to the minimum keep-count, and fancy-index obs
+      per shot to a rectangular ``(nshots, n_common, nt)`` tensor.
     """
     pg = payload["physical_geometry"]
     obs = payload["obs"]
     gg, mask = pg.to_grid(dh=(dh, dh), dedupe=dedupe, dedup_method=dedup_method)
     uniform = bool(np.all(mask == mask[0:1]))
-    if not uniform:
-        raise NotImplementedError(
-            "SEG-Y geometry produced a non-uniform per-shot receiver mask "
-            "after to_grid dedupe. Set dedupe=false in the spec, or upgrade "
-            "the runner to thread per-shot masks through the loss."
-        )
-    keep = np.flatnonzero(mask[0])
-    if keep.size != obs.shape[1]:
-        obs = np.ascontiguousarray(obs[:, keep, :])
-        receivers_idx = gg.receivers[:, keep, :]
-    else:
-        receivers_idx = gg.receivers
-    return gg.sources.astype(np.int64), receivers_idx.astype(np.int64), obs
+    if not dedupe or uniform:
+        keep = np.flatnonzero(mask[0])
+        if keep.size != obs.shape[1]:
+            obs = np.ascontiguousarray(obs[:, keep, :])
+            receivers_idx = gg.receivers[:, keep, :]
+        else:
+            receivers_idx = gg.receivers
+        return gg.sources.astype(np.int64), receivers_idx.astype(np.int64), obs
+
+    # Non-uniform path: per-shot keep_idx, truncate to common min.
+    per_shot_keep = [np.flatnonzero(mask[s]) for s in range(mask.shape[0])]
+    counts = np.asarray([k.size for k in per_shot_keep])
+    n_common = int(counts.min())
+    if n_common <= 0:
+        raise ValueError("dedupe removed all receivers in at least one shot")
+    truncated = np.stack(
+        [k[:n_common].astype(np.int64) for k in per_shot_keep], axis=0
+    )
+    nshots = mask.shape[0]
+    rec_out = np.empty((nshots, n_common, gg.receivers.shape[-1]), dtype=np.int64)
+    obs_out = np.empty((nshots, n_common, obs.shape[-1]), dtype=obs.dtype)
+    for s in range(nshots):
+        rec_out[s] = gg.receivers[s, truncated[s], :].astype(np.int64)
+        obs_out[s] = obs[s, truncated[s], :]
+    return gg.sources.astype(np.int64), rec_out, np.ascontiguousarray(obs_out)
 
 
 def _from_file_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
@@ -781,6 +813,12 @@ def _compute_loss(syn, obs, loss_spec):
 
     Returns the pointwise loss tensor; the caller is responsible for the
     final reduction (so multi-rank averaging stays in the runner's hands).
+
+    For ``trace_cosine`` (a per-trace amplitude-normalised correlation misfit
+    rather than a pointwise function), we still return a pointwise tensor
+    by broadcasting the per-trace value back across the time axis. This
+    keeps the caller's ``.sum() / global_norm`` recipe yielding the correct
+    per-trace mean, regardless of the trace count or sample count.
     """
     from sweep_loss import huber_loss, l1_loss, l2_loss
 
@@ -792,6 +830,55 @@ def _compute_loss(syn, obs, loss_spec):
         return l1_loss(syn, obs, reduction="none")
     if kind == "huber":
         return huber_loss(syn, obs, delta=float(loss_spec.huber_delta), reduction="none")
+    if kind == "trace_cosine":
+        # Dispatch to sweep-loss's GlobalCorrelationLoss with demean=True.
+        # sweep-loss expects canonical (ns, nt, nrec, nchan); the c backend
+        # gives us (ns, nrec, nt) so we permute first, run the loss to get
+        # a per-trace tensor of shape (N,), then broadcast it back to the
+        # syn shape so the caller's .sum() / global_norm yields mean(1-cos)
+        # per trace.
+        from sweep_loss import global_correlation_loss
+        eps = float(getattr(loss_spec, "trace_cosine_eps", 1.0e-8))
+        demean = bool(getattr(loss_spec, "trace_cosine_demean", True))
+
+        if syn.ndim == 4:
+            # eager: (ns, nt, nrec, 1) — already canonical
+            syn_can, obs_can = syn, obs
+            permuted = False
+        elif syn.ndim == 3 and syn.shape[-1] != 1:
+            # c backend: (ns, nrec, nt) → permute → (ns, nt, nrec); add chan.
+            syn_can = syn.permute(0, 2, 1).unsqueeze(-1)  # (ns, nt, nrec, 1)
+            obs_can = obs.permute(0, 2, 1).unsqueeze(-1)
+            permuted = True
+        elif syn.ndim == 3 and syn.shape[-1] == 1:
+            # eager 3D (nt, nrec, 1) — single-shot synthetic path; sweep-loss
+            # promotes to (1, nt, nrec, 1) via to_canonical.
+            syn_can, obs_can = syn, obs
+            permuted = False
+        else:
+            raise ValueError(f"trace_cosine: unsupported syn.ndim {syn.ndim}")
+
+        per_trace = global_correlation_loss(
+            syn_can, obs_can,
+            offset_one=True, demean=demean, eps=eps, reduction="none",
+        )  # (N,) where N = ns * nrec * nchan after sweep-loss flatten
+
+        # Reshape back to per-trace canonical and broadcast across time so
+        # the caller's .sum() / global_norm yields mean(1-cos) over traces.
+        # sweep_loss.base.flatten_traces uses order (ns, nr, nc) so:
+        if syn_can.ndim == 4:
+            ns_c, nt_c, nr_c, nc_c = syn_can.shape
+        else:  # (nt, nrec, 1) → canonical promoted shape (1, nt, nrec, 1)
+            ns_c, nt_c, nr_c, nc_c = 1, syn_can.shape[0], syn_can.shape[1], syn_can.shape[2]
+        pt_can = per_trace.view(ns_c, 1, nr_c, nc_c).expand(ns_c, nt_c, nr_c, nc_c)
+
+        if permuted:
+            # back to (ns, nrec, nt)
+            return pt_can.squeeze(-1).permute(0, 2, 1).contiguous()
+        if syn.ndim == 4:
+            return pt_can
+        # 3D eager (nt, nrec, 1)
+        return pt_can.squeeze(0)
     raise ValueError(f"Unknown loss kind '{kind}'.")
 
 
@@ -840,6 +927,37 @@ def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
     raise ValueError(f"Unknown optimizer kind '{kind}'.")
 
 
+def _build_reparam_optimizer(opt_spec, net_params, lr: float):
+    """Build a torch optimizer over a reparam network's parameters.
+
+    Mirrors :func:`_build_optimizer` for the network-as-vp case. The
+    ``lr`` comes from ``spec.reparam.lr`` (≈ 1e-4); the optimizer kind
+    and other hyperparameters come from ``spec.optimizer``.
+    """
+    import torch
+
+    params = list(net_params)
+    if not params:
+        raise ValueError("reparam network has no trainable parameters")
+    kind = opt_spec.kind
+    if kind == "adam":
+        return torch.optim.Adam(
+            params, lr=float(lr), eps=opt_spec.eps, betas=tuple(opt_spec.betas),
+        )
+    if kind == "sgd":
+        return torch.optim.SGD(
+            params, lr=float(lr), momentum=opt_spec.momentum,
+            nesterov=opt_spec.nesterov, weight_decay=opt_spec.weight_decay,
+        )
+    if kind == "lbfgs":
+        return torch.optim.LBFGS(
+            params, lr=float(lr), max_iter=opt_spec.max_iter,
+            history_size=opt_spec.history_size,
+            line_search_fn=opt_spec.line_search_fn,
+        )
+    raise ValueError(f"Unknown optimizer kind '{kind}' for reparam.")
+
+
 def _build_scheduler(sched_spec, optimizer, total_epochs):
     """Dispatch the LR scheduler via `sweep_runner.scheduler.build`.
 
@@ -860,14 +978,106 @@ def _apply_stage_lr_scale(optimizer, initial_lrs: list[float], scale: float) -> 
         group["lr"] = base * float(scale)
 
 
-def _apply_bounds(inv_tensors_by_name, bounds_by_name) -> None:
+def _apply_bounds(inv_tensors_by_name, bounds_by_name, *, skip_names=()) -> None:
+    """Clamp each named tensor to its model_bounds entry in place.
+
+    ``skip_names`` (e.g. names handled by a reparam network) are passed
+    through untouched — the network already enforces its own bounds via
+    its render-time clamp.
+    """
     if not bounds_by_name:
         return
+    skip = set(skip_names)
     for name, t in inv_tensors_by_name.items():
+        if name in skip:
+            continue
         bound = bounds_by_name.get(name)
         if bound is None:
             continue
         t.data.clamp_(min=bound.min, max=bound.max)
+
+
+def _compute_local_window(sources_chunk, receivers_chunk, full_shape, dh, win_spec):
+    """Return ``(z0, z1, x0, x1)`` tightly enclosing the batch's sources +
+    receivers, expanded by ``padding_x_m`` / ``padding_z_m``.
+
+    ``sources_chunk`` has shape ``(B, 2)`` and ``receivers_chunk`` has shape
+    ``(B, nrec, 2)``. Convention (matches the rest of the runner): the
+    last axis is ``[x, z]`` — i.e. ``[lateral, depth]``. The result is
+    clamped to the full-model shape ``(nz, nx)``.
+    """
+    import numpy as _np
+    nz, nx = int(full_shape[0]), int(full_shape[1])
+    pad_x = int(float(win_spec.padding_x_m) / float(dh))
+    pad_z = int(float(win_spec.padding_z_m) / float(dh))
+    src_x = sources_chunk[:, 0]; src_z = sources_chunk[:, 1]
+    rec_x = receivers_chunk[..., 0].reshape(-1); rec_z = receivers_chunk[..., 1].reshape(-1)
+    all_x = _np.concatenate([src_x, rec_x])
+    all_z = _np.concatenate([src_z, rec_z])
+    x0 = max(0, int(all_x.min()) - pad_x)
+    x1 = min(nx, int(all_x.max()) + pad_x + 1)
+    if win_spec.full_depth:
+        z0, z1 = 0, nz
+    else:
+        z0 = max(0, int(all_z.min()) - pad_z)
+        z1 = min(nz, int(all_z.max()) + pad_z + 1)
+    min_w = int(float(win_spec.min_width_m) / float(dh))
+    if min_w > 0 and (x1 - x0) < min_w:
+        extra = min_w - (x1 - x0)
+        x0 = max(0, x0 - extra // 2)
+        x1 = min(nx, x0 + min_w)
+        if (x1 - x0) < min_w:  # right edge clipping
+            x0 = max(0, x1 - min_w)
+    return int(z0), int(z1), int(x0), int(x1)
+
+
+def _rebase_geometry_to_window(sources_chunk, receivers_chunk, z0, x0):
+    """Shift grid-index source / receiver coordinates to window-local origin.
+
+    Returns fresh arrays (not views); callers can pass to solver freely.
+    Axis convention matches the runner: ``[x, z]`` on the last axis.
+    """
+    import numpy as _np
+    s = _np.asarray(sources_chunk, dtype=_np.int64).copy()
+    r = _np.asarray(receivers_chunk, dtype=_np.int64).copy()
+    s[:, 0] -= int(x0); s[:, 1] -= int(z0)
+    r[..., 0] -= int(x0); r[..., 1] -= int(z0)
+    return s, r
+
+
+def _build_reparam_net(spec, base_vp, bounds):
+    """Construct a :class:`sweep_nn.VelocityINR` from a ReparamSpec.
+
+    ``base_vp`` is the initial vp tensor at the first stage's grid. The net
+    keeps it as a buffer (its forward returns ``base + delta``). ``bounds``
+    is the optional :class:`ModelBounds` for vp — if provided, the network
+    clamps its render output to those limits.
+    """
+    from sweep_nn import VelocityINR
+
+    bounds_tuple = None
+    if bounds is not None and bounds.min is not None and bounds.max is not None:
+        bounds_tuple = (float(bounds.min), float(bounds.max))
+    return VelocityINR(
+        base_vp.detach(),
+        vp_mean=float(spec.vp_mean),
+        vp_std=float(spec.vp_std),
+        hidden_features=int(spec.hidden_features),
+        hidden_layers=int(spec.hidden_layers),
+        first_omega0=float(spec.first_omega0),
+        hidden_omega0=float(spec.hidden_omega0),
+        use_bias=bool(spec.use_bias),
+        use_hash_encoding=bool(spec.hash.enabled),
+        hash_levels=int(spec.hash.levels),
+        hash_features_per_level=int(spec.hash.features_per_level),
+        hash_log2_size=int(spec.hash.log2_size),
+        hash_base_resolution=int(spec.hash.base_resolution),
+        hash_finest_resolution=int(spec.hash.finest_resolution),
+        direct_velocity=bool(spec.direct_velocity),
+        coord_min=float(spec.coord_min),
+        coord_max=float(spec.coord_max),
+        bounds=bounds_tuple,
+    ).to(base_vp.device)
 
 
 def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
@@ -950,10 +1160,70 @@ def _resample_obs_time(obs_np: "np.ndarray", dt_old: float, dt_new: float,
 
 
 def _bandpass_obs(obs_np: "np.ndarray", lo: float, hi: float, dt: float,
-                  *, order: int, time_axis: int = -1) -> "np.ndarray":
-    """Per-stage bandpass on obs (zero-phase Butterworth)."""
+                  *, order: int, time_axis: int = -1,
+                  padtype: str | None = "odd") -> "np.ndarray":
+    """Per-stage bandpass on obs (zero-phase Butterworth).
+
+    ``order`` is the prototype Butterworth order (matches
+    ``fwi_workflow-dev``'s ``filter_order``); ``padtype`` controls
+    edge handling (default ``"odd"`` reflective padding; ``None``
+    matches ``torchaudio.functional.filtfilt``'s no-padding behavior).
+    """
     from sweep_preproc.filter import bandpass
-    return bandpass(obs_np, lo=lo, hi=hi, dt=dt, order=order, axis=time_axis)
+    return bandpass(obs_np, lo=lo, hi=hi, dt=dt, order=order,
+                    axis=time_axis, padtype=padtype)
+
+
+def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
+                        *, order: int) -> "torch.Tensor":
+    """Differentiable bandpass on a synthetic torch tensor.
+
+    Mirrors ``fwi_workflow-dev``'s ``_apply_torch_filter`` (which routes
+    through ``torchaudio.functional.filtfilt``). Without this, FWI loss
+    compares un-filtered syn (containing frequencies above the stage's
+    ``hi_hz``) against bandpassed obs — producing spurious high-frequency
+    residuals that drive bad gradient updates. The result is what users
+    see as "dispersion" in the synthetic output.
+
+    The time axis is auto-detected from tensor layout:
+        * c backend, 3-D ``(n, nrec, nt)``       → time at axis -1
+        * eager 4-D ``(n, nt, nrec, nchan)``     → time at axis 1
+        * eager 3-D ``(nt, nrec, nchan=1)``      → time at axis 0
+    """
+    import torch
+    from scipy.signal import butter
+    from torchaudio.functional import filtfilt as _ta_filtfilt
+
+    # Detect time axis + plan permutations to bring time to last.
+    if syn.ndim == 4:
+        # eager: (n, nt, nrec, nchan). Move nt to last.
+        permute_to_last = (0, 2, 3, 1)
+        inverse_permute = (0, 3, 1, 2)
+    elif syn.ndim == 3 and syn.shape[-1] == 1:
+        # eager 3-D: (nt, nrec, 1). Move nt to last.
+        permute_to_last = (1, 2, 0)
+        inverse_permute = (2, 0, 1)
+    elif syn.ndim == 3:
+        # c backend: (n, nrec, nt). Time already last.
+        permute_to_last = None
+        inverse_permute = None
+    else:
+        raise ValueError(f"_bandpass_syn_torch: unsupported syn.ndim {syn.ndim}")
+
+    syn_perm = syn.permute(*permute_to_last).contiguous() if permute_to_last else syn
+
+    nyq = 0.5 / float(dt)
+    wn = [float(lo) / nyq, float(hi) / nyq]
+    b, a = butter(int(order), wn, btype="bandpass")
+    # ``(b, a)`` form of order >= 4 is numerically ill-conditioned in float32
+    # — cast to float64 for the filtfilt and cast back. Matches
+    # ``fwi_workflow-dev``'s ``data.double()`` pattern (sweep_torch.py:237).
+    a_t = torch.as_tensor(a, dtype=torch.float64, device=syn_perm.device)
+    b_t = torch.as_tensor(b, dtype=torch.float64, device=syn_perm.device)
+    out = _ta_filtfilt(syn_perm.double(), a_t, b_t, clamp=False).to(dtype=syn.dtype)
+    if inverse_permute is not None:
+        out = out.permute(*inverse_permute).contiguous()
+    return out
 
 
 def _trim_or_pad_time(obs_np: "np.ndarray", target_nt: int, time_axis: int = -1) -> "np.ndarray":
@@ -1015,26 +1285,82 @@ def _prepare_stage(
         print(f"[stage {stage_idx}] dt: {state['dt']} -> {new_dt}, nt: {state['nt']} -> {new_nt}")
 
     # ---- Geometry re-snap from pristine physical positions -----------------
-    if grid_changed or "sources" not in state:
+    # We re-snap whenever:
+    #   - the stage changes dh (grid_changed)
+    #   - state hasn't been initialised yet
+    #   - dedupe is enabled and we haven't applied it at this dh yet (the
+    #     initial geometry parse always keeps all receivers; per-stage
+    #     dedupe is the first time it gets applied at the stage's dh)
+    need_geom_resnap = (
+        grid_changed
+        or "sources" not in state
+        or (state.get("dedupe_grid_snap", False)
+            and state.get("_geom_applied_at_dh") != new_dh)
+    )
+    if need_geom_resnap:
         from sweep_io.geometry import PhysicalGeometry
         pg: PhysicalGeometry = state["pristine_physical_geom"]
+        dedupe_flag = state.get("dedupe_grid_snap", True)
+        dedup_method = state.get("dedup_method", "nearest")
         gg, mask = pg.to_grid(
             dh=(new_dh, new_dh),
-            dedupe=state.get("dedupe_grid_snap", True),
-            dedup_method=state.get("dedup_method", "nearest"),
+            dedupe=dedupe_flag,
+            dedup_method=dedup_method,
         )
         uniform = bool(np.all(mask == mask[0:1]))
-        if not uniform:
-            raise NotImplementedError(
-                f"[stage {stage_idx}] non-uniform per-shot receiver mask after "
-                f"to_grid(dh={new_dh}). Set dedupe=false in geometry, or upgrade "
-                f"the runner to thread per-shot masks through the loss."
-            )
-        keep_idx = np.flatnonzero(mask[0])
-        state["sources"] = gg.sources.astype(np.int64)
-        state["receivers"] = gg.receivers[:, keep_idx, :].astype(np.int64)
-        state["receiver_keep_idx"] = keep_idx
-        state["nshots"] = int(state["sources"].shape[0])
+        if not dedupe_flag or uniform:
+            # Fast path: keep all (dedupe=false) or uniform mask across shots.
+            keep_idx = np.flatnonzero(mask[0])
+            state["sources"] = gg.sources.astype(np.int64)
+            state["receivers"] = gg.receivers[:, keep_idx, :].astype(np.int64)
+            state["receiver_keep_idx"] = keep_idx
+            state["per_shot_keep_idx"] = None
+            state["nshots"] = int(state["sources"].shape[0])
+        else:
+            # Non-uniform mask path: streamer-style acquisition where the
+            # source position shifts per shot, so each shot's dedupe pattern
+            # differs. Build per-shot ``keep_idx`` arrays, then TRUNCATE to
+            # the minimum keep count across shots so the resulting tensors
+            # stay rectangular (no ragged). For each shot, ``keep_idx`` is
+            # already in receiver-index order from ``flatnonzero``; truncate
+            # via ``[:n_common]`` preserves spatial order.
+            per_shot_keep: list[np.ndarray] = [np.flatnonzero(mask[s]) for s in range(mask.shape[0])]
+            counts = np.asarray([k.size for k in per_shot_keep])
+            n_common = int(counts.min())
+            if n_common <= 0:
+                raise ValueError(
+                    f"[stage {stage_idx}] dedupe removed all receivers in at least one shot"
+                )
+            truncated = np.stack(
+                [k[:n_common].astype(np.int64) for k in per_shot_keep], axis=0
+            )  # (nshots, n_common)
+            # Build deduped receivers: gg.receivers is already the deduped
+            # output (with dropped traces zeroed in the dropped slots but
+            # mask tells us which to keep). However ``flatnonzero(mask[s])``
+            # returns indices into the ORIGINAL receiver axis — we use those
+            # against ``gg.receivers`` (which has the same axis length, with
+            # mask[s][i] = True iff receiver i survived for shot s).
+            # Truncated keep gives a rectangular (nshots, n_common) index.
+            rec_out = np.zeros((mask.shape[0], n_common, gg.receivers.shape[-1]), dtype=np.int64)
+            for s in range(mask.shape[0]):
+                rec_out[s] = gg.receivers[s, truncated[s], :].astype(np.int64)
+            state["sources"] = gg.sources.astype(np.int64)
+            state["receivers"] = rec_out
+            state["per_shot_keep_idx"] = truncated.astype(np.int64)
+            # Maintain receiver_keep_idx for backward-compat (used to slice
+            # pristine obs when uniform); keep first-shot keep as a
+            # representative (obs masking path below uses per_shot_keep_idx
+            # when available).
+            state["receiver_keep_idx"] = truncated[0].copy()
+            state["nshots"] = int(state["sources"].shape[0])
+            if dist_info.is_root:
+                drop = int(mask.shape[1] - n_common)
+                print(f"[stage {stage_idx}] dedupe={dedup_method!r}: "
+                      f"per-shot rec count {counts.min()}–{counts.max()}, "
+                      f"truncated to common {n_common} (dropped {drop} per shot)")
+        # Record the dh at which the current geometry was snapped so the
+        # check above doesn't re-run on every stage entry.
+        state["_geom_applied_at_dh"] = float(new_dh)
 
     # ---- Pick a new model shape (preserves physical extent) ----------------
     if grid_changed or "shape" not in state:
@@ -1044,30 +1370,104 @@ def _prepare_stage(
             print(f"[stage {stage_idx}] vp shape: {state['shape']} -> {new_shape}")
         state["shape"] = new_shape
 
-    # ---- vp resample + fresh leaf tensors ----------------------------------
+    # ---- vp resample ----------------------------------------------------
+    # Two paths:
+    #  - Reparam off: bilinear-resample each leaf tensor to the new shape
+    #    and make a fresh `requires_grad=True` leaf (Adam state is shape-
+    #    bound, so we rebuild the optimizer below).
+    #  - Reparam on: keep the same VelocityINR. Update its `base_velocity`
+    #    buffer from the pristine init, resampled to the new shape — and
+    #    DO NOT rebuild the optimizer (its state on the network's params
+    #    is independent of grid shape and is the entire point of the
+    #    network-as-vp parameterization).
     if grid_changed:
-        new_inv: list = []
-        new_by_name: dict = {}
-        for name in required_names:
-            old_t = state["inv_by_name"][name]
-            new_t = _resample_vp_tensor(old_t, state["shape"])
-            new_inv.append(new_t)
-            new_by_name[name] = new_t
-        state["inv_in_order"] = new_inv
-        state["inv_by_name"] = new_by_name
+        reparam_net = state.get("reparam_net")
+        if reparam_net is not None:
+            pristine_base = state["pristine_base_vp"]
+            new_base = _resample_vp_tensor(pristine_base, state["shape"]).detach()
+            reparam_net.update_base_velocity(new_base)
+            with torch.no_grad():
+                rendered = reparam_net().detach()
+            state["inv_by_name"]["vp"] = rendered
+            state["inv_in_order"] = [
+                rendered if n == "vp" else state["inv_by_name"][n]
+                for n in required_names
+            ]
+        else:
+            new_inv: list = []
+            new_by_name: dict = {}
+            for name in required_names:
+                old_t = state["inv_by_name"][name]
+                new_t = _resample_vp_tensor(old_t, state["shape"])
+                new_inv.append(new_t)
+                new_by_name[name] = new_t
+            state["inv_in_order"] = new_inv
+            state["inv_by_name"] = new_by_name
 
     # ---- Rebuild solver ----------------------------------------------------
     if grid_changed or time_changed or "solver" not in state:
         state["solver"] = _build_solver(
             spec.physics, spec.backend, state["shape"], new_dh, new_dt, new_nt, dev,
         )
+        # Drop cached local-window solvers — they were built for the
+        # previous stage's (dh, dt, nt) and are no longer valid.
+        if "local_solver_cache" in state:
+            state["local_solver_cache"].clear()
 
     # ---- Rebuild wavelet ---------------------------------------------------
+    rebuilt_wavelet = False
     if time_changed or stage.wavelet is not None or "wavelet" not in state:
         wav_spec = stage.wavelet if stage.wavelet is not None else spec.wavelet
         state["wavelet"] = _build_wavelet(
             wav_spec, spec.time, override_dt=new_dt, override_nt=new_nt,
         )
+        rebuilt_wavelet = True
+
+    # ---- Optional wavelet bandpass (target='wavelet') ----------------------
+    # When ``stage.bandpass.target == 'wavelet'``, we band-pass the source
+    # wavelet ONCE at stage entry. Syn forward is then naturally band-limited
+    # without per-iteration filtering in the autograd path. fwi_workflow-dev
+    # filters syn (target='syn'); both yield equivalent gradients for a
+    # linear wave equation.
+    bp_spec = stage.bandpass
+    if bp_spec is not None and getattr(bp_spec, "target", "syn") == "wavelet" \
+            and (rebuilt_wavelet or state.get("_wavelet_bandpass_at") != (
+                float(new_dt), int(new_nt), float(bp_spec.lo_hz), float(bp_spec.hi_hz),
+                int(bp_spec.order), bp_spec.padtype)):
+        # Bandpass the wavelet via scipy (non-autograd: wavelet is constant
+        # input to the solver). One-shot per stage, so cheap. Handle both
+        # numpy and torch wavelet objects (build_wavelet returns numpy for
+        # ricker, torch for from_npy).
+        from sweep_preproc.filter import bandpass as _bp_cpu
+        wav_t = state["wavelet"]
+        is_torch = hasattr(wav_t, "detach")
+        if is_torch:
+            wav_np = wav_t.detach().cpu().numpy()
+            wav_dtype = wav_np.dtype
+            wav_device = wav_t.device
+        else:
+            wav_np = np.asarray(wav_t)
+            wav_dtype = wav_np.dtype
+            wav_device = None
+        wav_filt = _bp_cpu(
+            wav_np, lo=bp_spec.lo_hz, hi=bp_spec.hi_hz,
+            dt=new_dt, order=bp_spec.order,
+            axis=-1, padtype=bp_spec.padtype,
+        ).astype(wav_dtype, copy=False)
+        wav_filt = np.ascontiguousarray(wav_filt)
+        if is_torch:
+            state["wavelet"] = torch.from_numpy(wav_filt).to(wav_device)
+        else:
+            state["wavelet"] = wav_filt
+        state["_wavelet_bandpass_at"] = (
+            float(new_dt), int(new_nt), float(bp_spec.lo_hz), float(bp_spec.hi_hz),
+            int(bp_spec.order), bp_spec.padtype,
+        )
+        if dist_info.is_root:
+            peak = float(np.abs(wav_filt).max())
+            print(f"[stage {stage_idx}] wavelet bandpass "
+                  f"{bp_spec.lo_hz}-{bp_spec.hi_hz} Hz applied (peak now {peak:.3f}) "
+                  f"-> syn will be naturally band-limited; syn filter SKIPPED")
 
     # ---- Obs rebuild from pristine -----------------------------------------
     # Apply: receiver-mask -> time resample -> trim/pad -> optional bandpass.
@@ -1080,11 +1480,44 @@ def _prepare_stage(
 
     # 1) receiver mask (apply along receiver axis)
     obs_np = pristine_obs
-    keep_idx = state.get("receiver_keep_idx")
-    if keep_idx is not None and keep_idx.size != obs_np.shape[receiver_axis_pristine]:
-        slicer = [slice(None)] * obs_np.ndim
-        slicer[receiver_axis_pristine] = keep_idx
-        obs_np = obs_np[tuple(slicer)]
+    per_shot_keep_idx = state.get("per_shot_keep_idx")
+    if per_shot_keep_idx is not None:
+        # Per-shot dedupe path: each shot keeps a different subset of
+        # receivers. Apply a per-shot fancy-indexing reduction to obs along
+        # the receiver axis. We do this in float32 numpy (CPU-friendly)
+        # before time-resampling so downstream operations work on the
+        # already-rectangular ``(nshots, n_common, ...)`` tensor.
+        if obs_np.ndim == 3:
+            # c-backend layout: (nshots, nrec, nt). receiver_axis_pristine == 1.
+            nshots, nrec_pristine, nt_pristine = obs_np.shape
+            new = np.empty(
+                (nshots, per_shot_keep_idx.shape[1], nt_pristine),
+                dtype=obs_np.dtype,
+            )
+            for s in range(nshots):
+                new[s] = obs_np[s, per_shot_keep_idx[s], :]
+            obs_np = new
+        elif obs_np.ndim == 4:
+            # eager layout: (nshots, nt, nrec, nchan). axis -2 = receiver.
+            nshots, nt_pristine, nrec_pristine, nchan = obs_np.shape
+            new = np.empty(
+                (nshots, nt_pristine, per_shot_keep_idx.shape[1], nchan),
+                dtype=obs_np.dtype,
+            )
+            for s in range(nshots):
+                new[s] = obs_np[s, :, per_shot_keep_idx[s], :]
+            obs_np = new
+        else:
+            raise NotImplementedError(
+                f"per-shot keep on obs.ndim={obs_np.ndim} not implemented"
+            )
+    else:
+        # Uniform-mask path: existing behavior.
+        keep_idx = state.get("receiver_keep_idx")
+        if keep_idx is not None and keep_idx.size != obs_np.shape[receiver_axis_pristine]:
+            slicer = [slice(None)] * obs_np.ndim
+            slicer[receiver_axis_pristine] = keep_idx
+            obs_np = obs_np[tuple(slicer)]
 
     # 2) time resample
     obs_np = _resample_obs_time(obs_np, pristine_dt, new_dt, time_axis=time_axis_pristine)
@@ -1098,17 +1531,93 @@ def _prepare_stage(
             obs_np, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
             dt=new_dt, order=stage.bandpass.order,
             time_axis=time_axis_pristine,
+            padtype=stage.bandpass.padtype,
         )
         if dist_info.is_root:
-            print(f"[stage {stage_idx}] bandpass {stage.bandpass.lo_hz}-{stage.bandpass.hi_hz} Hz")
+            pad_tag = stage.bandpass.padtype or "none"
+            print(f"[stage {stage_idx}] bandpass {stage.bandpass.lo_hz}-{stage.bandpass.hi_hz} Hz "
+                  f"order={stage.bandpass.order} padtype={pad_tag}")
     state["_active_bandpass"] = stage.bandpass
 
     obs_np = np.ascontiguousarray(obs_np.astype(np.float32, copy=False))
     state["obs"] = torch.from_numpy(obs_np)
     state["_stage_wavelet_idx"] = stage_idx
 
+    # ---- Source dedupe + obs stacking --------------------------------------
+    # At coarse dh, the source spacing (typically 25 m for Viking-class
+    # streamer surveys) is smaller than dh, so multiple shots round to the
+    # same source grid cell. Group shots by source cell, stack (mean) their
+    # obs traces. This:
+    #   - reduces redundant forward modeling (1 syn per cell vs many)
+    #   - cleans the gradient (1 stacked obs vs 1 syn per cell — no more
+    #     "3 obs vs 1 syn" redundancy on the source side)
+    #   - matches what a properly-deduped acquisition would naturally do
+    # Per-stage (cheap: rerun from pristine each stage), so finer stages
+    # automatically recover all shots if their source spacing >= dh.
+    if state.get("dedupe_grid_snap", False) and state.get("_source_dedup_at_dh") != new_dh:
+        src_arr = state["sources"]
+        keys = [(int(src_arr[s, 0]), int(src_arr[s, 1])) for s in range(src_arr.shape[0])]
+        groups: dict[tuple[int, int], list[int]] = {}
+        for i, k in enumerate(keys):
+            groups.setdefault(k, []).append(i)
+        if len(groups) < src_arr.shape[0]:
+            sorted_keys = sorted(groups.keys())
+            n_unique_src = len(sorted_keys)
+            new_sources = np.zeros((n_unique_src, 2), dtype=np.int64)
+            rec_curr = state["receivers"]
+            new_receivers = np.zeros((n_unique_src, rec_curr.shape[1], 2), dtype=np.int64)
+            obs_curr = state["obs"]  # tensor (n_pristine, n_common_rec, nt)
+            new_obs_shape = (n_unique_src, *obs_curr.shape[1:])
+            new_obs = torch.zeros(new_obs_shape, dtype=obs_curr.dtype)
+            group_sizes = []
+            for g, k in enumerate(sorted_keys):
+                indices = np.asarray(groups[k], dtype=np.int64)
+                group_sizes.append(int(indices.size))
+                # Representative: first shot in the group (deterministic)
+                new_sources[g] = src_arr[indices[0]]
+                new_receivers[g] = rec_curr[indices[0]]
+                # Stack obs: mean across the group's shots. obs_curr is
+                # already receiver-deduped, so all shots in the group share
+                # the same receiver layout (streamer geometry → constant
+                # relative offsets) and can be averaged element-wise.
+                if indices.size == 1:
+                    new_obs[g] = obs_curr[int(indices[0])]
+                else:
+                    new_obs[g] = obs_curr[indices.tolist()].mean(dim=0)
+            # Also dedupe per_shot_keep_idx if it's per-pristine-shot.
+            per_shot_keep = state.get("per_shot_keep_idx")
+            if per_shot_keep is not None:
+                state["per_shot_keep_idx"] = np.stack(
+                    [per_shot_keep[groups[k][0]] for k in sorted_keys]
+                )
+            state["sources"] = new_sources
+            state["receivers"] = new_receivers
+            state["obs"] = new_obs
+            state["nshots"] = int(new_sources.shape[0])
+            if dist_info.is_root:
+                avg_grp = src_arr.shape[0] / n_unique_src
+                print(f"[stage {stage_idx}] source dedupe: "
+                      f"{src_arr.shape[0]} shots -> {n_unique_src} unique src cells "
+                      f"(avg group size {avg_grp:.1f}, max {max(group_sizes)})")
+        state["_source_dedup_at_dh"] = float(new_dh)
+
     # ---- Re-init optimizer (Adam state is shape-bound) ---------------------
-    if grid_changed or "optimizer" not in state:
+    # Reparam mode: optimizer state is on network params (shape-invariant),
+    # so DO NOT rebuild — preserving Adam moments across stages is the
+    # main multi-scale benefit of network reparameterization.
+    if "optimizer" not in state:
+        # Cold-init (e.g. resume-from path). Build appropriate optimizer.
+        if state.get("reparam_net") is not None:
+            state["optimizer"] = _build_reparam_optimizer(
+                spec.optimizer, state["reparam_net"].parameters(),
+                float(spec.reparam.lr),
+            )
+        else:
+            state["optimizer"] = _build_optimizer(
+                spec.optimizer, state["inv_by_name"], required_names,
+            )
+        state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
+    elif grid_changed and state.get("reparam_net") is None:
         state["optimizer"] = _build_optimizer(
             spec.optimizer, state["inv_by_name"], required_names,
         )
@@ -1479,6 +1988,35 @@ class TaskRunner:
             print(f"[fwi] shape={shape} nshots={nshots} inverted_models={required_names} "
                   f"world_size={dist_info.world_size}")
 
+        # 4b) Optional NN reparameterization of vp (sweep-nn).
+        # When active, vp is rendered each forward by a hash-encoded SIREN
+        # whose parameters become the optimization variables. The vp leaf
+        # tensor in inv_by_name is repurposed as a buffer holding the
+        # current rendered vp (refreshed after each optimizer step) so
+        # snapshots / checkpoints see the right values.
+        reparam_net = None
+        pristine_base_vp = None
+        if spec.reparam is not None and "vp" in inv_by_name:
+            reparam_net = _build_reparam_net(
+                spec.reparam, inv_by_name["vp"], spec.model_bounds.get("vp"),
+            )
+            # Keep the pristine base around for stage transitions — at each
+            # new stage we bilinear-resample THIS to the new shape and feed
+            # the network. The network's learned parameters carry over.
+            pristine_base_vp = inv_by_name["vp"].detach().clone()
+            # Replace inv_by_name["vp"] with the rendered velocity — and
+            # turn off requires_grad on it so the optimizer never sees it.
+            with torch.no_grad():
+                rendered = reparam_net().detach()
+            inv_by_name["vp"] = rendered
+            inv_in_order = [
+                rendered if n == "vp" else inv_by_name[n] for n in required_names
+            ]
+            if dist_info.is_root:
+                n_params = sum(p.numel() for p in reparam_net.parameters())
+                print(f"[fwi] reparam=velocity_inr  net_params={n_params:,}  "
+                      f"lr={spec.reparam.lr:.3e}  hash_enabled={spec.reparam.hash.enabled}")
+
         # 5) Generate or load obs. Every rank does this independently (deterministic).
         # When model_plan dropped shots, the obs loader still produces the
         # ORIGINAL shot count for npy / SEG-Y paths (they don't know about the
@@ -1512,7 +2050,17 @@ class TaskRunner:
         # 6) Optimizer + scheduler.
         total_epochs = (sum(s.epochs for s in spec.stages)
                         if spec.stages else int(spec.epochs))
-        optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
+        if reparam_net is not None:
+            # In reparam mode the optimizer trains the network's parameters,
+            # not the vp tensor. The top-level optimizer.lr is meaningful
+            # for grid-FWI (~25) but completely wrong for SIREN/hash params
+            # (~1e-4); we use spec.reparam.lr instead. The kind/betas/eps
+            # still come from spec.optimizer.
+            optimizer = _build_reparam_optimizer(
+                spec.optimizer, reparam_net.parameters(), float(spec.reparam.lr),
+            )
+        else:
+            optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
         scheduler = _build_scheduler(spec.scheduler, optimizer, total_epochs)
         initial_lrs = _remember_initial_lrs(optimizer)
 
@@ -1560,11 +2108,33 @@ class TaskRunner:
             pristine_time_axis = -2 if obs.ndim >= 4 else -1
         pristine_obs_np = (obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor)
                            else np.asarray(obs))
-        pristine_physical_geom = PhysicalGeometry(
-            sources_xyz_m=sources.astype("float64") * float(spec.grid.dh),
-            receivers_xyz_m=receivers.astype("float64") * float(spec.grid.dh),
-            dt=effective_dt, nt=effective_nt,
-        )
+        # Pristine physical geometry: when SEG-Y was loaded, prefer the
+        # ORIGINAL un-rounded physical positions (in meters from SEG-Y
+        # headers) over the dh-quantized versions. This is critical for
+        # ``dedupe=True`` workflows because at finer stages we want
+        # ``pg.to_grid(new_dh)`` to use the original 25 m spacing — not
+        # 75 m-quantized positions which would collapse identically at
+        # every dh ≥ initial.
+        pristine_physical_geom = None
+        seg_geom_kinds = ("from_segy_headers", "from_segy_index")
+        if getattr(spec.geometry, "kind", None) in seg_geom_kinds and segy_cache:
+            # The geometry resolver populated segy_cache; grab the payload
+            # back and use its original physical_geometry (un-rounded).
+            for payload in segy_cache.values():
+                pg_orig = payload.get("physical_geometry") if isinstance(payload, dict) else None
+                if pg_orig is not None and hasattr(pg_orig, "sources_xyz_m"):
+                    pristine_physical_geom = PhysicalGeometry(
+                        sources_xyz_m=np.asarray(pg_orig.sources_xyz_m, dtype="float64"),
+                        receivers_xyz_m=np.asarray(pg_orig.receivers_xyz_m, dtype="float64"),
+                        dt=effective_dt, nt=effective_nt,
+                    )
+                    break
+        if pristine_physical_geom is None:
+            pristine_physical_geom = PhysicalGeometry(
+                sources_xyz_m=sources.astype("float64") * float(spec.grid.dh),
+                receivers_xyz_m=receivers.astype("float64") * float(spec.grid.dh),
+                dt=effective_dt, nt=effective_nt,
+            )
 
         # Per-stage mutable state. Seeded with the post-step-7 baseline.
         # Per-stage helpers consult / mutate this dict; everything the
@@ -1578,6 +2148,10 @@ class TaskRunner:
             "inv_in_order": inv_in_order, "inv_by_name": inv_by_name,
             "solver": solver, "wavelet": wavelet,
             "optimizer": optimizer, "initial_lrs": initial_lrs,
+            # Reparam (sweep-nn): the network + pristine base for stage
+            # transitions. Both None when reparam is not configured.
+            "reparam_net": reparam_net,
+            "pristine_base_vp": pristine_base_vp,
             "obs": obs, "batchsize": int(spec.batchsize),
             # pristine sources for re-derivation
             "pristine_obs_np": pristine_obs_np,
@@ -1589,7 +2163,17 @@ class TaskRunner:
             # The default (True / nearest) matches the top-level resolver.
             "dedupe_grid_snap": getattr(spec.geometry, "dedupe", True),
             "dedup_method": getattr(spec.geometry, "dedup_method", "nearest"),
+            # QC: snapshot the initial vp at coarsest grid for Δvp plots.
+            # The QC orchestrator resamples on demand to the current stage.
+            "qc_initial_vp": inv_by_name["vp"].detach().cpu().clone()
+                if "vp" in inv_by_name else None,
         }
+
+        # QC setup. The qc_dir + cadence guard live outside the stage loop
+        # so the per-epoch hook is just a single function call.
+        qc_dir = task_dir / "qc"
+        qc_enabled = spec.qc is not None and spec.qc.every_n_epochs > 0
+        stage_epoch_boundaries: list[int] = []  # cumulative epoch indices
 
         for stage_idx, stage in enumerate(stages):
             stage_offset = sum(s.epochs for s in stages[:stage_idx])
@@ -1610,9 +2194,37 @@ class TaskRunner:
                 dev=dev, dist_info=dist_info, stage_idx=stage_idx,
             )
 
+            # Record stage-end epoch index for the final loss-curve QC
+            # (shading boundaries). Use the absolute epoch counter.
+            stage_epoch_boundaries.append(epoch_global + remaining)
+
             if dist_info.is_root:
                 print(f"[fwi] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")
+            # Build the per-batch local-window context once per stage and
+            # pass it through; the chunk dispatcher inside _fwi_train_step
+            # uses it to compute fresh windows + cached solvers per chunk.
+            local_window_ctx = None
+            if (spec.local_model_window is not None
+                    and spec.local_model_window.enabled):
+                local_window_ctx = {
+                    "spec": spec.local_model_window,
+                    "shape": state["shape"],
+                    "dh": state["dh"],
+                    "dt": state["dt"],
+                    "nt": state["nt"],
+                    "solver_cache": state.setdefault("local_solver_cache", {}),
+                }
+            # Per-stage syn bandpass: matches obs's per-stage bandpass so the
+            # loss compares like-for-like. fwi_workflow-dev does the same via
+            # ``_apply_torch_filter`` on syn (sweep_fwi.py:1040). When the
+            # stage's bandpass ``target == 'wavelet'``, the wavelet was
+            # pre-filtered at stage entry and syn is naturally band-limited;
+            # we skip the per-iteration syn filter to save autograd cost.
+            stage_bandpass = stage.bandpass
+            if stage_bandpass is not None \
+                    and getattr(stage_bandpass, "target", "syn") == "wavelet":
+                stage_bandpass = None  # already applied to wavelet
             for _ in range(remaining):
                 loss_value = self._fwi_train_step(
                     spec, state["solver"], state["wavelet"],
@@ -1622,11 +2234,28 @@ class TaskRunner:
                     state["nshots"], dev,
                     dist_info=dist_info,
                     stage_batchsize=state["batchsize"],
+                    reparam_net=state.get("reparam_net"),
+                    local_window_ctx=local_window_ctx,
+                    syn_bandpass=stage_bandpass,
+                    stage_dt=state["dt"],
                 )
                 losses.append(loss_value)
                 if scheduler is not None:
                     scheduler.step()
-                _apply_bounds(state["inv_by_name"], spec.model_bounds)
+                # In reparam mode the network's render-time clamp already
+                # enforces vp bounds; only clamp the non-reparam tensors.
+                reparam_skip = {"vp"} if state.get("reparam_net") is not None else set()
+                _apply_bounds(state["inv_by_name"], spec.model_bounds, skip_names=reparam_skip)
+                # Refresh inv_by_name["vp"] from the network so snapshots /
+                # checkpoints save the actual current rendered velocity.
+                if state.get("reparam_net") is not None:
+                    with torch.no_grad():
+                        rendered = state["reparam_net"]().detach()
+                    state["inv_by_name"]["vp"] = rendered
+                    state["inv_in_order"] = [
+                        rendered if n == "vp" else state["inv_by_name"][n]
+                        for n in required_names
+                    ]
                 if dist_info.is_root:
                     print(f"[fwi] stage {stage_idx} epoch {epoch_global:04d} loss={loss_value:.6e}")
 
@@ -1638,6 +2267,17 @@ class TaskRunner:
                                 t.detach().cpu().numpy())
                     if spec.save_illumination:
                         _save_illumination(state["solver"], snapshots_dir, epoch_global)
+
+                # QC artefacts (vp / Δvp / gradient / shot gather) — only
+                # at the configured cadence and only on the rank 0 process.
+                if qc_enabled and dist_info.is_root and (
+                    epoch_global % spec.qc.every_n_epochs == 0
+                    or epoch_global == total_epochs - 1
+                ):
+                    self._run_epoch_qc_safe(
+                        spec=spec, state=state, qc_dir=qc_dir,
+                        epoch=epoch_global, dev=dev,
+                    )
 
                 if dist_info.is_root:
                     _save_checkpoint(task_dir, {
@@ -1673,6 +2313,17 @@ class TaskRunner:
                 artifacts.append(_plot_loss_curve(losses, out_dir / "loss.png", title="FWI Loss"))
             except Exception as plot_err:  # noqa: BLE001
                 print(f"[fwi] loss plot skipped: {plot_err}")
+            # QC final products (loss curve with stage shading etc.)
+            if spec.qc is not None:
+                try:
+                    from sweep_tasks.qc import save_final_qc
+                    final_qc = save_final_qc(
+                        qc_spec=spec.qc, qc_dir=qc_dir, losses=losses,
+                        stage_epoch_boundaries=stage_epoch_boundaries,
+                    )
+                    artifacts.extend(final_qc)
+                except Exception as qc_err:  # noqa: BLE001
+                    print(f"[fwi] final QC skipped: {qc_err}")
         _dist.barrier(dist_info)
 
         summary = {
@@ -1732,17 +2383,12 @@ class TaskRunner:
                 shot_ids=cfg.shot_ids,
                 cache=segy_cache,
             )
-            # Align obs to the same dedup mask the geometry resolver used.
-            # We re-snap to grid here only to recover the receiver-keep mask;
-            # the cache means this is cheap on the second call.
-            geom_kind = getattr(spec.geometry, "kind", None)
-            dedupe = geom_kind in ("from_segy_headers", "from_segy_index")
-            dedup_method = "nearest"
-            if geom_kind == "from_segy_headers":
-                dedupe = spec.geometry.dedupe
-                dedup_method = spec.geometry.dedup_method
+            # Initial parse: keep ALL receivers (dedupe=False). Runner-side
+            # per-stage dedupe (when geometry.dedupe=True) operates on the
+            # pristine 120-receiver obs, allowing finer stages to access the
+            # full receiver count even if a coarser stage drops some.
             _, _, obs_aligned = _segy_geometry_to_grid_indices(
-                payload, float(spec.grid.dh), dedupe=dedupe, dedup_method=dedup_method,
+                payload, float(spec.grid.dh), dedupe=False, dedup_method="nearest",
             )
             if obs_aligned.shape[0] != nshots:
                 raise ValueError(
@@ -1759,14 +2405,10 @@ class TaskRunner:
                 lazy=cfg.lazy,
                 coalesce_gap=cfg.coalesce_gap,
             )
-            geom_kind = getattr(spec.geometry, "kind", None)
-            dedupe = True
-            dedup_method = "nearest"
-            if geom_kind == "from_segy_index":
-                dedupe = spec.geometry.dedupe
-                dedup_method = spec.geometry.dedup_method
+            # Initial parse: keep ALL receivers (per-stage dedupe handled
+            # later by ``_prepare_stage``).
             _, _, obs_aligned = _segy_geometry_to_grid_indices(
-                payload, float(spec.grid.dh), dedupe=dedupe, dedup_method=dedup_method,
+                payload, float(spec.grid.dh), dedupe=False, dedup_method="nearest",
             )
             if obs_aligned.shape[0] != nshots:
                 raise ValueError(
@@ -1823,9 +2465,102 @@ class TaskRunner:
             torch.cuda.empty_cache()
         return obs
 
+    def _run_epoch_qc_safe(self, *, spec, state, qc_dir: Path, epoch: int, dev) -> None:
+        """Run all enabled QC products; never let plotting break the inversion.
+
+        Optionally captures a forward-modelled syn for shot-gather QC when
+        ``spec.qc.shot_gather`` is on. The shot indices used are spread
+        evenly across the current obs to give a representative cross-section
+        of acquisition geometry.
+        """
+        import torch
+
+        try:
+            from sweep_tasks import qc as qc_mod
+        except Exception as err:  # noqa: BLE001
+            print(f"[qc] import failed at epoch {epoch}: {err}")
+            return
+
+        extract = None
+        if spec.qc.shot_gather:
+            n_obs = int(state["obs"].shape[0])
+            n_pick = max(1, min(int(spec.qc.shot_gather_n_shots), n_obs))
+            shot_ids = np.linspace(0, n_obs - 1, n_pick, dtype=int).tolist()
+
+            def _extract():
+                # One extra forward over the picked shots. Build a list of
+                # ``models`` matching the train step's chunk forward — use
+                # the current vp (rendered if reparam, leaf otherwise).
+                with torch.no_grad():
+                    if state.get("reparam_net") is not None:
+                        models = [state["reparam_net"]().detach()]
+                    else:
+                        models = state["inv_in_order"]
+                    src = state["sources"][shot_ids]
+                    rec = state["receivers"][shot_ids]
+                    syn = state["solver"](state["wavelet"], src, rec, models=models)
+                syn_np = syn.detach().cpu().numpy()
+                obs_chunk = state["obs"][shot_ids].detach().cpu().numpy() \
+                    if hasattr(state["obs"][shot_ids], "detach") \
+                    else np.asarray(state["obs"][shot_ids])
+                # Normalise both to (n_shots, nt, nrec) — same as canonical sweep_loss
+                # layout, so the QC plotter can assume time is on axis -2.
+                if spec.backend.impl == "eager":
+                    if syn_np.ndim == 4 and syn_np.shape[-1] == 1:
+                        syn_np = syn_np[..., 0]
+                    if obs_chunk.ndim == 4 and obs_chunk.shape[-1] == 1:
+                        obs_chunk = obs_chunk[..., 0]
+                else:  # c backend: (n, nrec, nt) → transpose to (n, nt, nrec)
+                    syn_np = np.transpose(syn_np, (0, 2, 1))
+                    obs_chunk = np.transpose(obs_chunk, (0, 2, 1))
+
+                # Per-shot dedupe: at coarse dh, multiple physical receivers
+                # snap to the same grid cell, producing identical syn traces.
+                # The loss already gets these as duplicates; the QC should
+                # display only ONE trace per unique grid cell so the user
+                # sees what the inversion actually "sees".
+                dh_m = float(state.get("dh", 1.0))
+                src_grid = np.asarray(state["sources"][shot_ids], dtype=np.int64)
+                rec_grid = np.asarray(state["receivers"][shot_ids], dtype=np.int64)
+                src_xy_m = src_grid.astype(np.float64) * dh_m       # (n_shots, 2)
+                rec_xy_m = rec_grid.astype(np.float64) * dh_m       # (n_shots, nrec, 2)
+                # Build per-shot unique-cell indices.
+                unique_idx_per_shot = []
+                for s in range(len(shot_ids)):
+                    seen: dict = {}
+                    keep_in_order: list[int] = []
+                    for r in range(rec_grid.shape[1]):
+                        key = (int(rec_grid[s, r, 0]), int(rec_grid[s, r, 1]))
+                        if key not in seen:
+                            seen[key] = r
+                            keep_in_order.append(r)
+                    unique_idx_per_shot.append(np.asarray(keep_in_order, dtype=np.int64))
+                return {
+                    "obs": obs_chunk,                # (n_shots, nt, nrec) raw
+                    "syn": syn_np,                   # (n_shots, nt, nrec) raw
+                    "shot_ids": shot_ids,
+                    "src_xy_m": src_xy_m,            # (n_shots, 2) in meters
+                    "rec_xy_m": rec_xy_m,            # (n_shots, nrec, 2) in meters
+                    "unique_idx_per_shot": unique_idx_per_shot,
+                    "dh_m": dh_m,
+                    "dt_s": float(state.get("dt", 1.0)),
+                }
+
+            extract = _extract
+
+        try:
+            qc_mod.run_epoch_qc(
+                qc_spec=spec.qc, qc_dir=qc_dir, epoch=epoch,
+                state=state, spec=spec, extract_obs_syn_panels=extract,
+            )
+        except Exception as err:  # noqa: BLE001
+            print(f"[qc] epoch {epoch} failed: {err}")
+
     def _fwi_train_step(self, spec, solver, wavelet, sources, receivers,
                         inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
-                        *, dist_info=None, stage_batchsize: int | None = None) -> float:
+                        *, dist_info=None, stage_batchsize: int | None = None,
+                        reparam_net=None, local_window_ctx=None,
+                        syn_bandpass=None, stage_dt: float | None = None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1877,36 +2612,230 @@ class TaskRunner:
         per_shot_numel = int(sample.numel())
         global_norm = float(per_shot_numel * global_batchsize)
 
+        # Per-chunk forward input. In reparam mode we render a fresh vp
+        # each chunk so the autograd graph from solver -> loss -> backward
+        # flows into the network's parameters. The other inv tensors (if
+        # any) pass through unchanged.
+        def _models_for_chunk():
+            if reparam_net is None:
+                return inv_in_order
+            rendered = reparam_net()
+            return [
+                rendered if name == "vp" else inv_by_name[name]
+                for name in [m for m in inv_by_name]
+            ] if len(inv_by_name) > 1 else [rendered]
+
+        # Per-chunk local-window dispatcher. When ``local_window_ctx`` is
+        # set, each chunk gets a (z0, z1, x0, x1) crop of the model + a
+        # shape-keyed cached solver + window-local geometry indices.
+        # Otherwise we fall back to the full-model path (above).
+        def _chunk_inputs(chunk_idx):
+            chunk_src = sources[chunk_idx]
+            chunk_rec = receivers[chunk_idx]
+            if local_window_ctx is None:
+                return _models_for_chunk(), solver, chunk_src, chunk_rec
+            win_spec = local_window_ctx["spec"]
+            full_shape = local_window_ctx["shape"]
+            dh = local_window_ctx["dh"]
+            z0, z1, x0, x1 = _compute_local_window(
+                chunk_src, chunk_rec, full_shape, dh, win_spec,
+            )
+            local_shape = (z1 - z0, x1 - x0)
+            cache = local_window_ctx["solver_cache"]
+            cache_key = local_shape
+            if cache_key not in cache:
+                # Bound the cache so randomly varying windows don't accumulate
+                # solvers indefinitely (each c-backend solver pins GPU memory
+                # for its wavefield + PML buffers). Evict the least-recently-
+                # used entry when over the cap.
+                _LOCAL_SOLVER_CACHE_CAP = 4
+                if len(cache) >= _LOCAL_SOLVER_CACHE_CAP:
+                    # dict insertion-ordered: drop the oldest entry.
+                    oldest = next(iter(cache))
+                    del cache[oldest]
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                cache[cache_key] = _build_solver(
+                    spec.physics, spec.backend, local_shape,
+                    dh, local_window_ctx["dt"], local_window_ctx["nt"], dev,
+                )
+            else:
+                # Move-to-end so this entry is "most recently used".
+                cache[cache_key] = cache.pop(cache_key)
+            local_solver = cache[cache_key]
+            local_src, local_rec = _rebase_geometry_to_window(chunk_src, chunk_rec, z0, x0)
+            # Build the model list. Only vp is currently supported as
+            # the windowed model; non-vp models pass through unmodified.
+            if reparam_net is not None:
+                local_vp = reparam_net.render_window(z0, z1, x0, x1)
+            else:
+                # Slicing a leaf tensor yields a view; PyTorch's autograd
+                # scatters the gradient back to the leaf at [z0:z1, x0:x1].
+                local_vp = inv_by_name["vp"][z0:z1, x0:x1]
+            local_vp = local_vp.contiguous()
+            ordered_names = list(inv_by_name.keys())
+            models = [
+                local_vp if name == "vp" else inv_by_name[name]
+                for name in ordered_names
+            ] if len(inv_by_name) > 1 else [local_vp]
+            return models, local_solver, local_src, local_rec
+
         if spec.optimizer.kind == "lbfgs":
             # LBFGS in single-process only (the runner blocks dist + LBFGS earlier).
             def _closure():
                 optimizer.zero_grad()
                 acc_loss = 0.0
                 for chunk in chunks:
-                    syn = solver(wavelet, sources[chunk], receivers[chunk],
-                                 models=inv_in_order)
+                    models, chunk_solver, chunk_src, chunk_rec = _chunk_inputs(chunk)
+                    syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
+                    if syn_bandpass is not None and stage_dt is not None:
+                        syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
+                                                  stage_dt, order=syn_bandpass.order)
                     obs_chunk = obs[chunk].to(dev)
                     loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
-                _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                if reparam_net is None:
+                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
             result = optimizer.step(_closure)
             return float(result) if result is not None else 0.0
 
-        # Adam / SGD path: zero grads, accumulate, all-reduce, step.
-        optimizer.zero_grad()
-        acc_loss_local = 0.0
-        for chunk in chunks:
-            syn = solver(wavelet, sources[chunk], receivers[chunk],
-                         models=inv_in_order)
-            obs_chunk = obs[chunk].to(dev)
-            loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
-            (loss_t / global_norm).backward()
-            acc_loss_local += float(loss_t.detach().cpu())
-        _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
-        _dist.all_reduce_grad_sum(inv_in_order, dist_info)
-        optimizer.step()
+        # Adam / SGD path. Two top-level branches:
+        #   (A) Single-step (no reparam, OR reparam with backward_mode='single_step'):
+        #       one autograd graph through net -> solver -> loss -> backward.
+        #   (B) Two-pass reparam (default, mirrors fwi_workflow-dev): render
+        #       net under no_grad to a leaf, solver backward into leaf.grad,
+        #       then a second pass pushes leaf.grad through net in either
+        #       'two_pass_full' (one big backward) or 'two_pass_chunked'
+        #       (row-chunked re-render via VelocityINR.backward_velocity_gradient).
+        reparam_mode = (
+            spec.reparam.backward_mode
+            if (reparam_net is not None and spec.reparam is not None)
+            else "single_step"
+        )
+
+        if reparam_net is None or reparam_mode == "single_step":
+            # ---- (A) single-step: everything inside one autograd graph ----
+            optimizer.zero_grad()
+            acc_loss_local = 0.0
+            for chunk in chunks:
+                models, chunk_solver, chunk_src, chunk_rec = _chunk_inputs(chunk)
+                syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
+                if syn_bandpass is not None and stage_dt is not None:
+                    syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
+                                              stage_dt, order=syn_bandpass.order)
+                obs_chunk = obs[chunk].to(dev)
+                loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                (loss_t / global_norm).backward()
+                acc_loss_local += float(loss_t.detach().cpu())
+            if reparam_net is None:
+                _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                _dist.all_reduce_grad_sum(inv_in_order, dist_info)
+            else:
+                _dist.all_reduce_grad_sum(
+                    [p for p in reparam_net.parameters() if p.grad is not None],
+                    dist_info,
+                )
+            optimizer.step()
+        else:
+            # ---- (B) two-pass: solver phase against a leaf, then net phase ----
+            optimizer.zero_grad()
+            acc_loss_local = 0.0
+
+            # Render the full-grid base velocity once, detached. The leaf is
+            # the autograd boundary; solver backward accumulates onto leaf.grad.
+            with torch.no_grad():
+                base_leaf = reparam_net().detach().clone()
+            base_leaf = base_leaf.requires_grad_(True)
+
+            # Per-chunk forward + backward (autograd graph from solver to leaf).
+            # ``_chunk_inputs`` already handles local-window slicing if enabled;
+            # we just substitute the leaf for the network output and reuse the
+            # window logic.
+            def _two_pass_chunk_inputs(chunk_idx, leaf):
+                chunk_src = sources[chunk_idx]
+                chunk_rec = receivers[chunk_idx]
+                if local_window_ctx is None:
+                    models = [leaf]
+                    return models, solver, chunk_src, chunk_rec
+                win_spec = local_window_ctx["spec"]
+                full_shape = local_window_ctx["shape"]
+                dh = local_window_ctx["dh"]
+                z0, z1, x0, x1 = _compute_local_window(
+                    chunk_src, chunk_rec, full_shape, dh, win_spec,
+                )
+                local_shape = (z1 - z0, x1 - x0)
+                cache = local_window_ctx["solver_cache"]
+                cache_key = local_shape
+                if cache_key not in cache:
+                    # See note above _chunk_inputs: bound the cache to 4
+                    # entries (LRU) so varying batches don't accumulate
+                    # solvers indefinitely.
+                    if len(cache) >= 4:
+                        oldest = next(iter(cache))
+                        del cache[oldest]
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    cache[cache_key] = _build_solver(
+                        spec.physics, spec.backend, local_shape,
+                        dh, local_window_ctx["dt"], local_window_ctx["nt"], dev,
+                    )
+                else:
+                    cache[cache_key] = cache.pop(cache_key)  # touch (LRU)
+                local_solver = cache[cache_key]
+                local_src, local_rec = _rebase_geometry_to_window(chunk_src, chunk_rec, z0, x0)
+                # View into leaf — gradient scatters back to leaf.grad on backward.
+                models = [leaf[z0:z1, x0:x1].contiguous()]
+                return models, local_solver, local_src, local_rec
+
+            for chunk in chunks:
+                models, chunk_solver, chunk_src, chunk_rec = _two_pass_chunk_inputs(chunk, base_leaf)
+                syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
+                if syn_bandpass is not None and stage_dt is not None:
+                    syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
+                                              stage_dt, order=syn_bandpass.order)
+                obs_chunk = obs[chunk].to(dev)
+                loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                (loss_t / global_norm).backward()
+                acc_loss_local += float(loss_t.detach().cpu())
+
+            # leaf.grad now holds the full-grid FWI gradient ∂L/∂v.
+            # Push it through the network in a second pass.
+            v_grad = base_leaf.grad
+            if v_grad is None:
+                # Nothing actually backpropped (e.g. all chunks were empty);
+                # nothing to do.
+                pass
+            elif reparam_mode == "two_pass_full":
+                # One full-graph backward through the network with v_grad as
+                # the gradient at the (re-rendered) output.
+                rendered = reparam_net()
+                # Make sure shapes agree (they always do — net renders to
+                # base_velocity.shape and leaf came from net()).
+                rendered.backward(v_grad)
+            elif reparam_mode == "two_pass_chunked":
+                # Chunked re-render — memory-conscious for large grids.
+                reparam_net.backward_velocity_gradient(
+                    v_grad, chunk_rows=int(spec.reparam.backward_chunk_rows),
+                )
+            else:
+                raise ValueError(f"unknown reparam backward_mode {reparam_mode!r}")
+
+            _dist.all_reduce_grad_sum(
+                [p for p in reparam_net.parameters() if p.grad is not None],
+                dist_info,
+            )
+            optimizer.step()
+            # Two-pass leaks references to the leaf's grad tensor across
+            # Adam steps unless we explicitly drop the leaf. Without this,
+            # GPU memory grows ~1 GB / step. ``empty_cache`` is cheap and
+            # gives the allocator a chance to defragment between steps.
+            del base_leaf
+            if v_grad is not None:
+                del v_grad
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         acc_loss_global = _dist.all_reduce_scalar_sum(acc_loss_local, dist_info)
         return acc_loss_global / global_norm if global_norm else 0.0

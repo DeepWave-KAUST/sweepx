@@ -23,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -301,8 +302,16 @@ class BackendSpec(_Forbid):
 class LossSpec(_Forbid):
     """Misfit between synthetic and observed seismograms."""
 
-    kind: Literal["mse", "l1", "huber"] = "mse"
+    kind: Literal["mse", "l1", "huber", "trace_cosine"] = "mse"
     huber_delta: float = 1.0  # only used when kind="huber"
+    # trace_cosine: per-trace amplitude-normalised correlation misfit, equivalent
+    # to ``1 - <s_unit, o_unit>`` after demeaning. Matches the loss used in
+    # `fwi_workflow-dev`. Insensitive to per-trace amplitude scaling, so it's
+    # robust to source-wavelet errors. The optional ``trace_cosine_demean`` flag
+    # controls whether each trace's mean is subtracted before normalisation
+    # (matches fwi_workflow-dev's behavior).
+    trace_cosine_demean: bool = True
+    trace_cosine_eps: float = 1.0e-8
 
 
 class DataPlanSpec(_Forbid):
@@ -362,16 +371,186 @@ class ModelBounds(_Forbid):
         return self
 
 
+class ReparamHashSpec(_Forbid):
+    """Multi-resolution hash-grid encoder hyperparameters (Instant-NGP)."""
+
+    enabled: bool = True
+    levels: int = Field(ge=1, default=16)
+    features_per_level: int = Field(ge=1, default=2)
+    log2_size: int = Field(ge=1, default=15)
+    base_resolution: int = Field(ge=1, default=4)
+    finest_resolution: int = Field(ge=1, default=512)
+
+
+class LocalModelWindowSpec(_Forbid):
+    """Per-batch local-window FWI (Engquist-style domain decomposition).
+
+    For each forward batch, compute a rectangular crop of the velocity
+    model that tightly contains the batch's sources + receivers plus
+    padding. The wave solver runs on this crop (typically 5-10× smaller
+    than the full model in x for marine data), and PyTorch's view
+    slicing automatically scatters the gradient back to the full vp
+    tensor — no manual ``scatter_add`` needed.
+
+    Cost: a brand-new solver is built for every distinct window shape.
+    Solvers are cached by shape inside the runner state so repeated
+    shapes (which is the common case at a given stage's dh) reuse
+    the cached propagator.
+
+    Mirrors ``use_local_model_windows`` / ``local_model_padding_x_m`` /
+    ``local_model_padding_z_m`` / ``local_model_full_depth`` /
+    ``local_model_min_width_m`` in ``fwi_workflow-dev``.
+    """
+
+    enabled: bool = True
+    padding_x_m: float = Field(ge=0, default=1500.0)
+    padding_z_m: float = Field(ge=0, default=0.0)
+    full_depth: bool = True
+    min_width_m: float = Field(ge=0, default=0.0)
+
+
+class QCSpec(_Forbid):
+    """Optional QC products generated during FWI inversion.
+
+    All outputs land under ``<task_dir>/qc/<kind>/iter_NNNN.png``. By
+    default everything is off (set ``every_n_epochs > 0`` to enable).
+
+    ``every_n_epochs``
+        Cadence: emit QC every N global epochs. Set to 0 to disable
+        per-epoch QC entirely. The final-epoch QC is always emitted
+        when any plot is enabled.
+
+    ``vp_png``, ``vp_diff_png``
+        Velocity model snapshot + Δvp vs initial. Cheap (no extra
+        forward pass).
+
+    ``gradient_png``
+        FWI gradient ``∂loss/∂vp`` as a percentile-clipped diverging map.
+        Grid mode only — in reparam mode the gradient lives on the
+        network parameters, not the vp tensor, so this is skipped with
+        a warning.
+
+    ``shot_gather``
+        Observed vs synthetic shot gathers, side-by-side. Triggers ONE
+        extra forward pass per QC cadence to capture syn (cheap if
+        ``shot_gather_n_shots`` is small). Set ``shot_gather_n_shots`` to
+        control how many shots are rendered.
+
+    ``loss_curve``
+        Enhanced loss curve with per-stage shading + log-scale toggle.
+        Emitted once at end-of-run only (cheap, but cadence-controlled
+        loss snapshots are redundant with the runner's built-in loss.png).
+    """
+
+    every_n_epochs: int = Field(ge=0, default=10)
+    vp_png: bool = True
+    vp_diff_png: bool = True
+    gradient_png: bool = False
+    shot_gather: bool = False
+    shot_gather_n_shots: int = Field(ge=1, default=1)
+    shot_gather_perc: float = Field(gt=0, lt=100, default=99.0)
+    # ``trace`` (default): divide each trace by its own RMS — obs and
+    # syn visually comparable even when wavelet amplitudes don't match
+    # (typical with trace_cosine + estimated wavelet). ``shot``: legacy
+    # per-shot percentile (obs and syn independently scaled). ``joint``:
+    # common percentile across both panels (quantitative; large-amplitude
+    # obs may saturate while syn shows up faint).
+    shot_gather_normalize: Literal["trace", "shot", "joint"] = "trace"
+    # Interleaved-display block size for the rich shot_gather layout: each
+    # block of N consecutive (unique-cell) traces alternates obs / syn /
+    # obs / ..., so amplitudes can be eyeballed at matching x. Matches
+    # ``fwi_workflow-dev``'s ``interleave_block`` (their default 64; here
+    # smaller (12) because we plot one shot per row instead of multi-shot).
+    shot_gather_interleave_block: int = Field(ge=1, default=12)
+    loss_curve: bool = True
+
+
+class ReparamSpec(_Forbid):
+    """Neural-network reparameterization of the velocity model (sweep-nn).
+
+    When set on an FWISpec, the runner replaces the raw vp tensor with a
+    :class:`sweep_nn.VelocityINR` (hash-encoded SIREN by default). The
+    optimizer is built on the network's parameters instead of the vp
+    tensor; multi-stage transitions resample only the network's *base*
+    velocity, preserving all learnable parameters (SIREN's multi-scale
+    benefit).
+
+    Currently only applies to the ``vp`` model; multi-parameter equations
+    fall back to raw tensors for the non-vp models.
+    """
+
+    kind: Literal["velocity_inr"] = "velocity_inr"
+    hidden_features: int = Field(ge=1, default=64)
+    hidden_layers: int = Field(ge=1, default=3)
+    first_omega0: float = Field(gt=0, default=30.0)
+    hidden_omega0: float = Field(gt=0, default=30.0)
+    use_bias: bool = False
+    vp_mean: float = 0.0
+    vp_std: float = Field(gt=0, default=50.0)
+    direct_velocity: bool = False
+    coord_min: float = 0.0
+    coord_max: float = 1.0
+    hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
+    # Optimizer lr override for the network (the top-level optimizer.lr is
+    # ignored when reparam is active, since grid-FWI lr ~25 is wildly wrong
+    # for SIREN/hash parameters ~1e-4).
+    lr: float = Field(gt=0, default=1.0e-4)
+
+    # Backward path for the reparam network. Matches fwi_workflow-dev's
+    # ``inr_backward_mode`` config:
+    #   * ``"two_pass_full"`` (default, matches the reference) — render
+    #     under no_grad into a leaf tensor, run the wave-solver autograd
+    #     forward/backward against the leaf, then push the leaf's
+    #     gradient through the network in a *second* full-graph backward.
+    #     Decouples the solver and network autograd graphs so the solver
+    #     phase doesn't carry the network's activations.
+    #   * ``"two_pass_chunked"`` — same two-pass split, but the second
+    #     pass re-renders the network in row chunks of
+    #     ``backward_chunk_rows`` and backwards each chunk separately,
+    #     freeing the chunk's graph in between. Memory O(chunk_rows*nx),
+    #     bigger compute overhead.
+    #   * ``"single_step"`` — one combined autograd graph through
+    #     solver+net (the original sweep-tasks behavior). Simplest but
+    #     can OOM at large network or large grid because the solver's
+    #     wavefield activations are pinned for the network backward.
+    backward_mode: Literal["two_pass_full", "two_pass_chunked", "single_step"] = "two_pass_full"
+    backward_chunk_rows: int = Field(ge=1, default=64)
+
+
 class StageBandpass(_Forbid):
     """Per-stage bandpass applied to obs at stage entry (Gap 5).
 
     ``sweep_preproc.filter.bandpass`` is invoked on the *pristine* obs each
     time a new stage starts, so stages don't compose their filters.
+
+    ``order``
+        Prototype Butterworth order, matching ``filter_order`` in
+        ``fwi_workflow-dev``. The zero-phase ``sosfiltfilt`` pass gives
+        an effective magnitude response of ``|H_N(f)|²`` (``2N × 6 dB/oct``
+        stop-band roll-off). Default ``4``.
+    ``padtype``
+        Padding policy passed to ``sosfiltfilt``. Default ``"odd"``
+        (scipy reflective padding) keeps edge transients near machine
+        precision. Set ``None`` to disable padding and match the
+        ``torchaudio.functional.filtfilt`` behavior used inside
+        ``fwi_workflow-dev``'s GPU path (expect visible edge transients
+        across the whole trace). Allowed: ``"odd"``, ``"even"``,
+        ``"constant"``, or ``None``.
     """
 
     lo_hz: float = Field(gt=0)
     hi_hz: float = Field(gt=0)
     order: int = Field(ge=1, default=4)
+    padtype: Literal["odd", "even", "constant"] | None = "odd"
+    # What to filter at this stage. ``"syn"`` (default, matches
+    # ``fwi_workflow-dev``): bandpass obs at stage entry + bandpass syn
+    # before the loss (via differentiable ``torchaudio.functional.filtfilt``).
+    # ``"wavelet"``: bandpass obs + bandpass the source wavelet once at
+    # stage entry — syn is naturally bandlimited (all energy comes from
+    # the filtered source) and is NOT re-filtered. This skips the per-
+    # iteration syn filter in the autograd path and is roughly
+    # equivalent to ``"syn"`` if the solver is linear, but cheaper.
+    target: Literal["syn", "wavelet"] = "syn"
 
 
 class StageSpec(_Forbid):
@@ -647,6 +826,37 @@ class FWISpec(BaseTaskSpec):
     # When omitted, the full dataset / full model is used (current behaviour).
     data_plan: DataPlanSpec | None = None
     model_plan: ModelPlanSpec | None = None
+
+    # Optional NN reparameterization of vp (sweep-nn VelocityINR).
+    # When set, vp is rendered by a hash-encoded SIREN each forward; the
+    # optimizer trains the network's parameters instead of the raw tensor.
+    reparam: ReparamSpec | None = None
+
+    # Optional QC artefacts (vp / gradient / shot gather PNGs etc.)
+    # under <task_dir>/qc/. See :class:`QCSpec` for the catalog.
+    qc: QCSpec | None = None
+
+    # Optional per-batch local model windowing (Engquist-style). See
+    # :class:`LocalModelWindowSpec`. When omitted, every forward runs on
+    # the full stage grid (current behaviour).
+    #
+    # Three YAML shorthands are accepted:
+    #   * omit or ``false``  -> off (default)
+    #   * ``true``           -> on with all default parameters
+    #   * dict / object      -> on, overriding selected fields
+    local_model_window: LocalModelWindowSpec | None = None
+
+    @field_validator("local_model_window", mode="before")
+    @classmethod
+    def _local_model_window_bool_shortcut(cls, v):
+        # ``true`` / ``false`` shorthands for the most common toggle. Anything
+        # else (None, dict, LocalModelWindowSpec instance) falls through
+        # to the normal pydantic parsing.
+        if v is True:
+            return LocalModelWindowSpec()
+        if v is False:
+            return None
+        return v
 
     @model_validator(mode="after")
     def _exactly_one_init(self):
