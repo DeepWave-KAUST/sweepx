@@ -3,7 +3,7 @@
 # long recording, deep checkpoint depth). The transfer_interval batches
 # boundary transfers to amortise PCIe latency.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

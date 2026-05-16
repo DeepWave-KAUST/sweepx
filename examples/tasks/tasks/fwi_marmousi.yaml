@@ -1,7 +1,7 @@
 # Mirrors the parameters of examples/_shared/configure_marmousi.py
 # (fwi_2d_acoustic_torch_eager). Paths resolve relative to this YAML.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

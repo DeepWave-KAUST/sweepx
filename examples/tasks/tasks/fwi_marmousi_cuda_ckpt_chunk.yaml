@@ -4,7 +4,7 @@
 # Trade more compute for less GPU memory than boundary saving when the
 # wavefield itself (not just the boundary) is the bottleneck.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

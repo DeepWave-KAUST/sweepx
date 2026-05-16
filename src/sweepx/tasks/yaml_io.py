@@ -97,7 +97,7 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "forward": {
         "task_type": "forward",
-        "output_dir": "./sweep_tasks",
+        "output_dir": "./sweep_runs",
         "device": "auto",
         "grid": {"dh": 5.0},
         "time": {"dt": 0.001, "nt": 500},
@@ -123,7 +123,7 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "wavefield": {
         "task_type": "wavefield",
-        "output_dir": "./sweep_tasks",
+        "output_dir": "./sweep_runs",
         "device": "auto",
         "grid": {"dh": 5.0},
         "time": {"dt": 0.001, "nt": 500},
@@ -151,7 +151,7 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "fwi": {
         "task_type": "fwi",
-        "output_dir": "./sweep_tasks",
+        "output_dir": "./sweep_runs",
         "device": "auto",
         "grid": {"dh": 25.0},
         "time": {"dt": 0.002, "nt": 2500},
@@ -180,7 +180,7 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "lsrtm": {
         "task_type": "lsrtm",
-        "output_dir": "./sweep_tasks",
+        "output_dir": "./sweep_runs",
         "device": "auto",
         "grid": {"dh": 25.0},
         "time": {"dt": 0.002, "nt": 2500},

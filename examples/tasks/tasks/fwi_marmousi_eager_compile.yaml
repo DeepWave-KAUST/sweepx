@@ -2,7 +2,7 @@
 # enabled. Mirrors examples/_shared/configure_marmousi.py:fwi_2d_acoustic_torch_eager,
 # which currently uses use_compile=True for production runs.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

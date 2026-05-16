@@ -10,7 +10,7 @@
 # Each stage uses its own Ricker wavelet. The lr_scale at the start of each
 # stage multiplies the optimiser's base lr (so later stages take smaller steps).
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

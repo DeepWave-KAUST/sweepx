@@ -1,7 +1,7 @@
 # Mirrors examples/LSRTM/2d/acoustic/torch/lsrtm.py defaults
 # (fm=10.0, lr_ref=0.01). Paths resolve relative to this YAML.
 task_type: lsrtm
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

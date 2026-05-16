@@ -402,7 +402,12 @@ class ModelingOverride(_Forbid):
 
 class BaseTaskSpec(_Forbid):
     task_id: str | None = None  # auto-generated from timestamp if missing
-    output_dir: Path = Path("./sweep_tasks")
+    # NOTE: default is `./sweep_runs`, NOT `./sweep_tasks`. The latter would
+    # collide with this package's import name `sweep_tasks` and turn run-output
+    # directories into PEP-420 namespace packages that shadow real imports
+    # (`python -c "import sweep_tasks"` would pick up the rogue dir before the
+    # installed package). Pick any other name when overriding.
+    output_dir: Path = Path("./sweep_runs")
     seed: int = 0
     device: str = "auto"  # "auto" | "cpu" | "cuda" | "cuda:N"
 

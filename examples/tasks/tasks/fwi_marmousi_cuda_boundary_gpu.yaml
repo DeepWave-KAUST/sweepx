@@ -4,7 +4,7 @@
 # the device. Mirrors configure_marmousi.py:fwi_2d_acoustic_torch_cuda
 # minus the cpu/disk fallbacks.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

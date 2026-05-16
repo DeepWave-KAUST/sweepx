@@ -141,16 +141,16 @@ def main(argv: list[str] | None = None) -> int:
     tasks_sub = tasks_parser.add_subparsers(dest="tasks_command")
 
     tasks_list_parser = tasks_sub.add_parser("list", help="List tasks in a tasks directory")
-    tasks_list_parser.add_argument("--output-dir", default="./sweep_tasks",
-                                   help="Tasks root (default: ./sweep_tasks)")
+    tasks_list_parser.add_argument("--output-dir", default="./sweep_runs",
+                                   help="Tasks root (default: ./sweep_runs)")
 
     tasks_status_parser = tasks_sub.add_parser("status", help="Print status.json for a task")
     tasks_status_parser.add_argument("task_id")
-    tasks_status_parser.add_argument("--output-dir", default="./sweep_tasks")
+    tasks_status_parser.add_argument("--output-dir", default="./sweep_runs")
 
     tasks_logs_parser = tasks_sub.add_parser("logs", help="Show captured logs (Phase 1: status.json only)")
     tasks_logs_parser.add_argument("task_id")
-    tasks_logs_parser.add_argument("--output-dir", default="./sweep_tasks")
+    tasks_logs_parser.add_argument("--output-dir", default="./sweep_runs")
 
     args = parser.parse_args(argv)
 

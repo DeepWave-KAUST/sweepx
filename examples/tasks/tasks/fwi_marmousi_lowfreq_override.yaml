@@ -4,7 +4,7 @@
 # obs for low-frequency FWI" pattern; useful when initial models are far
 # from the truth and only the lowest frequencies converge reliably.
 task_type: fwi
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 

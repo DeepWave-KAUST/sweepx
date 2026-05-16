@@ -1,5 +1,5 @@
 task_type: wavefield
-output_dir: ./sweep_tasks
+output_dir: ./sweep_runs
 device: auto
 seed: 0
 
