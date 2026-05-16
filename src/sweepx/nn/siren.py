@@ -20,24 +20,87 @@ import torch.nn as nn
 from .reparam import Reparameterizer
 
 
-class _SineLayer(nn.Module):
-    """Linear + sin(w0 * x), with paper-faithful initialization."""
+class SineLayer(nn.Module):
+    """Linear + sin(w0 * x), with paper-faithful initialization.
+
+    First-layer init uses ``U(-1/in, 1/in)``; hidden/output layers use
+    ``U(-sqrt(6/in)/w0, +sqrt(6/in)/w0)`` (Sitzmann et al. 2020 sec. 3.2).
+    """
 
     def __init__(
-        self, in_features: int, out_features: int, *, w0: float = 30.0, is_first: bool = False
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        w0: float = 30.0,
+        is_first: bool = False,
+        bias: bool = True,
     ) -> None:
         super().__init__()
         self.w0 = w0
-        self.linear = nn.Linear(in_features, out_features)
+        self.linear = nn.Linear(in_features, out_features, bias=bias)
         with torch.no_grad():
             if is_first:
                 bound = 1.0 / in_features
             else:
                 bound = math.sqrt(6.0 / in_features) / w0
             self.linear.weight.uniform_(-bound, bound)
+            if self.linear.bias is not None:
+                self.linear.bias.uniform_(-bound, bound)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sin(self.w0 * self.linear(x))
+
+
+# Legacy private alias (used internally by SIREN below).
+_SineLayer = SineLayer
+
+
+class SirenMLP(nn.Module):
+    """Generic SIREN MLP: ``(..., in_features) -> (..., out_features)``.
+
+    Unlike :class:`SIREN` (which caches a coord grid and ties to an output
+    shape), ``SirenMLP`` is a pure functional MLP. It is the building block
+    used by :class:`~sweep_nn.velocity_inr.VelocityINR` (where the input
+    comes from a hash encoder) and :class:`~sweep_nn.wavelet.SirenWavelet`.
+
+    First layer uses ``first_omega0``; hidden/output layers use
+    ``hidden_omega0``. The final layer is a plain ``nn.Linear`` (no sin),
+    SIREN-style.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int = 1,
+        *,
+        hidden_features: int = 64,
+        hidden_layers: int = 3,
+        first_omega0: float = 30.0,
+        hidden_omega0: float = 30.0,
+        bias: bool = False,
+    ) -> None:
+        super().__init__()
+        self.first_omega0 = float(first_omega0)
+        self.hidden_omega0 = float(hidden_omega0)
+        layers: list[nn.Module] = [
+            SineLayer(int(in_features), int(hidden_features),
+                      w0=self.first_omega0, is_first=True, bias=bias)
+        ]
+        for _ in range(int(hidden_layers)):
+            layers.append(SineLayer(int(hidden_features), int(hidden_features),
+                                    w0=self.hidden_omega0, is_first=False, bias=bias))
+        out_lin = nn.Linear(int(hidden_features), int(out_features), bias=bias)
+        with torch.no_grad():
+            bound = math.sqrt(6.0 / int(hidden_features)) / self.hidden_omega0
+            out_lin.weight.uniform_(-bound, bound)
+            if out_lin.bias is not None:
+                out_lin.bias.uniform_(-bound, bound)
+        layers.append(out_lin)
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class SIREN(Reparameterizer):
