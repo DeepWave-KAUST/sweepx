@@ -422,12 +422,18 @@ def _apply_data_plan_to_fwi(
     plan_kwargs = spec.data_plan.model_dump(exclude_none=True)
     plan = DataPlan(**plan_kwargs)
 
-    # obs layout from sweep binding: (nshots, nt, nrec, nchannel).
-    # The runner indexes obs[..., 0] in many places, so receiver axis is -2
-    # when nchannel is present and -1 when not.
+    # obs layout depends on the propagator backend:
+    #   eager (PropTorch+autograd):  (nshots, nt, nrec[, 1])
+    #   c     (compiled CUDA bind.): (nshots, nrec, nt)
+    # Pick the right (receiver_axis, time_axis) so DataPlan's offset filter +
+    # receiver stride + time resample / window touch the intended axis.
     obs_np = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
-    time_axis = -3 if obs_np.ndim >= 4 else -2
-    receiver_axis = -2 if obs_np.ndim >= 4 else -1
+    if spec.backend.impl == "eager":
+        time_axis = -3 if obs_np.ndim >= 4 else -2
+        receiver_axis = -2 if obs_np.ndim >= 4 else -1
+    else:  # "c" or any future binding using the (nshots, nrec, nt) layout
+        receiver_axis = 1
+        time_axis = -2 if obs_np.ndim >= 4 else -1
 
     pg_planned, obs_planned, rcv_mask = apply_data_plan(
         plan, pg, obs_np, time_axis=time_axis, receiver_axis=receiver_axis,
