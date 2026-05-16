@@ -525,20 +525,15 @@ def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
 
 
 def _save_checkpoint(task_dir: Path, payload: dict) -> Path:
-    import torch
-
-    path = task_dir / "checkpoint.pt"
-    torch.save(payload, path)
-    return path
+    """Atomic checkpoint write via `sweep_runner.checkpoint.save_payload`."""
+    from sweep_runner.checkpoint import save_payload
+    return save_payload(task_dir / "checkpoint.pt", payload)
 
 
 def _load_checkpoint(prev_task_dir: Path) -> dict:
-    import torch
-
-    path = prev_task_dir / "checkpoint.pt"
-    if not path.exists():
-        raise FileNotFoundError(f"No checkpoint at {path} to resume from.")
-    return torch.load(path, weights_only=False)
+    """Counterpart to :func:`_save_checkpoint`. Raises FileNotFoundError if missing."""
+    from sweep_runner.checkpoint import load_payload
+    return load_payload(prev_task_dir / "checkpoint.pt", weights_only=False)
 
 
 def _save_illumination(solver, snapshots_dir: Path, epoch: int) -> list[Path]:
