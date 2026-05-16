@@ -19,9 +19,9 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
-from . import geometry, models, plan, prefetch, segy
+from . import geometry, models, plan, prefetch, segy, segy_index
 
-__all__ = ["models", "geometry", "plan", "prefetch", "segy", "__version__"]
+__all__ = ["models", "geometry", "plan", "prefetch", "segy", "segy_index", "__version__"]
 
 
 def __getattr__(name: str):
