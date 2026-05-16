@@ -1585,8 +1585,10 @@ class TaskRunner:
             "pristine_obs_time_axis": pristine_time_axis,
             "pristine_obs_receiver_axis": pristine_recv_axis,
             "pristine_physical_geom": pristine_physical_geom,
-            "dedupe_grid_snap": True,
-            "dedup_method": "nearest",
+            # Inherit dedupe / dedup_method from geometry spec when available.
+            # The default (True / nearest) matches the top-level resolver.
+            "dedupe_grid_snap": getattr(spec.geometry, "dedupe", True),
+            "dedup_method": getattr(spec.geometry, "dedup_method", "nearest"),
         }
 
         for stage_idx, stage in enumerate(stages):
@@ -1595,6 +1597,12 @@ class TaskRunner:
             remaining = stage.epochs - already_done_in_stage
             if remaining <= 0:
                 continue
+
+            # Free GPU memory held by the previous stage's solver / state
+            # before allocating the next one — boundary buffers / wavefield
+            # caches can hold hundreds of MB to many GB.
+            if stage_idx > 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             _prepare_stage(
                 spec=spec, stage=stage, state=state,
