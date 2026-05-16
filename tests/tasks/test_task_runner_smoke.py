@@ -502,3 +502,156 @@ def test_fwi_model_plan_rejected_with_clear_error(tmp_path):
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_mplan.yaml")))
     assert result.status.state == "failed"
     assert "model_plan" in (result.status.error or "")
+
+
+# ============================================================================
+# SEG-Y obs + from_segy_headers geometry (Option A) — small synthetic SEG-Y
+# ============================================================================
+def _write_tiny_segy(path, *, nshots=2, nrec=4, nt=64, dh_m=10.0):
+    """Build a minimal SEG-Y the runner can read end-to-end via Option A."""
+    import struct
+    import numpy as np
+
+    from sweep_io.segy import (
+        SEGY_BIN_HEADER_SIZE, SEGY_TEXT_HEADER_SIZE, SEGY_TRACE_HEADER_SIZE,
+        FORMAT_IEEE_FLOAT32, write_segy_minimal,
+    )
+    from sweep_io.segy_index import SEGY_REV1_BYTES as BM
+
+    n_total = nshots * nrec
+    rng = np.random.default_rng(0)
+    data = (rng.standard_normal((n_total, nt)) * 1e-3).astype("float32")
+    write_segy_minimal(path, data, dt=0.001, sample_format=FORMAT_IEEE_FLOAT32)
+    trace_total = SEGY_TRACE_HEADER_SIZE + nt * 4
+    base = SEGY_TEXT_HEADER_SIZE + SEGY_BIN_HEADER_SIZE
+    with open(path, "r+b") as f:
+        for s in range(nshots):
+            sx = int((1.0 + s) * 4 * dh_m)
+            for r in range(nrec):
+                i = s * nrec + r
+                f.seek(base + i * trace_total)
+                hdr = bytearray(f.read(SEGY_TRACE_HEADER_SIZE))
+                struct.pack_into(">i", hdr, BM["shot"], s + 1)
+                struct.pack_into(">i", hdr, BM["trace_in_shot"], r)
+                struct.pack_into(">h", hdr, BM["coord_scalar"], 1)
+                struct.pack_into(">i", hdr, BM["sx"], sx)
+                struct.pack_into(">i", hdr, BM["sy"], 0)
+                struct.pack_into(">i", hdr, BM["rx"], int(r * 2 * dh_m))
+                struct.pack_into(">i", hdr, BM["ry"], 0)
+                f.seek(base + i * trace_total)
+                f.write(bytes(hdr))
+
+
+def test_fwi_obs_segy_and_from_segy_headers_runs(tmp_path):
+    """Option A: obs.kind=segy + geometry.kind=from_segy_headers from the SAME file."""
+    import numpy as np
+    segy = tmp_path / "tiny.segy"
+    _write_tiny_segy(segy, nshots=3, nrec=6, nt=64, dh_m=10.0)
+
+    vp = np.full((48, 48), 2000.0, dtype="float32")
+    vp_path = tmp_path / "vp.npy"
+    np.save(vp_path, vp)
+
+    spec_dict = {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 64},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
+        "geometry": {
+            "kind": "from_segy_headers",
+            "path": str(segy),
+            "source_depth_m_override": 10.0,
+            "receiver_depth_m_override": 10.0,
+        },
+        "physics": {
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+            "free_surface": False, "pml_type": "cpmlr",
+            "source_type": ["h1"], "receiver_type": ["h1"],
+        },
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(vp_path)},
+        "obs": {"segy": {"path": str(segy),
+                         "source_depth_m_override": 10.0,
+                         "receiver_depth_m_override": 10.0}},
+        "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
+        "epochs": 1, "batchsize": 2, "show_every": 1,
+    }
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_segy.yaml")))
+    assert result.status.state == "success", result.status.error
+
+
+def test_fwi_obs_segy_index_runs(tmp_path):
+    """Option B: pre-built SEGYIndex + obs.kind=segy_index + geometry.kind=from_segy_index."""
+    import numpy as np
+    from sweep_io.segy_index import build_segy_index
+
+    segy = tmp_path / "tinyB.segy"
+    _write_tiny_segy(segy, nshots=3, nrec=6, nt=64, dh_m=10.0)
+
+    idx = build_segy_index([segy],
+                           source_depth_m_override=10.0,
+                           receiver_depth_m_override=10.0,
+                           num_workers=1)
+    idx_path = tmp_path / "tinyB.index.npz"
+    idx.save(idx_path)
+
+    vp = np.full((48, 48), 2000.0, dtype="float32")
+    vp_path = tmp_path / "vp.npy"
+    np.save(vp_path, vp)
+
+    spec_dict = {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 64},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
+        "geometry": {"kind": "from_segy_index", "index_path": str(idx_path)},
+        "physics": {
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+            "free_surface": False, "pml_type": "cpmlr",
+            "source_type": ["h1"], "receiver_type": ["h1"],
+        },
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(vp_path)},
+        "obs": {"segy_index": {"index_path": str(idx_path)}},
+        "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
+        "epochs": 1, "batchsize": 2, "show_every": 1,
+    }
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_segy_idx.yaml")))
+    assert result.status.state == "success", result.status.error
+
+
+def test_fwi_obs_segy_index_lazy_not_implemented(tmp_path):
+    """`lazy=True` is accepted but raises NotImplementedError for now (Gap 3)."""
+    import numpy as np
+    from sweep_io.segy_index import build_segy_index
+
+    segy = tmp_path / "tinyC.segy"
+    _write_tiny_segy(segy, nshots=2, nrec=4, nt=32, dh_m=10.0)
+    idx = build_segy_index([segy], source_depth_m_override=10.0,
+                           receiver_depth_m_override=10.0, num_workers=1)
+    idx_path = tmp_path / "tinyC.index.npz"
+    idx.save(idx_path)
+
+    vp = np.full((32, 32), 2000.0, dtype="float32")
+    np.save(tmp_path / "vp.npy", vp)
+
+    spec_dict = {
+        "task_type": "fwi", "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 32},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
+        "geometry": {"kind": "from_segy_index", "index_path": str(idx_path)},
+        "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+                    "free_surface": False, "pml_type": "cpmlr",
+                    "source_type": ["h1"], "receiver_type": ["h1"]},
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(tmp_path / "vp.npy")},
+        "obs": {"segy_index": {"index_path": str(idx_path), "lazy": True}},
+        "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
+        "epochs": 1, "batchsize": 1, "show_every": 1,
+    }
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "lazy.yaml")))
+    assert result.status.state == "failed"
+    msg = result.status.error or ""
+    assert "lazy=True" in msg or "not yet wired" in msg

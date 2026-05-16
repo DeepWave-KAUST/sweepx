@@ -175,10 +175,21 @@ def _line_array(line: LineSet, fallback_stop: int) -> "np.ndarray":
     return np.concatenate([xs, zs], axis=1)
 
 
-def _build_geometry_2d(geometry, shape: tuple[int, ...]) -> tuple["np.ndarray", "np.ndarray"]:
+def _build_geometry_2d(
+    geometry,
+    shape: tuple[int, ...],
+    *,
+    dh: float | None = None,
+    segy_cache: dict | None = None,
+) -> tuple["np.ndarray", "np.ndarray"]:
     """Dispatch on geometry.kind and return (sources, receivers) numpy arrays.
 
     Output shapes are always sources=(nshots, ndim) and receivers=(nshots, nrec, ndim).
+
+    ``dh`` and ``segy_cache`` are only used by the SEG-Y-backed kinds
+    (``from_segy_headers`` / ``from_segy_index``). The cache lets the runner
+    share a single SEG-Y scan between the geometry resolver and the obs
+    loader when both point at the same file / same index.
     """
 
     kind = getattr(geometry, "kind", None)
@@ -192,6 +203,34 @@ def _build_geometry_2d(geometry, shape: tuple[int, ...]) -> tuple["np.ndarray", 
         return _explicit_geometry_arrays(geometry)
     if kind == "from_file":
         return _from_file_geometry_arrays(geometry)
+    if kind == "from_segy_headers":
+        if dh is None:
+            raise ValueError("from_segy_headers requires `dh` (spec.grid.dh).")
+        payload = _load_segy_single_file_payload(
+            geometry.path,
+            byte_map=geometry.byte_map,
+            source_depth_m_override=geometry.source_depth_m_override,
+            receiver_depth_m_override=geometry.receiver_depth_m_override,
+            coord_scalar_override=geometry.coord_scalar_override,
+            cache=segy_cache,
+        )
+        sources_idx, receivers_idx, _obs_aligned = _segy_geometry_to_grid_indices(
+            payload, float(dh),
+            dedupe=geometry.dedupe, dedup_method=geometry.dedup_method,
+        )
+        return sources_idx, receivers_idx
+    if kind == "from_segy_index":
+        if dh is None:
+            raise ValueError("from_segy_index requires `dh` (spec.grid.dh).")
+        payload = _load_segy_index_payload(
+            geometry.index_path, shot_ids=geometry.shot_ids,
+            cache=segy_cache,
+        )
+        sources_idx, receivers_idx, _obs_aligned = _segy_geometry_to_grid_indices(
+            payload, float(dh),
+            dedupe=geometry.dedupe, dedup_method=geometry.dedup_method,
+        )
+        return sources_idx, receivers_idx
     raise ValueError(f"Unknown geometry.kind '{kind}'.")
 
 
@@ -211,6 +250,142 @@ def _explicit_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
         receivers_2d = np.asarray(rec_raw, dtype=np.int64)
         receivers = receivers_2d[None, ...].repeat(sources.shape[0], axis=0)
     return sources, receivers
+
+
+def _load_segy_single_file_payload(
+    path: Path,
+    *,
+    byte_map: dict | None,
+    source_depth_m_override: float | None,
+    receiver_depth_m_override: float | None,
+    coord_scalar_override: float | None,
+    shot_ids: list[int] | None = None,
+    cache: dict | None = None,
+):
+    """Open + scan + read a single SEG-Y; cache the result keyed by ``path``.
+
+    Returns a dict with keys ``physical_geometry``, ``obs`` (``(nshots, nrec,
+    nt)`` float32), ``shot_ids`` (1-D int64). Both ``ObsSegyConfig`` and
+    ``FromSegyGeometry`` flow through this helper, so when both reference the
+    same file the runner reads it once.
+    """
+    from sweep_io.segy_index import (
+        SEGYIndex,
+        build_segy_index,
+        IndexedShotGatherDataset,
+    )
+
+    key = str(Path(path).resolve())
+    if cache is not None and key in cache:
+        return cache[key]
+
+    idx = build_segy_index(
+        [path],
+        byte_map=byte_map,
+        source_depth_m_override=source_depth_m_override,
+        receiver_depth_m_override=receiver_depth_m_override,
+        coord_scalar_override=coord_scalar_override,
+        num_workers=1,
+    )
+    sids = (
+        np.asarray(shot_ids, dtype=np.int64)
+        if shot_ids is not None else np.asarray(idx.shot_ids, dtype=np.int64)
+    )
+    # Materialise obs eagerly (single-file path -> simple).
+    ds = IndexedShotGatherDataset(idx, shot_ids=sids)
+    obs = np.stack([ds[i]["obs"] for i in range(len(ds))], axis=0)   # (nshots, nrec, nt)
+    ds.close()
+
+    pg = idx.to_physical_geometry(shot_ids=sids)
+    result = {
+        "physical_geometry": pg,
+        "obs": obs,
+        "shot_ids": sids,
+        "n_samples": idx.n_samples,
+        "dt_s": idx.dt_s,
+    }
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _load_segy_index_payload(
+    index_path: Path,
+    *,
+    shot_ids: list[int] | None = None,
+    cache: dict | None = None,
+    lazy: bool = False,
+    coalesce_gap: int = 0,
+):
+    """Load a pre-built SEGYIndex and materialise per-shot obs.
+
+    ``lazy=False`` (default): read every shot eagerly and stack into a single
+    ``(nshots, nrec, nt)`` tensor — same shape as ``ObsSpec.npy_path``.
+    ``lazy=True``: return an :class:`IndexedShotGatherDataset` for incremental
+    consumption. Not yet wired through the runner's training loop — see
+    Gap 3 in the Viking REPORT — so for now ``lazy=True`` raises.
+    """
+    from sweep_io.segy_index import SEGYIndex, IndexedShotGatherDataset
+
+    key = (str(Path(index_path).resolve()), tuple(shot_ids) if shot_ids else None,
+           bool(lazy), int(coalesce_gap))
+    if cache is not None and key in cache:
+        return cache[key]
+
+    idx = SEGYIndex.load(index_path)
+    sids = (
+        np.asarray(shot_ids, dtype=np.int64)
+        if shot_ids is not None else np.asarray(idx.shot_ids, dtype=np.int64)
+    )
+    if lazy:
+        raise NotImplementedError(
+            "ObsSegyIndexConfig.lazy=True is not yet wired into the runner's "
+            "training loop. Set lazy=False (eager load) for now. See Gap 3 in "
+            "the Viking integration REPORT."
+        )
+
+    ds = IndexedShotGatherDataset(idx, shot_ids=sids, coalesce_gap=coalesce_gap)
+    obs = np.stack([ds[i]["obs"] for i in range(len(ds))], axis=0)
+    ds.close()
+
+    pg = idx.to_physical_geometry(shot_ids=sids)
+    result = {
+        "physical_geometry": pg,
+        "obs": obs,
+        "shot_ids": sids,
+        "n_samples": idx.n_samples,
+        "dt_s": idx.dt_s,
+    }
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _segy_geometry_to_grid_indices(payload, dh: float, *, dedupe: bool, dedup_method: str):
+    """Snap a SEG-Y-derived PhysicalGeometry to integer grid indices.
+
+    Returns (sources_idx, receivers_idx, obs_aligned). When dedupe drops
+    receivers, the obs tensor is sliced to keep only the surviving ones
+    (works only when the receiver mask is uniform across shots — the
+    streamer-typical case). Non-uniform masks raise NotImplementedError.
+    """
+    pg = payload["physical_geometry"]
+    obs = payload["obs"]
+    gg, mask = pg.to_grid(dh=(dh, dh), dedupe=dedupe, dedup_method=dedup_method)
+    uniform = bool(np.all(mask == mask[0:1]))
+    if not uniform:
+        raise NotImplementedError(
+            "SEG-Y geometry produced a non-uniform per-shot receiver mask "
+            "after to_grid dedupe. Set dedupe=false in the spec, or upgrade "
+            "the runner to thread per-shot masks through the loss."
+        )
+    keep = np.flatnonzero(mask[0])
+    if keep.size != obs.shape[1]:
+        obs = np.ascontiguousarray(obs[:, keep, :])
+        receivers_idx = gg.receivers[:, keep, :]
+    else:
+        receivers_idx = gg.receivers
+    return gg.sources.astype(np.int64), receivers_idx.astype(np.int64), obs
 
 
 def _from_file_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
@@ -916,7 +1091,11 @@ class TaskRunner:
             spec.physics, spec.backend, shape, spec.grid.dh, spec.time.dt, spec.time.nt, dev
         )
         wavelet = _build_wavelet(spec.wavelet, spec.time)
-        sources, receivers = _build_geometry_2d(spec.geometry, shape)
+        # Shared cache so SEG-Y-backed geometry + obs don't scan the file twice.
+        segy_cache: dict = {}
+        sources, receivers = _build_geometry_2d(
+            spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+        )
         nshots = int(sources.shape[0])
 
         # 4) Build inv_tensors (ordered to match equation.MODEL_SPECS).
@@ -928,8 +1107,11 @@ class TaskRunner:
                   f"world_size={dist_info.world_size}")
 
         # 5) Generate or load obs. Every rank does this independently (deterministic).
-        obs = self._fwi_generate_obs(spec, equation_cls, solver, wavelet,
-                                     sources, receivers, shape, dev, nshots)
+        obs = self._fwi_generate_obs(
+            spec, equation_cls, solver, wavelet,
+            sources, receivers, shape, dev, nshots,
+            segy_cache=segy_cache,
+        )
 
         # 5b) Apply data_plan (and reject unimplemented model_plan) — see
         # _apply_data_plan_to_fwi for the supported subset. Updates
@@ -1052,8 +1234,16 @@ class TaskRunner:
         return artifacts, summary
 
     def _fwi_generate_obs(self, spec, equation_cls, solver, wavelet,
-                          sources, receivers, shape, dev, nshots):
-        """Return obs tensor of shape (nshots, nt, nrec, 1), CPU-resident."""
+                          sources, receivers, shape, dev, nshots,
+                          *, segy_cache: dict | None = None):
+        """Return obs tensor — shape depends on backend:
+            eager:  (nshots, nt, nrec, 1)
+            c:      (nshots, nrec, nt)
+        Always CPU-resident.
+
+        For SEG-Y sources, when the same file / index was already scanned by
+        the geometry resolver, the cached obs is reused without a second read.
+        """
 
         import torch
 
@@ -1066,6 +1256,71 @@ class TaskRunner:
                     f"obs.npy_path first-axis size {obs.shape[0]} != nshots {nshots}."
                 )
             return obs
+
+        def _adapt_segy_obs_to_backend(obs_nrec_nt: np.ndarray) -> "torch.Tensor":
+            """SEGYReader always returns (nshots, nrec, nt). Match sweep's syn:
+                eager → (nshots, nt, nrec, 1)
+                c     → (nshots, nrec, nt)
+            """
+            arr = obs_nrec_nt.astype(np.float32, copy=False)
+            if spec.backend.impl == "eager":
+                # transpose to (nshots, nt, nrec) and add the trailing channel.
+                arr = np.ascontiguousarray(arr.transpose(0, 2, 1))[..., None]
+            return torch.from_numpy(arr)
+
+        if obs_spec.segy is not None:
+            cfg = obs_spec.segy
+            payload = _load_segy_single_file_payload(
+                cfg.path,
+                byte_map=cfg.byte_map,
+                source_depth_m_override=cfg.source_depth_m_override,
+                receiver_depth_m_override=cfg.receiver_depth_m_override,
+                coord_scalar_override=cfg.coord_scalar_override,
+                shot_ids=cfg.shot_ids,
+                cache=segy_cache,
+            )
+            # Align obs to the same dedup mask the geometry resolver used.
+            # We re-snap to grid here only to recover the receiver-keep mask;
+            # the cache means this is cheap on the second call.
+            geom_kind = getattr(spec.geometry, "kind", None)
+            dedupe = geom_kind in ("from_segy_headers", "from_segy_index")
+            dedup_method = "nearest"
+            if geom_kind == "from_segy_headers":
+                dedupe = spec.geometry.dedupe
+                dedup_method = spec.geometry.dedup_method
+            _, _, obs_aligned = _segy_geometry_to_grid_indices(
+                payload, float(spec.grid.dh), dedupe=dedupe, dedup_method=dedup_method,
+            )
+            if obs_aligned.shape[0] != nshots:
+                raise ValueError(
+                    f"obs.segy gave {obs_aligned.shape[0]} shots but geometry-derived nshots={nshots}."
+                )
+            return _adapt_segy_obs_to_backend(obs_aligned)
+
+        if obs_spec.segy_index is not None:
+            cfg = obs_spec.segy_index
+            payload = _load_segy_index_payload(
+                cfg.index_path,
+                shot_ids=cfg.shot_ids,
+                cache=segy_cache,
+                lazy=cfg.lazy,
+                coalesce_gap=cfg.coalesce_gap,
+            )
+            geom_kind = getattr(spec.geometry, "kind", None)
+            dedupe = True
+            dedup_method = "nearest"
+            if geom_kind == "from_segy_index":
+                dedupe = spec.geometry.dedupe
+                dedup_method = spec.geometry.dedup_method
+            _, _, obs_aligned = _segy_geometry_to_grid_indices(
+                payload, float(spec.grid.dh), dedupe=dedupe, dedup_method=dedup_method,
+            )
+            if obs_aligned.shape[0] != nshots:
+                raise ValueError(
+                    f"obs.segy_index gave {obs_aligned.shape[0]} shots but "
+                    f"geometry-derived nshots={nshots}."
+                )
+            return _adapt_segy_obs_to_backend(obs_aligned)
 
         # synthetic: collect true models in equation MODEL_SPECS order
         if obs_spec.synthetic_from_models is not None:

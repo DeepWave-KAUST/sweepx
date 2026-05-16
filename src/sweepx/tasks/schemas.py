@@ -210,8 +210,50 @@ class FromFileGeometry(_Forbid):
     receivers_file: Path
 
 
+class FromSegyGeometry(_Forbid):
+    """Derive sources / receivers from a **single** SEG-Y file's trace headers.
+
+    Header byte offsets default to SEG-Y rev1; override only the keys you
+    need. ``source_depth_m_override`` / ``receiver_depth_m_override`` cover
+    the common marine case where the depth bytes are zero.
+
+    Physical positions read from the file (meters) are snapped to the FWI
+    grid via :class:`sweep_io.geometry.PhysicalGeometry.to_grid` at
+    ``spec.grid.dh`` (with optional dedupe for coarse grids).
+    """
+
+    kind: Literal["from_segy_headers"] = "from_segy_headers"
+    path: Path
+    byte_map: dict[str, int] | None = None      # rev1 defaults if None
+    source_depth_m_override: float | None = None
+    receiver_depth_m_override: float | None = None
+    coord_scalar_override: float | None = None
+    dedupe: bool = True
+    dedup_method: Literal["nearest", "first"] = "nearest"
+
+
+class FromSegyIndexGeometry(_Forbid):
+    """Derive sources / receivers from a pre-built :class:`sweep_io.SEGYIndex`.
+
+    Use this for multi-file projects (OBN-3D-scale) where the SEG-Y header
+    catalogue has been built once via ``sweep_io.segy_index.build_segy_index``
+    and saved as an ``.npz``. The same index can back :class:`SegyIndexObsSpec`
+    for lazy obs loading — see the matching ``obs.kind="segy_index"``.
+
+    Geometry snapping (to the FWI grid) happens at task-build time via
+    :meth:`PhysicalGeometry.to_grid` using ``spec.grid.dh``.
+    """
+
+    kind: Literal["from_segy_index"] = "from_segy_index"
+    index_path: Path
+    shot_ids: list[int] | None = None             # subset; default = all
+    dedupe: bool = True
+    dedup_method: Literal["nearest", "first"] = "nearest"
+
+
 Geometry = Annotated[
-    Union[LineGeometry, ExplicitGeometry, FromFileGeometry],
+    Union[LineGeometry, ExplicitGeometry, FromFileGeometry,
+          FromSegyGeometry, FromSegyIndexGeometry],
     Discriminator("kind"),
 ]
 
@@ -388,17 +430,60 @@ Scheduler = Annotated[
 ]
 
 
-class ObsSpec(_Forbid):
-    """How to get observed data: synthesise from a true model, or load .npy.
+class ObsSegyConfig(_Forbid):
+    """Single-file SEG-Y observed-data loader (Option A).
 
-    Acoustic FWI uses the single-model `synthetic_from`. Multi-model equations
-    (e.g. Elastic with vp/vs/rho) should set `synthetic_from_models` to a list
-    in the same order as the equation's MODEL_SPECS.
+    The runner opens the file once, scans all trace headers in-process, builds
+    a :class:`sweep_io.geometry.PhysicalGeometry` (meters) snapped to
+    ``spec.grid.dh``, and reads the trace payloads in one coalesced pass via
+    :class:`sweep_io.segy.SEGYReader`. Suitable for single-SEG-Y datasets up
+    to ~few GB (Viking line 12: 750 MB → ~8 s scan + read).
+
+    For multi-file or TB-scale data, use :class:`ObsSegyIndexConfig` instead.
+    """
+
+    path: Path
+    byte_map: dict[str, int] | None = None
+    source_depth_m_override: float | None = None
+    receiver_depth_m_override: float | None = None
+    coord_scalar_override: float | None = None
+    shot_ids: list[int] | None = None       # subset; default = all
+
+
+class ObsSegyIndexConfig(_Forbid):
+    """Multi-file lazy SEG-Y observed-data loader (Option B).
+
+    Backed by a pre-built :class:`sweep_io.segy_index.SEGYIndex` (.npz).
+    The runner loads the index, and either materialises obs eagerly (small
+    surveys) or wraps an :class:`IndexedShotGatherDataset` with prefetch
+    (when ``lazy=True``).
+    """
+
+    index_path: Path
+    shot_ids: list[int] | None = None
+    coalesce_gap: int = 0
+    lazy: bool = False
+    # NOTE: when ``lazy=True``, the runner uses an IndexedShotGatherDataset
+    # with a Prefetcher. The eager path materialises a single (nshots, nrec,
+    # nt) tensor at task start — easier on small datasets, OOM-risky on huge.
+
+
+class ObsSpec(_Forbid):
+    """How to get observed data. Pick exactly one source.
+
+    Available sources:
+      - ``synthetic_from`` — re-run forward modeling on a "true" vp.
+      - ``synthetic_from_models`` — same, for multi-model equations.
+      - ``npy_path`` — a pre-saved ``(nshots, nrec, nt)`` ``.npy``.
+      - ``segy`` — load straight from a single SEG-Y file (Option A).
+      - ``segy_index`` — load from a multi-file SEG-Y index (Option B).
     """
 
     synthetic_from: ModelRef | None = None
     synthetic_from_models: list[ModelRef] | None = None
     npy_path: Path | None = None
+    segy: ObsSegyConfig | None = None
+    segy_index: ObsSegyIndexConfig | None = None
 
     @model_validator(mode="after")
     def _exactly_one_source(self):
@@ -406,12 +491,15 @@ class ObsSpec(_Forbid):
             ("synthetic_from", self.synthetic_from),
             ("synthetic_from_models", self.synthetic_from_models),
             ("npy_path", self.npy_path),
+            ("segy", self.segy),
+            ("segy_index", self.segy_index),
         ]
         set_choices = [name for name, value in choices if value is not None]
         if len(set_choices) != 1:
             raise ValueError(
-                "ObsSpec: exactly one of synthetic_from / synthetic_from_models / "
-                f"npy_path must be set; got {set_choices}."
+                "ObsSpec: exactly one of "
+                "synthetic_from / synthetic_from_models / npy_path / "
+                f"segy / segy_index must be set; got {set_choices}."
             )
         return self
 
