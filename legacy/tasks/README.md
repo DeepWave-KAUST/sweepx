@@ -64,6 +64,20 @@ result = TaskRunner().run(spec)
 print(result.status.state, result.task_dir)
 ```
 
+When `sweep` is installed alongside, the same names are reachable through
+the unified namespace — any of these work:
+
+```python
+from sweep_tasks import TaskRunner             # direct dist name
+from sweep.tasks import TaskRunner             # via sweep's companion alias
+import sweep
+sweep.tasks.TaskRunner                          # attribute access
+```
+
+The aliasing lives in `sweep/__init__.py` (PEP 562 `__getattr__` plus a
+meta-path finder) — `sweep-tasks` itself doesn't know it's aliased; it
+just publishes the `sweep_tasks` distribution as usual.
+
 ## Why a separate repo?
 
 - **sweep stays clean as a solver** — equations, propagator, CUDA bindings, nothing else.
