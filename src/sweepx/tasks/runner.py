@@ -560,7 +560,7 @@ class TaskRunner:
     """Synchronous local task runner. One-shot: instantiate and call .run(spec)."""
 
     def run(self, spec: TaskSpec) -> TaskResult:
-        from sweep_tasks import _distributed as _dist
+        from sweep_runner import distributed as _dist
 
         dist_info = _dist.init_distributed_if_needed()
         self._dist = dist_info
@@ -788,7 +788,7 @@ class TaskRunner:
     def _run_fwi(self, spec: FWISpec, task_dir: Path):
         import torch
 
-        from sweep_tasks import _distributed as _dist
+        from sweep_runner import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -1010,7 +1010,7 @@ class TaskRunner:
 
         import torch
 
-        from sweep_tasks import _distributed as _dist
+        from sweep_runner import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
@@ -1079,7 +1079,7 @@ class TaskRunner:
     def _run_lsrtm(self, spec: LSRTMSpec, task_dir: Path):
         import torch
 
-        from sweep_tasks import _distributed as _dist
+        from sweep_runner import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -1272,7 +1272,7 @@ class TaskRunner:
                           *, dist_info=None) -> float:
         import torch
 
-        from sweep_tasks import _distributed as _dist
+        from sweep_runner import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
