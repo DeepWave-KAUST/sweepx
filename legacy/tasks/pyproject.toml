@@ -15,6 +15,7 @@ authors = [
 keywords = ["fwi", "lsrtm", "geophysics", "task", "yaml", "pydantic", "llm", "cli"]
 dependencies = [
     "sweep",
+    "sweep-loss",
     "sweep-runner",
     "sweep-viz",
     "pydantic>=2.0",

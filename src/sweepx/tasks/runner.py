@@ -411,20 +411,21 @@ def _build_inv_tensors(init_models: list, dev, equation_cls):
 
 
 def _compute_loss(syn, obs, loss_spec):
-    import torch
+    """Elementwise misfit via `sweep_loss` functional API.
 
-    diff = syn - obs
+    Returns the pointwise loss tensor; the caller is responsible for the
+    final reduction (so multi-rank averaging stays in the runner's hands).
+    """
+    from sweep_loss import huber_loss, l1_loss, l2_loss
+
     kind = loss_spec.kind
     if kind == "mse":
-        return diff.pow(2)
+        # half=False matches the legacy `(syn-obs)**2` (not `0.5 * ...`).
+        return l2_loss(syn, obs, reduction="none", half=False)
     if kind == "l1":
-        return diff.abs()
+        return l1_loss(syn, obs, reduction="none")
     if kind == "huber":
-        d = float(loss_spec.huber_delta)
-        absd = diff.abs()
-        quad = 0.5 * diff.pow(2)
-        lin = d * (absd - 0.5 * d)
-        return torch.where(absd <= d, quad, lin)
+        return huber_loss(syn, obs, delta=float(loss_spec.huber_delta), reduction="none")
     raise ValueError(f"Unknown loss kind '{kind}'.")
 
 
