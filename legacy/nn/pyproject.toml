@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweep-nn"
+version = "0.1.0"
+description = "PyTorch neural reparameterization and priors for seismic FWI: SIREN, DIP, learned regularizers."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Shijun Wang"},
+]
+keywords = ["fwi", "geophysics", "neural-network", "reparameterization", "dip", "siren", "pytorch"]
+dependencies = [
+    "torch>=1.13",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+dev  = ["pytest>=7", "ruff", "black"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
