@@ -362,12 +362,40 @@ class ModelBounds(_Forbid):
         return self
 
 
+class StageBandpass(_Forbid):
+    """Per-stage bandpass applied to obs at stage entry (Gap 5).
+
+    ``sweep_preproc.filter.bandpass`` is invoked on the *pristine* obs each
+    time a new stage starts, so stages don't compose their filters.
+    """
+
+    lo_hz: float = Field(gt=0)
+    hi_hz: float = Field(gt=0)
+    order: int = Field(ge=1, default=4)
+
+
 class StageSpec(_Forbid):
-    """One leg of a multi-stage FWI run (frequency continuation pattern)."""
+    """One leg of a multi-stage FWI run (frequency continuation pattern).
+
+    Fields beyond ``epochs`` are all optional and override the top-level
+    defaults when present:
+
+    - ``wavelet``: replace the source signature for this stage
+    - ``lr_scale``: scale the optimizer's initial lr (multiplicative)
+    - ``dh_m``: rebuild solver + resample vp to this grid spacing
+    - ``dt_s`` / ``nt``: rebuild solver at a different time grid
+    - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
+    - ``bandpass``: filter obs before this stage runs (uses sweep-preproc)
+    """
 
     epochs: int = Field(ge=1)
-    wavelet: "Wavelet | None" = None  # falls back to top-level wavelet when None
+    wavelet: "Wavelet | None" = None
     lr_scale: float = Field(gt=0, default=1.0)
+    dh_m: float | None = None
+    dt_s: float | None = None
+    nt: int | None = None
+    batch_size: int | None = Field(default=None, ge=1)
+    bandpass: StageBandpass | None = None
 
 
 class OptimizerAdam(_Forbid):

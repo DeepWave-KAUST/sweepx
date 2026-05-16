@@ -622,6 +622,53 @@ def test_fwi_obs_segy_index_runs(tmp_path):
     assert result.status.state == "success", result.status.error
 
 
+def test_fwi_stages_per_stage_dh_and_bandpass_runs(tmp_path):
+    """Gaps 4 + 5: stage 0 at dh=20m, stage 1 at dh=10m + bandpass.
+
+    Confirms vp gets resampled across the dh change and the per-stage
+    bandpass + dt_s + optimizer-reset path doesn't crash.
+    """
+    import numpy as np
+    true_path, init_path, _ = _tiny_grid_models(tmp_path)
+    spec_dict = {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 20.0},
+        "time": {"dt": 0.002, "nt": 200},
+        "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.05, "scale": 1.0},
+        "geometry": {
+            "kind": "line",
+            "sources": {"step": 6, "depth": 2, "start": 6, "stop": 42},
+            "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44},
+        },
+        "physics": {
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 12,
+            "free_surface": False, "pml_type": "cpmlr",
+            "source_type": ["h1"], "receiver_type": ["h1"],
+        },
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(init_path)},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+        "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
+        "epochs": 1, "batchsize": 3, "show_every": 10,
+        "stages": [
+            {"epochs": 2, "dh_m": 20.0, "bandpass": {"lo_hz": 1.0, "hi_hz": 6.0}},
+            {"epochs": 2, "dh_m": 10.0, "dt_s": 0.001,
+             "bandpass": {"lo_hz": 1.0, "hi_hz": 12.0}},
+        ],
+    }
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_stages.yaml")))
+    assert result.status.state == "success", result.status.error
+    # Stage 1 finer grid → final vp must have a different shape from the init.
+    init = np.load(init_path)
+    final = np.load(
+        Path(spec_dict["output_dir"]) / result.status.task_id / "output" / "inverted_vp.npy"
+    )
+    assert final.shape != init.shape, (
+        f"expected resampled vp shape; got {final.shape} == init {init.shape}"
+    )
+
+
 def test_fwi_obs_segy_index_lazy_not_implemented(tmp_path):
     """`lazy=True` is accepted but raises NotImplementedError for now (Gap 3)."""
     import numpy as np

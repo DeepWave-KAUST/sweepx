@@ -851,6 +851,217 @@ def _normalise_stage_list(spec) -> list:
     return [StageSpec(epochs=spec.epochs, wavelet=None, lr_scale=1.0)]
 
 
+# ---------------------------------------------------------------------------
+# Per-stage rebuilds (Gaps 4 + 5)
+# ---------------------------------------------------------------------------
+
+def _resample_vp_tensor(vp: "torch.Tensor", new_shape: tuple[int, ...]) -> "torch.Tensor":
+    """Bilinear resample of a 2-D vp tensor between grid resolutions.
+
+    Returns a fresh leaf tensor (requires_grad=True) — caller is responsible
+    for re-initialising the optimizer because Adam state is shape-bound.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    if tuple(vp.shape) == tuple(new_shape):
+        return vp.detach().clone().requires_grad_(True)
+    src = vp.detach().unsqueeze(0).unsqueeze(0)
+    dst = F.interpolate(src, size=tuple(new_shape), mode="bilinear", align_corners=True)
+    return dst.squeeze(0).squeeze(0).contiguous().clone().requires_grad_(True)
+
+
+def _resample_obs_time(obs_np: "np.ndarray", dt_old: float, dt_new: float,
+                       *, time_axis: int = -1) -> "np.ndarray":
+    """Resample obs along the time axis via sweep_preproc.resample.resample_time."""
+    if abs(dt_old - dt_new) < 1e-12:
+        return obs_np
+    from sweep_preproc.resample import resample_time
+    return resample_time(obs_np, dt_old, dt_new, axis=time_axis)
+
+
+def _bandpass_obs(obs_np: "np.ndarray", lo: float, hi: float, dt: float,
+                  *, order: int, time_axis: int = -1) -> "np.ndarray":
+    """Per-stage bandpass on obs (zero-phase Butterworth)."""
+    from sweep_preproc.filter import bandpass
+    return bandpass(obs_np, lo=lo, hi=hi, dt=dt, order=order, axis=time_axis)
+
+
+def _trim_or_pad_time(obs_np: "np.ndarray", target_nt: int, time_axis: int = -1) -> "np.ndarray":
+    n = obs_np.shape[time_axis]
+    if n == target_nt:
+        return obs_np
+    if n > target_nt:
+        slicer = [slice(None)] * obs_np.ndim
+        slicer[time_axis] = slice(0, target_nt)
+        return obs_np[tuple(slicer)]
+    pad_width = [(0, 0)] * obs_np.ndim
+    pad_width[time_axis] = (0, target_nt - n)
+    return np.pad(obs_np, pad_width)
+
+
+def _shape_for_dh(orig_shape: tuple[int, ...], orig_dh: float, new_dh: float) -> tuple[int, ...]:
+    """Pick a new grid shape that preserves physical extent (within rounding)."""
+    if abs(orig_dh - new_dh) < 1e-12:
+        return tuple(orig_shape)
+    ratio = orig_dh / new_dh
+    return tuple(max(1, int(round(s * ratio))) for s in orig_shape)
+
+
+def _prepare_stage(
+    *, spec, stage, state: dict, equation_cls, required_names: list[str],
+    dev, dist_info, stage_idx: int,
+) -> None:
+    """Mutate ``state`` so the runner can run this stage end-to-end.
+
+    Detects which of ``(dh, dt, nt, bandpass, wavelet, batch_size, lr_scale)``
+    changed against the previous stage state. Triggers any combination of:
+
+    - vp resample (bilinear) + fresh leaf tensors
+    - solver rebuild at the new ``(shape, dh, dt, nt)``
+    - geometry re-snap from the cached pristine PhysicalGeometry
+    - obs rebuild from the cached pristine obs (time-resample + bandpass)
+    - wavelet rebuild
+    - optimizer re-init (Adam state is shape-bound) + initial_lrs cache
+    """
+    import torch
+
+    new_dh = float(stage.dh_m) if stage.dh_m is not None else state["dh"]
+    new_dt = float(stage.dt_s) if stage.dt_s is not None else state["dt"]
+    if stage.nt is not None:
+        new_nt = int(stage.nt)
+    elif abs(new_dt - state["dt"]) > 1e-12:
+        new_nt = int(round(state["nt"] * state["dt"] / new_dt))
+    else:
+        new_nt = state["nt"]
+
+    grid_changed = abs(new_dh - state["dh"]) > 1e-12
+    time_changed = (abs(new_dt - state["dt"]) > 1e-12) or (new_nt != state["nt"])
+    bandpass_changed = stage.bandpass is not None or state.get("_active_bandpass") is not None
+    wavelet_changed = stage.wavelet is not None or state.get("_stage_wavelet_idx", -1) != stage_idx
+
+    if grid_changed and dist_info.is_root:
+        print(f"[stage {stage_idx}] dh: {state['dh']} -> {new_dh}")
+    if time_changed and dist_info.is_root:
+        print(f"[stage {stage_idx}] dt: {state['dt']} -> {new_dt}, nt: {state['nt']} -> {new_nt}")
+
+    # ---- Geometry re-snap from pristine physical positions -----------------
+    if grid_changed or "sources" not in state:
+        from sweep_io.geometry import PhysicalGeometry
+        pg: PhysicalGeometry = state["pristine_physical_geom"]
+        gg, mask = pg.to_grid(
+            dh=(new_dh, new_dh),
+            dedupe=state.get("dedupe_grid_snap", True),
+            dedup_method=state.get("dedup_method", "nearest"),
+        )
+        uniform = bool(np.all(mask == mask[0:1]))
+        if not uniform:
+            raise NotImplementedError(
+                f"[stage {stage_idx}] non-uniform per-shot receiver mask after "
+                f"to_grid(dh={new_dh}). Set dedupe=false in geometry, or upgrade "
+                f"the runner to thread per-shot masks through the loss."
+            )
+        keep_idx = np.flatnonzero(mask[0])
+        state["sources"] = gg.sources.astype(np.int64)
+        state["receivers"] = gg.receivers[:, keep_idx, :].astype(np.int64)
+        state["receiver_keep_idx"] = keep_idx
+        state["nshots"] = int(state["sources"].shape[0])
+
+    # ---- Pick a new model shape (preserves physical extent) ----------------
+    if grid_changed or "shape" not in state:
+        new_shape = _shape_for_dh(state.get("pristine_shape", state["shape"]),
+                                  state["pristine_dh"], new_dh)
+        if dist_info.is_root and grid_changed:
+            print(f"[stage {stage_idx}] vp shape: {state['shape']} -> {new_shape}")
+        state["shape"] = new_shape
+
+    # ---- vp resample + fresh leaf tensors ----------------------------------
+    if grid_changed:
+        new_inv: list = []
+        new_by_name: dict = {}
+        for name in required_names:
+            old_t = state["inv_by_name"][name]
+            new_t = _resample_vp_tensor(old_t, state["shape"])
+            new_inv.append(new_t)
+            new_by_name[name] = new_t
+        state["inv_in_order"] = new_inv
+        state["inv_by_name"] = new_by_name
+
+    # ---- Rebuild solver ----------------------------------------------------
+    if grid_changed or time_changed or "solver" not in state:
+        state["solver"] = _build_solver(
+            spec.physics, spec.backend, state["shape"], new_dh, new_dt, new_nt, dev,
+        )
+
+    # ---- Rebuild wavelet ---------------------------------------------------
+    if time_changed or stage.wavelet is not None or "wavelet" not in state:
+        wav_spec = stage.wavelet if stage.wavelet is not None else spec.wavelet
+        state["wavelet"] = _build_wavelet(
+            wav_spec, spec.time, override_dt=new_dt, override_nt=new_nt,
+        )
+
+    # ---- Obs rebuild from pristine -----------------------------------------
+    # Apply: receiver-mask -> time resample -> trim/pad -> optional bandpass.
+    # Pristine obs is the snapshot at the END of step 5/5b (post-data_plan),
+    # before any stage modification.
+    pristine_obs = state["pristine_obs_np"]
+    pristine_dt = state["pristine_dt"]
+    receiver_axis_pristine = state["pristine_obs_receiver_axis"]
+    time_axis_pristine = state["pristine_obs_time_axis"]
+
+    # 1) receiver mask (apply along receiver axis)
+    obs_np = pristine_obs
+    keep_idx = state.get("receiver_keep_idx")
+    if keep_idx is not None and keep_idx.size != obs_np.shape[receiver_axis_pristine]:
+        slicer = [slice(None)] * obs_np.ndim
+        slicer[receiver_axis_pristine] = keep_idx
+        obs_np = obs_np[tuple(slicer)]
+
+    # 2) time resample
+    obs_np = _resample_obs_time(obs_np, pristine_dt, new_dt, time_axis=time_axis_pristine)
+
+    # 3) trim/pad to new_nt
+    obs_np = _trim_or_pad_time(obs_np, new_nt, time_axis=time_axis_pristine)
+
+    # 4) bandpass (per-stage; uses the new dt, so it's correctly normalised)
+    if stage.bandpass is not None:
+        obs_np = _bandpass_obs(
+            obs_np, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
+            dt=new_dt, order=stage.bandpass.order,
+            time_axis=time_axis_pristine,
+        )
+        if dist_info.is_root:
+            print(f"[stage {stage_idx}] bandpass {stage.bandpass.lo_hz}-{stage.bandpass.hi_hz} Hz")
+    state["_active_bandpass"] = stage.bandpass
+
+    obs_np = np.ascontiguousarray(obs_np.astype(np.float32, copy=False))
+    state["obs"] = torch.from_numpy(obs_np)
+    state["_stage_wavelet_idx"] = stage_idx
+
+    # ---- Re-init optimizer (Adam state is shape-bound) ---------------------
+    if grid_changed or "optimizer" not in state:
+        state["optimizer"] = _build_optimizer(
+            spec.optimizer, state["inv_by_name"], required_names,
+        )
+        state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
+
+    _apply_stage_lr_scale(state["optimizer"], state["initial_lrs"], stage.lr_scale)
+
+    # ---- Batch size override ----------------------------------------------
+    state["batchsize"] = (
+        int(stage.batch_size) if stage.batch_size is not None
+        else int(spec.batchsize)
+    )
+
+    # ---- Commit state ------------------------------------------------------
+    state["dh"] = new_dh
+    state["dt"] = new_dt
+    state["nt"] = new_nt
+    if dist_info.is_root:
+        print(f"[stage {stage_idx}] obs shape: {tuple(state['obs'].shape)}, "
+              f"nshots={state['nshots']}, batchsize={state['batchsize']}")
+
+
 # ---------- the TaskRunner ------------------------------------------------
 
 class TaskRunner:
@@ -1220,52 +1431,109 @@ class TaskRunner:
         _dist.barrier(dist_info)
         epoch_global = start_epoch
 
+        # Build the pristine snapshot used to re-derive each stage's obs
+        # (so per-stage bandpass / dt / receiver-mask don't compound).
+        # Layout depends on backend (see _adapt_segy_obs_to_backend above
+        # and _apply_data_plan_to_fwi).
+        from sweep_io.geometry import PhysicalGeometry
+        if spec.backend.impl == "eager":
+            pristine_time_axis = -3 if obs.ndim >= 4 else -2
+            pristine_recv_axis = -2 if obs.ndim >= 4 else -1
+        else:
+            pristine_recv_axis = 1
+            pristine_time_axis = -2 if obs.ndim >= 4 else -1
+        pristine_obs_np = (obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor)
+                           else np.asarray(obs))
+        pristine_physical_geom = PhysicalGeometry(
+            sources_xyz_m=sources.astype("float64") * float(spec.grid.dh),
+            receivers_xyz_m=receivers.astype("float64") * float(spec.grid.dh),
+            dt=effective_dt, nt=effective_nt,
+        )
+
+        # Per-stage mutable state. Seeded with the post-step-7 baseline.
+        # Per-stage helpers consult / mutate this dict; everything the
+        # train step needs lives in here.
+        state: dict = {
+            "dh": float(spec.grid.dh), "pristine_dh": float(spec.grid.dh),
+            "dt": float(effective_dt),
+            "nt": int(effective_nt),
+            "shape": tuple(shape), "pristine_shape": tuple(shape),
+            "sources": sources, "receivers": receivers, "nshots": int(nshots),
+            "inv_in_order": inv_in_order, "inv_by_name": inv_by_name,
+            "solver": solver, "wavelet": wavelet,
+            "optimizer": optimizer, "initial_lrs": initial_lrs,
+            "obs": obs, "batchsize": int(spec.batchsize),
+            # pristine sources for re-derivation
+            "pristine_obs_np": pristine_obs_np,
+            "pristine_dt": float(effective_dt),
+            "pristine_obs_time_axis": pristine_time_axis,
+            "pristine_obs_receiver_axis": pristine_recv_axis,
+            "pristine_physical_geom": pristine_physical_geom,
+            "dedupe_grid_snap": True,
+            "dedup_method": "nearest",
+        }
+
         for stage_idx, stage in enumerate(stages):
             stage_offset = sum(s.epochs for s in stages[:stage_idx])
             already_done_in_stage = max(0, epoch_global - stage_offset)
             remaining = stage.epochs - already_done_in_stage
             if remaining <= 0:
                 continue
-            stage_wavelet = (_build_wavelet(stage.wavelet, spec.time)
-                             if stage.wavelet is not None else wavelet)
-            _apply_stage_lr_scale(optimizer, initial_lrs, stage.lr_scale)
+
+            _prepare_stage(
+                spec=spec, stage=stage, state=state,
+                equation_cls=equation_cls, required_names=required_names,
+                dev=dev, dist_info=dist_info, stage_idx=stage_idx,
+            )
+
             if dist_info.is_root:
                 print(f"[fwi] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")
             for _ in range(remaining):
                 loss_value = self._fwi_train_step(
-                    spec, solver, stage_wavelet, sources, receivers,
-                    inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
+                    spec, state["solver"], state["wavelet"],
+                    state["sources"], state["receivers"],
+                    state["inv_in_order"], state["inv_by_name"],
+                    state["obs"], state["optimizer"],
+                    state["nshots"], dev,
                     dist_info=dist_info,
+                    stage_batchsize=state["batchsize"],
                 )
                 losses.append(loss_value)
                 if scheduler is not None:
                     scheduler.step()
-                _apply_bounds(inv_by_name, spec.model_bounds)
+                _apply_bounds(state["inv_by_name"], spec.model_bounds)
                 if dist_info.is_root:
                     print(f"[fwi] stage {stage_idx} epoch {epoch_global:04d} loss={loss_value:.6e}")
 
                 snapshot_now = (epoch_global % spec.show_every == 0
                                 or epoch_global == total_epochs - 1)
                 if snapshot_now and dist_info.is_root:
-                    for name, t in inv_by_name.items():
+                    for name, t in state["inv_by_name"].items():
                         np.save(snapshots_dir / f"{name}_epoch_{epoch_global:04d}.npy",
                                 t.detach().cpu().numpy())
                     if spec.save_illumination:
-                        _save_illumination(solver, snapshots_dir, epoch_global)
+                        _save_illumination(state["solver"], snapshots_dir, epoch_global)
 
                 if dist_info.is_root:
                     _save_checkpoint(task_dir, {
                         "epoch": epoch_global,
                         "models": {name: t.detach().cpu().clone()
-                                   for name, t in inv_by_name.items()},
-                        "optimizer": optimizer.state_dict(),
+                                   for name, t in state["inv_by_name"].items()},
+                        "optimizer": state["optimizer"].state_dict(),
                         "scheduler": scheduler.state_dict() if scheduler is not None else None,
                         "losses": losses,
                         "torch_rng": torch.get_rng_state(),
                         "numpy_rng": np.random.get_state(),
                     })
                 epoch_global += 1
+
+        # Stage loop done — keep references aligned for the final-outputs step.
+        inv_by_name = state["inv_by_name"]
+        inv_in_order = state["inv_in_order"]
+        solver = state["solver"]
+        sources = state["sources"]
+        receivers = state["receivers"]
 
         # 9) Final outputs (rank 0 only).
         artifacts: list[Path] = []
@@ -1413,7 +1681,7 @@ class TaskRunner:
 
     def _fwi_train_step(self, spec, solver, wavelet, sources, receivers,
                         inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
-                        *, dist_info=None) -> float:
+                        *, dist_info=None, stage_batchsize: int | None = None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1424,6 +1692,10 @@ class TaskRunner:
         loss is normalised by the GLOBAL element count so that
         ``all_reduce(SUM)`` of gradients yields the gradient of the global
         per-element mean loss.
+
+        ``stage_batchsize`` (if given) overrides ``spec.batchsize`` — used
+        by the multi-stage loop so each stage can pick its own shot count
+        (Gap 4).
         """
 
         import torch
@@ -1433,7 +1705,10 @@ class TaskRunner:
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
 
-        global_batchsize = min(spec.batchsize, nshots)
+        global_batchsize = min(
+            int(stage_batchsize) if stage_batchsize is not None else int(spec.batchsize),
+            nshots,
+        )
 
         # Rank 0 picks the global shot indices, then broadcasts.
         if dist_info.is_root:
