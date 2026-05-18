@@ -62,7 +62,25 @@ def load_task(path: str | Path) -> TaskSpec:
         raw = yaml.safe_load(fh)
     if not isinstance(raw, dict):
         raise ValueError(f"Task YAML must be a mapping at the top level, got {type(raw).__name__}.")
-    resolved = _resolve_paths(raw, path.parent)
+    return load_task_from_dict(raw, base_dir=path.parent)
+
+
+def load_task_from_dict(raw: dict, *, base_dir: Path | str | None = None) -> TaskSpec:
+    """Validate a task spec from an already-parsed dict.
+
+    Used by the CLI to support ``--override key=value`` flags: the raw
+    YAML is loaded into a dict, dotted-key overrides are applied via
+    :func:`sweep_runner.config.apply_overrides`, then this function does
+    path resolution + pydantic validation against the same base_dir the
+    YAML lived in.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Task spec must be a mapping at the top level, got "
+            f"{type(raw).__name__}."
+        )
+    base = Path(base_dir).resolve() if base_dir is not None else Path.cwd()
+    resolved = _resolve_paths(raw, base)
     return _task_adapter.validate_python(resolved)
 
 
@@ -177,6 +195,58 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
         "epochs": 101,
         "batchsize": 8,
         "show_every": 10,
+    },
+    "rtm": {
+        "task_type": "rtm",
+        "output_dir": "./sweep_runs",
+        "device": "auto",
+        "grid": {"dh": 12.5, "shape": [401, 2305]},
+        "time": {"dt": 0.001, "nt": 6000},
+        "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.18, "scale": 1.0},
+        "geometry": {
+            "kind": "from_plan",
+            "plan_path": "/path/to/plan.npz",
+            "dedupe": True,
+        },
+        "obs": {
+            "plan": {
+                "plan_path": "/path/to/plan.npz",
+                "cache_all": True,
+            },
+        },
+        "physics": {
+            "equation": "Acoustic",
+            "spatial_order": 8,
+            "abcn": 20,
+            "free_surface": True,
+            "pml_type": "cpmlr",
+            "source_type": ["h1"],
+            "receiver_type": ["h1"],
+        },
+        "backend": {
+            "impl": "c",
+            "use_ckpt": False,
+            "cuda_options": {"memory": {"strategy": "boundary",
+                                          "boundary": {"storage": "gpu"}}},
+        },
+        "velocity_model": {
+            "name": "vp",
+            "path": "/path/to/inverted_vp.npy",
+        },
+        "loss": {"kind": "trace_cosine", "trace_cosine_demean": True},
+        "imaging": {
+            "shots_per_batch": 1,
+            "filter_lowcut_hz": 3.0,
+            "filter_highcut_hz": 25.0,
+            "filter_order": 4,
+            "filter_padtype": "odd",
+            "illumination_epsilon": 1.0e-6,
+            "normalize_by_illumination": True,
+            "save_per_shot": False,
+            "live_update_every_batches": 10,
+            "loss_kind": "trace_cosine",
+            "trace_cosine_demean": True,
+        },
     },
     "lsrtm": {
         "task_type": "lsrtm",

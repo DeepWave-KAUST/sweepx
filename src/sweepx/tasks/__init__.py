@@ -15,12 +15,20 @@ from sweep_tasks.schemas import (
     LocalModelWindowSpec,
     LSRTMSpec,
     ModelPlanSpec,
+    PostFilterImageSpec,
     QCSpec,
     ReparamSpec,
+    RTMImagingSpec,
+    RTMSpec,
     TaskSpec,
     WavefieldSpec,
 )
-from sweep_tasks.yaml_io import dump_task, load_task, new_template
+from sweep_tasks.yaml_io import (
+    dump_task,
+    load_task,
+    load_task_from_dict,
+    new_template,
+)
 
 __all__ = [
     "BaseTaskSpec",
@@ -31,8 +39,11 @@ __all__ = [
     "LocalModelWindowSpec",
     "LSRTMSpec",
     "ModelPlanSpec",
+    "PostFilterImageSpec",
     "QCSpec",
     "ReparamSpec",
+    "RTMImagingSpec",
+    "RTMSpec",
     "TASK_TYPES",
     "TaskResult",
     "TaskRunner",
@@ -41,5 +52,6 @@ __all__ = [
     "WavefieldSpec",
     "dump_task",
     "load_task",
+    "load_task_from_dict",
     "new_template",
 ]

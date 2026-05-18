@@ -15,6 +15,7 @@ schema, not as a runtime kwarg.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ from sweep_tasks.schemas import (
     LineSet,
     ModelRef,
     PhysicsSpec,
+    RTMSpec,
     TaskSpec,
     WavefieldSpec,
 )
@@ -175,7 +177,7 @@ def _line_array(line: LineSet, fallback_stop: int) -> "np.ndarray":
     return np.concatenate([xs, zs], axis=1)
 
 
-def _build_geometry_2d(
+def _build_geometry(
     geometry,
     shape: tuple[int, ...],
     *,
@@ -185,6 +187,10 @@ def _build_geometry_2d(
     """Dispatch on geometry.kind and return (sources, receivers) numpy arrays.
 
     Output shapes are always sources=(nshots, ndim) and receivers=(nshots, nrec, ndim).
+    ``ndim`` is 2 when ``shape`` is ``(nz, nx)`` and 3 when ``shape`` is
+    ``(nz, ny, nx)``. ``explicit`` / ``from_file`` accept either; ``line``
+    is 2-D-only; the SEG-Y kinds are 2-D-only because their header-derived
+    geometry is built around ``(x, z)`` only.
 
     ``dh`` and ``segy_cache`` are only used by the SEG-Y-backed kinds
     (``from_segy_headers`` / ``from_segy_index``). The cache lets the runner
@@ -193,17 +199,41 @@ def _build_geometry_2d(
     """
 
     kind = getattr(geometry, "kind", None)
+    grid_ndim = len(shape)
     if kind == "line":
+        if grid_ndim != 2:
+            raise ValueError(
+                f"LineGeometry only supports 2-D grids (shape ndim=2); "
+                f"got shape={shape}. Use ExplicitGeometry / FromFileGeometry "
+                f"for 3-D."
+            )
         nx = int(shape[-1])
         sources = _line_array(geometry.sources, nx)
         rec = _line_array(geometry.receivers, nx)
         receivers = rec[None, ...].repeat(sources.shape[0], axis=0)
         return sources, receivers
     if kind == "explicit":
-        return _explicit_geometry_arrays(geometry)
+        sources, receivers = _explicit_geometry_arrays(geometry)
+        if sources.shape[1] != grid_ndim:
+            raise ValueError(
+                f"ExplicitGeometry ndim={sources.shape[1]} does not match grid "
+                f"ndim={grid_ndim} (shape={shape})."
+            )
+        return sources, receivers
     if kind == "from_file":
-        return _from_file_geometry_arrays(geometry)
+        sources, receivers = _from_file_geometry_arrays(geometry)
+        if sources.shape[1] != grid_ndim:
+            raise ValueError(
+                f"FromFileGeometry ndim={sources.shape[1]} does not match grid "
+                f"ndim={grid_ndim} (shape={shape})."
+            )
+        return sources, receivers
     if kind == "from_segy_headers":
+        if grid_ndim != 2:
+            raise ValueError(
+                f"from_segy_headers geometry is 2-D-only; got grid shape={shape}. "
+                f"For 3-D OBN data use the CRG-plan geometry adapter instead."
+            )
         if dh is None:
             raise ValueError("from_segy_headers requires `dh` (spec.grid.dh).")
         payload = _load_segy_single_file_payload(
@@ -225,6 +255,10 @@ def _build_geometry_2d(
         )
         return sources_idx, receivers_idx
     if kind == "from_segy_index":
+        if grid_ndim != 2:
+            raise ValueError(
+                f"from_segy_index geometry is 2-D-only; got grid shape={shape}."
+            )
         if dh is None:
             raise ValueError("from_segy_index requires `dh` (spec.grid.dh).")
         payload = _load_segy_index_payload(
@@ -241,7 +275,31 @@ def _build_geometry_2d(
             dedupe=False, dedup_method=geometry.dedup_method,
         )
         return sources_idx, receivers_idx
+    if kind == "from_plan":
+        if dh is None:
+            raise ValueError("from_plan requires `dh` (spec.grid.dh).")
+        if grid_ndim not in (2, 3):
+            raise ValueError(
+                f"from_plan: grid ndim must be 2 or 3 (shape={shape})."
+            )
+        payload = _load_seismic_plan_payload(
+            geometry.plan_path,
+            cache_all=False,
+            grid_ndim=grid_ndim,
+            cache=segy_cache,
+            geometry_only=True,        # don't read traces just to compute geometry
+        )
+        sources_idx, receivers_idx, _obs_aligned = _segy_geometry_to_grid_indices(
+            payload, float(dh),
+            dedupe=False, dedup_method=geometry.dedup_method,
+        )
+        return sources_idx, receivers_idx
     raise ValueError(f"Unknown geometry.kind '{kind}'.")
+
+
+# Back-compat alias: callers that imported the old 2-D-only name keep working.
+# The new dispatcher handles both 2-D and 3-D based on the ``shape`` arg.
+_build_geometry_2d = _build_geometry
 
 
 def _explicit_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
@@ -313,6 +371,115 @@ def _load_segy_single_file_payload(
         "shot_ids": sids,
         "n_samples": idx.n_samples,
         "dt_s": idx.dt_s,
+    }
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _load_seismic_plan_payload(
+    plan_path: Path,
+    *,
+    cache_all: bool = False,
+    grid_ndim: int | None = None,
+    cache: dict | None = None,
+    geometry_only: bool = False,
+):
+    """Load a ``seismic_plan_v1`` cache as a payload dict (mirrors
+    :func:`_load_segy_single_file_payload`).
+
+    This helper serves the static-obs CSG path (``grouping="csg"`` only,
+    every group's row count must be uniform — typical for rigid
+    streamers). CRG-grouped plans go through the per-iter multisource
+    sampler in :meth:`TaskRunner._run_fwi_multisource` (dispatched when
+    ``obs.plan.sampling`` is set), which calls
+    :func:`sweep_io.seismic_plan.sample_shared_shots_from_plan` +
+    :meth:`PlanReader.read_rows` directly instead of going through here.
+
+    ``grid_ndim``: 2 → keep (x, z) only (drop y); 3 → keep (x, y, z).
+    ``geometry_only``: when True, skip the eager ``PlanReader.read_all`` so
+    the geometry resolver doesn't pull every trace into RAM (RTM's per-batch
+    PlanReader loop will do its own reads later). The cache entry under
+    ``geometry_only=True`` and ``geometry_only=False`` are distinct so a
+    subsequent eager-obs lookup still triggers a full load.
+    """
+    from sweep_io.seismic_plan import SeismicPlan, PlanReader
+    from sweep_io.geometry import PhysicalGeometry
+
+    plan_path = Path(plan_path)
+    key = ("seismic_plan", str(plan_path.resolve()), bool(cache_all),
+           int(grid_ndim) if grid_ndim else None, bool(geometry_only))
+    if cache is not None and key in cache:
+        return cache[key]
+
+    plan = SeismicPlan.load(plan_path)
+    if plan.grouping != "csg":
+        raise ValueError(
+            f"_load_seismic_plan_payload (CSG static-obs path) requires "
+            f"grouping='csg' (got {plan.grouping!r}). For CRG-grouped "
+            "plans the runner uses the multisource pipeline instead — "
+            "set obs.plan.sampling (PlanSamplingConfig) on the YAML so "
+            "the runner routes to _run_fwi_multisource."
+        )
+    counts = plan.per_group_row_counts()
+    if counts.size == 0:
+        raise ValueError("from_plan: SeismicPlan has zero groups")
+    if not (counts == counts[0]).all():
+        raise ValueError(
+            f"from_plan: non-uniform receiver count per shot "
+            f"({int(counts.min())}..{int(counts.max())}). The runner's "
+            "per-stage dedupe path needs a uniform pristine layout; rebuild "
+            "the plan with a filter that yields constant nrec or use "
+            "from_segy_headers (which has its own per-shot dedupe)."
+        )
+    nshots = int(plan.n_groups)
+    nrec = int(counts[0])
+    nt = int(plan.samples_per_trace)
+
+    # row arrays are sorted by group already → straight reshape works.
+    src_xyz = np.asarray(plan.group_xyz, dtype=np.float64)               # (nshots, 3)
+    rec_xyz = np.asarray(plan.row_receiver_xyz, dtype=np.float64).reshape(nshots, nrec, 3)
+
+    if grid_ndim == 2:
+        # 2-D streamer: keep (x, z) only.
+        src_xyz = src_xyz[:, [0, 2]]
+        rec_xyz = rec_xyz[:, :, [0, 2]]
+    elif grid_ndim is not None and grid_ndim != 3:
+        raise ValueError(
+            f"from_plan: grid_ndim must be 2 or 3, got {grid_ndim}"
+        )
+
+    pg = PhysicalGeometry(
+        sources_xyz_m=src_xyz,
+        receivers_xyz_m=rec_xyz,
+        dt=float(plan.dt_s), nt=nt,
+        meta={"source": "SeismicPlan", "plan_path": str(plan_path),
+              "plan_grouping": plan.grouping,
+              "plan_build_meta": dict(plan.build_meta)},
+    )
+
+    if geometry_only:
+        # `_segy_geometry_to_grid_indices` inspects obs.shape[1] to decide
+        # whether a receiver mask is needed; supply a zero-cost placeholder
+        # with the right receiver-axis size so the geometry path runs without
+        # materialising actual samples. ``_build_geometry_2d`` drops the
+        # returned obs immediately.
+        obs = np.zeros((nshots, nrec, 1), dtype=np.float32)
+    else:
+        # Read obs into a single (nshots, nrec, nt) f32 tensor via PlanReader.
+        reader = PlanReader(plan, cache_all=cache_all)
+        try:
+            obs_flat = reader.read_all().astype(np.float32, copy=False)  # (n_rows, nt)
+        finally:
+            reader.close()
+        obs = obs_flat.reshape(nshots, nrec, nt)
+
+    result = {
+        "physical_geometry": pg,
+        "obs": obs,
+        "shot_ids": np.asarray(plan.group_id, dtype=np.int64),
+        "n_samples": nt,
+        "dt_s": float(plan.dt_s),
     }
     if cache is not None:
         cache[key] = result
@@ -472,7 +639,57 @@ def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
                 f"FromNpyWavelet length {arr.shape[0]} != time.nt {nt}."
             )
         return float(wavelet_spec.scale) * arr
+    if kind == "siren_pipeline_npz":
+        from sweep_io.wavelet import load_wavelet_npz
+        loaded = load_wavelet_npz(
+            wavelet_spec.path, explicit_key=wavelet_spec.explicit_key,
+        )
+        samples = loaded.samples
+        # Note: the SIREN-pipeline npz also reports ``source_delay_s``
+        # (the zero-prepad applied during SIREN training); consumers
+        # that need to align obs to the wavelet's frame should call
+        # :func:`_get_wavelet_source_delay_s` and left-shift obs by
+        # the same amount.
+        # Resample to solver dt when the wavelet was sampled at a different
+        # rate (typical for SIREN wavelets fit at SEG-Y dt while the solver
+        # runs at a finer step). Uses sweep_preproc.resample_time.
+        if abs(loaded.dt_s - dt) > 1.0e-12:
+            from sweep_preproc.resample import resample_time
+            samples = resample_time(
+                samples.astype(np.float32), loaded.dt_s, dt, axis=0,
+            ).astype(np.float32)
+        # Length-align: truncate excess samples, zero-pad short tails.
+        if samples.shape[0] > nt:
+            samples = samples[:nt]
+        elif samples.shape[0] < nt:
+            samples = np.concatenate(
+                [samples, np.zeros(nt - samples.shape[0], dtype=np.float32)]
+            )
+        return float(wavelet_spec.scale) * samples.astype(np.float32, copy=False)
     raise ValueError(f"Unknown wavelet.kind '{kind}'.")
+
+
+def _get_wavelet_source_delay_s(wavelet_spec) -> float:
+    """Return the wavelet's zero-prepad delay in seconds, or 0.0.
+
+    Only the SIREN-pipeline npz format carries this metadata
+    (``source_delay_s`` scalar). Consumers should left-shift observed
+    traces by ``int(round(source_delay_s / dt_obs))`` samples so the
+    main wavelet bang lines up with the actual event in obs — without
+    this, syn and obs are off by the prepad (a systematic
+    cycle-skip).
+
+    For any other wavelet kind returns ``0.0``.
+    """
+    kind = getattr(wavelet_spec, "kind", None)
+    if kind != "siren_pipeline_npz":
+        return 0.0
+    from sweep_io.wavelet import load_wavelet_npz
+    loaded = load_wavelet_npz(
+        wavelet_spec.path,
+        explicit_key=getattr(wavelet_spec, "explicit_key", None),
+    )
+    return float(loaded.source_delay_s or 0.0)
 
 
 def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, shape):
@@ -715,18 +932,13 @@ def _apply_data_plan_to_fwi(
     plan_kwargs = spec.data_plan.model_dump(exclude_none=True)
     plan = DataPlan(**plan_kwargs)
 
-    # obs layout depends on the propagator backend:
-    #   eager (PropTorch+autograd):  (nshots, nt, nrec[, 1])
-    #   c     (compiled CUDA bind.): (nshots, nrec, nt)
-    # Pick the right (receiver_axis, time_axis) so DataPlan's offset filter +
-    # receiver stride + time resample / window touch the intended axis.
+    # Both backends now share the canonical ``(nshots, nt, nrec[, nfield])``
+    # layout (the c-backend was aligned in geophyai commit 21041c5; the
+    # eager backend was always canonical). Time is axis -3 / -2 depending
+    # on whether the trailing channel axis is present.
     obs_np = obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor) else np.asarray(obs)
-    if spec.backend.impl == "eager":
-        time_axis = -3 if obs_np.ndim >= 4 else -2
-        receiver_axis = -2 if obs_np.ndim >= 4 else -1
-    else:  # "c" or any future binding using the (nshots, nrec, nt) layout
-        receiver_axis = 1
-        time_axis = -2 if obs_np.ndim >= 4 else -1
+    time_axis = -3 if obs_np.ndim >= 4 else -2
+    receiver_axis = -2 if obs_np.ndim >= 4 else -1
 
     pg_planned, obs_planned, rcv_mask = apply_data_plan(
         plan, pg, obs_np, time_axis=time_axis, receiver_axis=receiver_axis,
@@ -831,32 +1043,26 @@ def _compute_loss(syn, obs, loss_spec):
     if kind == "huber":
         return huber_loss(syn, obs, delta=float(loss_spec.huber_delta), reduction="none")
     if kind == "trace_cosine":
-        # Dispatch to sweep-loss's GlobalCorrelationLoss with demean=True.
-        # sweep-loss expects canonical (ns, nt, nrec, nchan); the c backend
-        # gives us (ns, nrec, nt) so we permute first, run the loss to get
-        # a per-trace tensor of shape (N,), then broadcast it back to the
-        # syn shape so the caller's .sum() / global_norm yields mean(1-cos)
-        # per trace.
+        # sweep-loss expects canonical (ns, nt, nrec, nchan). Both backends
+        # (eager + c, after geophyai 21041c5) deliver this layout natively
+        # so no permutation is needed. The legacy 3-D ``(nt, nrec, 1)``
+        # single-shot path stays supported via sweep-loss's to_canonical.
         from sweep_loss import global_correlation_loss
         eps = float(getattr(loss_spec, "trace_cosine_eps", 1.0e-8))
         demean = bool(getattr(loss_spec, "trace_cosine_demean", True))
 
         if syn.ndim == 4:
-            # eager: (ns, nt, nrec, 1) — already canonical
+            # (ns, nt, nrec, nchan) — canonical
             syn_can, obs_can = syn, obs
-            permuted = False
-        elif syn.ndim == 3 and syn.shape[-1] != 1:
-            # c backend: (ns, nrec, nt) → permute → (ns, nt, nrec); add chan.
-            syn_can = syn.permute(0, 2, 1).unsqueeze(-1)  # (ns, nt, nrec, 1)
-            obs_can = obs.permute(0, 2, 1).unsqueeze(-1)
-            permuted = True
         elif syn.ndim == 3 and syn.shape[-1] == 1:
-            # eager 3D (nt, nrec, 1) — single-shot synthetic path; sweep-loss
-            # promotes to (1, nt, nrec, 1) via to_canonical.
+            # single-shot 3-D (nt, nrec, 1); sweep-loss promotes via
+            # to_canonical to (1, nt, nrec, 1).
             syn_can, obs_can = syn, obs
-            permuted = False
         else:
-            raise ValueError(f"trace_cosine: unsupported syn.ndim {syn.ndim}")
+            raise ValueError(
+                f"trace_cosine: unsupported syn.ndim/shape {syn.ndim}/{tuple(syn.shape)}; "
+                "expected canonical (ns, nt, nrec, nchan) or (nt, nrec, 1)."
+            )
 
         per_trace = global_correlation_loss(
             syn_can, obs_can,
@@ -865,20 +1071,15 @@ def _compute_loss(syn, obs, loss_spec):
 
         # Reshape back to per-trace canonical and broadcast across time so
         # the caller's .sum() / global_norm yields mean(1-cos) over traces.
-        # sweep_loss.base.flatten_traces uses order (ns, nr, nc) so:
         if syn_can.ndim == 4:
             ns_c, nt_c, nr_c, nc_c = syn_can.shape
         else:  # (nt, nrec, 1) → canonical promoted shape (1, nt, nrec, 1)
             ns_c, nt_c, nr_c, nc_c = 1, syn_can.shape[0], syn_can.shape[1], syn_can.shape[2]
         pt_can = per_trace.view(ns_c, 1, nr_c, nc_c).expand(ns_c, nt_c, nr_c, nc_c)
 
-        if permuted:
-            # back to (ns, nrec, nt)
-            return pt_can.squeeze(-1).permute(0, 2, 1).contiguous()
         if syn.ndim == 4:
             return pt_can
-        # 3D eager (nt, nrec, 1)
-        return pt_can.squeeze(0)
+        return pt_can.squeeze(0)  # 3D (nt, nrec, 1)
     raise ValueError(f"Unknown loss kind '{kind}'.")
 
 
@@ -978,6 +1179,60 @@ def _apply_stage_lr_scale(optimizer, initial_lrs: list[float], scale: float) -> 
         group["lr"] = base * float(scale)
 
 
+def _accumulate_illumination(solver, sill_sum, rill_sum):
+    """Snapshot a chunk's solver illumination tensors into running buffers.
+
+    Returns the updated ``(sill_sum, rill_sum)`` pair. The propagator
+    backend zeros its ``source_illumination`` / ``receiver_illumination``
+    attrs at the start of every forward call, so each chunk's backward
+    must be snapshot here BEFORE the next chunk's forward kicks in.
+
+    Either buffer may start as ``None``; the helper detach-clones the
+    first snapshot and adds in-place thereafter.
+    """
+    import torch
+
+    sill = getattr(solver, "source_illumination", None)
+    rill = getattr(solver, "receiver_illumination", None)
+    if sill is None or rill is None:
+        return sill_sum, rill_sum
+    sill_d = sill.detach()
+    rill_d = rill.detach()
+    if sill_sum is None:
+        sill_sum = sill_d.clone()
+    else:
+        sill_sum.add_(sill_d)
+    if rill_sum is None:
+        rill_sum = rill_d.clone()
+    else:
+        rill_sum.add_(rill_d)
+    return sill_sum, rill_sum
+
+
+def _apply_illumination_precond(
+    grad_tensor, sill_sum, rill_sum, *, eps: float, exponent: float,
+) -> None:
+    """Divide ``grad_tensor`` in place by ``(S·R + eps)**exponent``.
+
+    Shapes must match (the illumination buffers are allocated by the
+    backend to match the unpadded velocity tensor). No-op when either
+    buffer is ``None`` (no chunk produced illumination, e.g. all chunks
+    were empty on this rank).
+    """
+    import torch
+
+    if sill_sum is None or rill_sum is None or grad_tensor is None:
+        return
+    sr = sill_sum * rill_sum + float(eps)
+    if abs(exponent - 1.0) < 1.0e-12:
+        scale = 1.0 / sr
+    elif abs(exponent - 0.5) < 1.0e-12:
+        scale = 1.0 / torch.sqrt(sr)
+    else:
+        scale = 1.0 / torch.pow(sr, float(exponent))
+    grad_tensor.mul_(scale)
+
+
 def _apply_bounds(inv_tensors_by_name, bounds_by_name, *, skip_names=()) -> None:
     """Clamp each named tensor to its model_bounds entry in place.
 
@@ -1005,8 +1260,17 @@ def _compute_local_window(sources_chunk, receivers_chunk, full_shape, dh, win_sp
     ``(B, nrec, 2)``. Convention (matches the rest of the runner): the
     last axis is ``[x, z]`` — i.e. ``[lateral, depth]``. The result is
     clamped to the full-model shape ``(nz, nx)``.
+
+    3-D local windowing is not yet implemented; callers must guard with
+    ``len(full_shape) == 2`` or pass ``local_model_window=None`` for 3-D
+    grids.
     """
     import numpy as _np
+    if len(full_shape) != 2:
+        raise NotImplementedError(
+            f"_compute_local_window: only 2-D grids supported (got shape "
+            f"{full_shape}). Disable spec.local_model_window for 3-D runs."
+        )
     nz, nx = int(full_shape[0]), int(full_shape[1])
     pad_x = int(float(win_spec.padding_x_m) / float(dh))
     pad_z = int(float(win_spec.padding_z_m) / float(dh))
@@ -1045,7 +1309,145 @@ def _rebase_geometry_to_window(sources_chunk, receivers_chunk, z0, x0):
     return s, r
 
 
-def _build_reparam_net(spec, base_vp, bounds):
+def _dump_run_metadata(
+    spec,
+    task_dir,
+    *,
+    extras: dict | None = None,
+) -> None:
+    """Write the resolved YAML + a runtime metadata json to ``task_dir``.
+
+    Captures everything a reader of the run dir 6 months from now needs
+    to reproduce / interpret the result:
+
+    * ``config_resolved.yaml`` — the post-pydantic-validation spec with
+      ALL fields explicit (defaults expanded). Diffing this against any
+      hand-written YAML shows exactly what fields the pipeline saw.
+    * ``run_meta.json`` — host, time, CUDA device, conda env path, key
+      package versions (sweep-tasks, sweep-nn, sweep-io, sweep,
+      sweep-loss, sweep-preproc, torch, numpy), git SHA / dirty-flag
+      for each editable package (best-effort), plus any caller-supplied
+      ``extras`` (typically the runner's derived setup quantities like
+      ``shape``, ``origin``, ``n_groups``, ``net_params``, ...).
+    """
+    import json
+    import os
+    import socket
+    import subprocess
+    import sys
+    from datetime import datetime, timezone
+
+    import yaml
+
+    task_dir = Path(task_dir)
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- 1) Resolved config (full pydantic dump, JSON-mode for paths
+    # and enums → str). ``mode='json'`` makes the dict yaml.safe_dump-able.
+    try:
+        cfg = spec.model_dump(mode="json")
+    except Exception:  # pydantic v1 fallback
+        cfg = spec.dict()
+    try:
+        (task_dir / "config_resolved.yaml").write_text(
+            yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
+        )
+    except Exception as err:  # noqa: BLE001
+        # Yaml dump can hit unrepresentable objects; fall back to json.
+        (task_dir / "config_resolved.json").write_text(
+            json.dumps(cfg, default=str, indent=2)
+        )
+        print(f"[run-meta] yaml dump failed ({err}); wrote config_resolved.json")
+
+    # ---- 2) Package versions + git SHAs (best-effort).
+    def _pkg_version(name: str) -> str | None:
+        try:
+            mod = __import__(name)
+            return getattr(mod, "__version__", None)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _git_meta(pkg_name: str) -> dict | None:
+        try:
+            mod = __import__(pkg_name)
+        except Exception:  # noqa: BLE001
+            return None
+        path = Path(getattr(mod, "__file__", "") or "").resolve().parent
+        for _ in range(6):  # walk up looking for .git
+            if (path / ".git").exists():
+                break
+            if path.parent == path:
+                return None
+            path = path.parent
+        else:
+            return None
+        try:
+            sha = subprocess.check_output(
+                ["git", "-C", str(path), "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+            dirty = bool(subprocess.check_output(
+                ["git", "-C", str(path), "status", "--porcelain"],
+                stderr=subprocess.DEVNULL,
+            ).decode().strip())
+            return {"path": str(path), "sha": sha, "dirty": dirty}
+        except Exception:  # noqa: BLE001
+            return None
+
+    pkgs = [
+        "sweep_tasks", "sweep_nn", "sweep_io", "sweep",
+        "sweep_loss", "sweep_preproc", "sweep_viz", "sweep_runner",
+        "torch", "numpy",
+    ]
+    versions = {n: _pkg_version(n) for n in pkgs}
+    git = {n: _git_meta(n) for n in pkgs if _git_meta(n) is not None}
+
+    # ---- 3) Host + CUDA snapshot.
+    cuda_info: dict = {"available": False}
+    try:
+        import torch
+        cuda_info["available"] = bool(torch.cuda.is_available())
+        if cuda_info["available"]:
+            cuda_info["device_count"] = int(torch.cuda.device_count())
+            cuda_info["devices"] = [
+                {
+                    "index": i, "name": torch.cuda.get_device_name(i),
+                    "total_mem_gb": round(
+                        torch.cuda.get_device_properties(i).total_memory / 1e9, 2,
+                    ),
+                }
+                for i in range(int(torch.cuda.device_count()))
+            ]
+            cuda_info["torch_cuda"] = torch.version.cuda
+    except Exception:  # noqa: BLE001
+        pass
+
+    meta = {
+        "task_id": getattr(spec, "task_id", None),
+        "task_type": getattr(spec, "task_type", None),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "host": socket.gethostname(),
+        "user": os.environ.get("USER"),
+        "cwd": os.getcwd(),
+        "python": sys.version.split()[0],
+        "conda_prefix": os.environ.get("CONDA_PREFIX"),
+        "argv": list(sys.argv),
+        "cuda": cuda_info,
+        "package_versions": versions,
+        "git_repos": git,
+        "env_vars_of_interest": {
+            k: os.environ.get(k) for k in (
+                "FWI_SEGY_ROOT", "PYTORCH_CUDA_ALLOC_CONF", "CUDA_VISIBLE_DEVICES",
+                "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+            )
+        },
+    }
+    if extras:
+        meta["runtime"] = extras
+    (task_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, default=str))
+
+
+def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
     """Construct a :class:`sweep_nn.VelocityINR` from a ReparamSpec.
 
     ``base_vp`` is the initial vp tensor at the first stage's grid. The net
@@ -1053,11 +1455,38 @@ def _build_reparam_net(spec, base_vp, bounds):
     is the optional :class:`ModelBounds` for vp — if provided, the network
     clamps its render output to those limits.
     """
+    import torch  # local import — runner.py keeps torch imports per-function
     from sweep_nn import VelocityINR
 
     bounds_tuple = None
     if bounds is not None and bounds.min is not None and bounds.max is not None:
         bounds_tuple = (float(bounds.min), float(bounds.max))
+    # Water-layer pin: build a boolean mask whose True voxels are
+    # rendered as a fixed water velocity instead of the SIREN output.
+    # When ``water_mask_override`` is supplied the caller has already
+    # built the right mask (typically from a 2-D seabed_depth.npz,
+    # cropped to the post-model_plan window) — use it verbatim. Else
+    # fall back to ``init_vp == water_vp_m_s`` exact equality.
+    water_mask = None
+    if water_mask_override is not None:
+        water_mask = water_mask_override.to(
+            device=base_vp.device, dtype=torch.bool,
+        )
+        if tuple(water_mask.shape) != tuple(base_vp.shape):
+            raise ValueError(
+                f"water_mask_override shape {tuple(water_mask.shape)} != "
+                f"base_vp shape {tuple(base_vp.shape)}"
+            )
+    elif bool(getattr(spec, "mask_water_layer", False)):
+        water_vp_val = float(getattr(spec, "water_vp_m_s", 1500.0))
+        water_mask = (base_vp.detach() == water_vp_val)
+        if not bool(water_mask.any()):
+            import warnings
+            warnings.warn(
+                f"reparam.mask_water_layer=True but no voxels in init_vp "
+                f"equal water_vp_m_s={water_vp_val}; mask will be empty.",
+                stacklevel=2,
+            )
     return VelocityINR(
         base_vp.detach(),
         vp_mean=float(spec.vp_mean),
@@ -1077,6 +1506,8 @@ def _build_reparam_net(spec, base_vp, bounds):
         coord_min=float(spec.coord_min),
         coord_max=float(spec.coord_max),
         bounds=bounds_tuple,
+        water_mask=water_mask,
+        water_vp=float(getattr(spec, "water_vp_m_s", 1500.0)),
     ).to(base_vp.device)
 
 
@@ -1135,7 +1566,8 @@ def _normalise_stage_list(spec) -> list:
 # ---------------------------------------------------------------------------
 
 def _resample_vp_tensor(vp: "torch.Tensor", new_shape: tuple[int, ...]) -> "torch.Tensor":
-    """Bilinear resample of a 2-D vp tensor between grid resolutions.
+    """Resample a vp tensor between grid resolutions (bilinear for 2-D,
+    trilinear for 3-D).
 
     Returns a fresh leaf tensor (requires_grad=True) — caller is responsible
     for re-initialising the optimizer because Adam state is shape-bound.
@@ -1145,8 +1577,24 @@ def _resample_vp_tensor(vp: "torch.Tensor", new_shape: tuple[int, ...]) -> "torc
 
     if tuple(vp.shape) == tuple(new_shape):
         return vp.detach().clone().requires_grad_(True)
+    if vp.ndim == 2:
+        if len(new_shape) != 2:
+            raise ValueError(
+                f"_resample_vp_tensor: vp is 2-D but new_shape={new_shape} is not."
+            )
+        mode = "bilinear"
+    elif vp.ndim == 3:
+        if len(new_shape) != 3:
+            raise ValueError(
+                f"_resample_vp_tensor: vp is 3-D but new_shape={new_shape} is not."
+            )
+        mode = "trilinear"
+    else:
+        raise ValueError(
+            f"_resample_vp_tensor: unsupported vp.ndim {vp.ndim} (expected 2 or 3)."
+        )
     src = vp.detach().unsqueeze(0).unsqueeze(0)
-    dst = F.interpolate(src, size=tuple(new_shape), mode="bilinear", align_corners=True)
+    dst = F.interpolate(src, size=tuple(new_shape), mode=mode, align_corners=True)
     return dst.squeeze(0).squeeze(0).contiguous().clone().requires_grad_(True)
 
 
@@ -1157,6 +1605,31 @@ def _resample_obs_time(obs_np: "np.ndarray", dt_old: float, dt_new: float,
         return obs_np
     from sweep_preproc.resample import resample_time
     return resample_time(obs_np, dt_old, dt_new, axis=time_axis)
+
+
+def _resample_obs_to_solver_dt(obs_t, dt_segy: float, dt_solver: float,
+                               nt_solver: int):
+    """Resample a torch obs tensor along the last axis to solver dt + length.
+
+    Mirrors the legacy 3-D CRG FWI runner's per-iter obs prep: drop to
+    numpy, run scipy.signal.resample_poly via sweep_preproc, truncate /
+    zero-pad to nt_solver, and ship back to the original device.
+    """
+    if abs(dt_segy - dt_solver) < 1.0e-12 and obs_t.shape[-1] == nt_solver:
+        return obs_t
+    import torch
+    from sweep_preproc.resample import resample_time
+
+    arr = obs_t.detach().cpu().numpy()
+    arr = resample_time(arr, dt_segy, dt_solver, axis=-1)
+    cur_nt = arr.shape[-1]
+    if cur_nt > nt_solver:
+        arr = arr[..., :nt_solver]
+    elif cur_nt < nt_solver:
+        pad = [(0, 0)] * arr.ndim
+        pad[-1] = (0, nt_solver - cur_nt)
+        arr = np.pad(arr, pad)
+    return torch.as_tensor(arr, dtype=obs_t.dtype, device=obs_t.device)
 
 
 def _bandpass_obs(obs_np: "np.ndarray", lo: float, hi: float, dt: float,
@@ -1185,10 +1658,10 @@ def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
     residuals that drive bad gradient updates. The result is what users
     see as "dispersion" in the synthetic output.
 
-    The time axis is auto-detected from tensor layout:
-        * c backend, 3-D ``(n, nrec, nt)``       → time at axis -1
-        * eager 4-D ``(n, nt, nrec, nchan)``     → time at axis 1
-        * eager 3-D ``(nt, nrec, nchan=1)``      → time at axis 0
+    The time axis is auto-detected from tensor layout (canonical for both
+    backends after geophyai commit 21041c5):
+        * 4-D ``(n, nt, nrec, nchan)``           → time at axis 1
+        * 3-D single-shot ``(nt, nrec, nchan=1)`` → time at axis 0
     """
     import torch
     from scipy.signal import butter
@@ -1196,19 +1669,19 @@ def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
 
     # Detect time axis + plan permutations to bring time to last.
     if syn.ndim == 4:
-        # eager: (n, nt, nrec, nchan). Move nt to last.
+        # (n, nt, nrec, nchan). Move nt to last.
         permute_to_last = (0, 2, 3, 1)
         inverse_permute = (0, 3, 1, 2)
     elif syn.ndim == 3 and syn.shape[-1] == 1:
-        # eager 3-D: (nt, nrec, 1). Move nt to last.
+        # 3-D single-shot: (nt, nrec, 1). Move nt to last.
         permute_to_last = (1, 2, 0)
         inverse_permute = (2, 0, 1)
-    elif syn.ndim == 3:
-        # c backend: (n, nrec, nt). Time already last.
-        permute_to_last = None
-        inverse_permute = None
     else:
-        raise ValueError(f"_bandpass_syn_torch: unsupported syn.ndim {syn.ndim}")
+        raise ValueError(
+            f"_bandpass_syn_torch: unsupported syn.ndim/shape "
+            f"{syn.ndim}/{tuple(syn.shape)}; expected canonical "
+            "(n, nt, nrec, nchan) or single-shot (nt, nrec, 1)."
+        )
 
     syn_perm = syn.permute(*permute_to_last).contiguous() if permute_to_last else syn
 
@@ -1303,7 +1776,7 @@ def _prepare_stage(
         dedupe_flag = state.get("dedupe_grid_snap", True)
         dedup_method = state.get("dedup_method", "nearest")
         gg, mask = pg.to_grid(
-            dh=(new_dh, new_dh),
+            dh=(float(new_dh),) * pg.ndim,
             dedupe=dedupe_flag,
             dedup_method=dedup_method,
         )
@@ -1486,30 +1959,26 @@ def _prepare_stage(
         # receivers. Apply a per-shot fancy-indexing reduction to obs along
         # the receiver axis. We do this in float32 numpy (CPU-friendly)
         # before time-resampling so downstream operations work on the
-        # already-rectangular ``(nshots, n_common, ...)`` tensor.
-        if obs_np.ndim == 3:
-            # c-backend layout: (nshots, nrec, nt). receiver_axis_pristine == 1.
-            nshots, nrec_pristine, nt_pristine = obs_np.shape
-            new = np.empty(
-                (nshots, per_shot_keep_idx.shape[1], nt_pristine),
-                dtype=obs_np.dtype,
-            )
-            for s in range(nshots):
-                new[s] = obs_np[s, per_shot_keep_idx[s], :]
-            obs_np = new
-        elif obs_np.ndim == 4:
-            # eager layout: (nshots, nt, nrec, nchan). axis -2 = receiver.
+        # already-rectangular ``(nshots, ..., n_common, ...)`` tensor.
+        # Canonical layout (post-geophyai 21041c5) is always 4-D for
+        # solver-produced or SEG-Y-adapted obs.
+        if obs_np.ndim == 4:
+            # canonical: (nshots, nt, nrec, nchan). axis -2 = receiver.
             nshots, nt_pristine, nrec_pristine, nchan = obs_np.shape
             new = np.empty(
                 (nshots, nt_pristine, per_shot_keep_idx.shape[1], nchan),
                 dtype=obs_np.dtype,
             )
+            # ``np.take`` keeps the receiver axis in place; plain fancy
+            # indexing ``obs_np[s, :, idx, :]`` would move it to axis 0 and
+            # give ``(n_keep, nt, nchan)`` instead of ``(nt, n_keep, nchan)``.
             for s in range(nshots):
-                new[s] = obs_np[s, :, per_shot_keep_idx[s], :]
+                new[s] = np.take(obs_np[s], per_shot_keep_idx[s], axis=1)
             obs_np = new
         else:
             raise NotImplementedError(
-                f"per-shot keep on obs.ndim={obs_np.ndim} not implemented"
+                f"per-shot keep on obs.ndim={obs_np.ndim} not implemented "
+                "(expected canonical 4-D (nshots, nt, nrec, nchan))"
             )
     else:
         # Uniform-mask path: existing behavior.
@@ -1603,8 +2072,12 @@ def _prepare_stage(
 
     # ---- Re-init optimizer (Adam state is shape-bound) ---------------------
     # Reparam mode: optimizer state is on network params (shape-invariant),
-    # so DO NOT rebuild — preserving Adam moments across stages is the
-    # main multi-scale benefit of network reparameterization.
+    # so DO NOT rebuild on grid change — preserving Adam moments across
+    # stages is the main multi-scale benefit of network reparameterization.
+    # However, an explicit ``stage.optimizer_reset=True`` forces a rebuild
+    # even in reparam mode (e.g. when switching regimes drastically and
+    # the old momentum has gone stale).
+    force_reset = bool(getattr(stage, "optimizer_reset", False))
     if "optimizer" not in state:
         # Cold-init (e.g. resume-from path). Build appropriate optimizer.
         if state.get("reparam_net") is not None:
@@ -1617,13 +2090,36 @@ def _prepare_stage(
                 spec.optimizer, state["inv_by_name"], required_names,
             )
         state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
+    elif force_reset:
+        if state.get("reparam_net") is not None:
+            state["optimizer"] = _build_reparam_optimizer(
+                spec.optimizer, state["reparam_net"].parameters(),
+                float(spec.reparam.lr),
+            )
+        else:
+            state["optimizer"] = _build_optimizer(
+                spec.optimizer, state["inv_by_name"], required_names,
+            )
+        state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
+        if dist_info.is_root:
+            print(f"[stage {stage_idx}] optimizer_reset=True — Adam moments dropped")
     elif grid_changed and state.get("reparam_net") is None:
         state["optimizer"] = _build_optimizer(
             spec.optimizer, state["inv_by_name"], required_names,
         )
         state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
 
-    _apply_stage_lr_scale(state["optimizer"], state["initial_lrs"], stage.lr_scale)
+    # ``lr_scale`` scales the optimizer's per-group initial lr; for the
+    # reparam path the optimizer holds network params at ``spec.reparam.lr``,
+    # so ``inr_lr_scale`` multiplies on top of that. For the grid path
+    # ``inr_lr_scale`` is ignored (no INR).
+    if state.get("reparam_net") is not None:
+        effective_scale = float(stage.lr_scale) * float(
+            getattr(stage, "inr_lr_scale", 1.0)
+        )
+    else:
+        effective_scale = float(stage.lr_scale)
+    _apply_stage_lr_scale(state["optimizer"], state["initial_lrs"], effective_scale)
 
     # ---- Batch size override ----------------------------------------------
     state["batchsize"] = (
@@ -1682,6 +2178,7 @@ class TaskRunner:
             "wavefield": self._run_wavefield,
             "fwi": self._run_fwi,
             "lsrtm": self._run_lsrtm,
+            "rtm": self._run_rtm,
         }
         runner_fn = dispatcher.get(spec.task_type)
         if runner_fn is None:
@@ -1699,12 +2196,24 @@ class TaskRunner:
             status.artifacts = [str(p) for p in artifacts]
             status.summary = summary
         except Exception as e:  # noqa: BLE001  (we want to surface any failure)
+            import traceback as _tb
+
             status.state = "failed"
             status.error = f"{type(e).__name__}: {e}"
+            # Print the full traceback BEFORE the finally-block's status
+            # write, in case the write itself errors (e.g. the runner
+            # deleted the task dir as part of its own cleanup) and ends
+            # up masking the original exception in the stderr.
+            print(f"[runner] task failed: {status.error}")
+            _tb.print_exc()
         finally:
             status.finished_at = _now_iso()
             if dist_info.is_root:
-                status.write(task_dir / "status.json")
+                try:
+                    task_dir.mkdir(parents=True, exist_ok=True)
+                    status.write(task_dir / "status.json")
+                except Exception as werr:  # noqa: BLE001
+                    print(f"[runner] failed to write status.json: {werr!r}")
             _dist.barrier(dist_info)
             _dist.cleanup_distributed(dist_info)
 
@@ -1872,6 +2381,16 @@ class TaskRunner:
     # -- fwi ---------------------------------------------------------------
 
     def _run_fwi(self, spec: FWISpec, task_dir: Path):
+        # Dispatch the OBN 3-D multisource supershot path early — it has
+        # its own per-iter SEG-Y reads + UTM→model rotation + source-
+        # encoded loop that don't fit the static-(sources, obs)
+        # assumptions of the main ``_fwi_train_step`` machinery. Triggered
+        # by setting ``obs.plan.sampling`` (a PlanSamplingConfig) on a
+        # ``grouping='crg'`` plan.
+        _obs_plan = getattr(spec.obs, "plan", None) if spec.obs is not None else None
+        if _obs_plan is not None and getattr(_obs_plan, "sampling", None) is not None:
+            return self._run_fwi_multisource(spec, task_dir)
+
         import torch
 
         from sweep_runner import distributed as _dist
@@ -2097,17 +2616,44 @@ class TaskRunner:
 
         # Build the pristine snapshot used to re-derive each stage's obs
         # (so per-stage bandpass / dt / receiver-mask don't compound).
-        # Layout depends on backend (see _adapt_segy_obs_to_backend above
-        # and _apply_data_plan_to_fwi).
+        # Canonical layout for both backends: (nshots, nt, nrec[, nfield]).
+        # 4-D shapes carry the trailing channel; 3-D obs lacks it (rare,
+        # e.g. user-supplied npy without channel axis).
         from sweep_io.geometry import PhysicalGeometry
-        if spec.backend.impl == "eager":
-            pristine_time_axis = -3 if obs.ndim >= 4 else -2
-            pristine_recv_axis = -2 if obs.ndim >= 4 else -1
-        else:
-            pristine_recv_axis = 1
-            pristine_time_axis = -2 if obs.ndim >= 4 else -1
+        pristine_time_axis = -3 if obs.ndim >= 4 else -2
+        pristine_recv_axis = -2 if obs.ndim >= 4 else -1
         pristine_obs_np = (obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor)
                            else np.asarray(obs))
+        # Multi-rank memory share: when the runner is torchrun-launched
+        # (world_size > 1), every rank otherwise holds its own ~per-shot
+        # × per-trace × nt float32 copy of pristine_obs_np (no slicing
+        # at this point). For Viking-scale 2-D obs this is ~2 GB/rank ×
+        # 8 ranks = 16 GB JUST for the pristine snapshot, plus transient
+        # bandpass/resample doubles during stage transitions, easily
+        # OOMs at finer stages. Mitigate by writing the snapshot once
+        # (rank 0) to a tmpfile under /dev/shm and re-opening it via
+        # ``np.load(..., mmap_mode='r')`` everywhere — Linux shares the
+        # file's pages across processes through the page cache, so the
+        # per-rank RSS attribution stays tiny.
+        if dist_info.is_distributed and pristine_obs_np.nbytes > 64 * 1024 * 1024:
+            import os
+            import tempfile
+
+            jid = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+            shm_dir = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(tempfile.gettempdir())
+            shared_path = shm_dir / f"sweep_tasks_pristine_obs_{jid}.npy"
+            if dist_info.is_root:
+                np.save(shared_path, pristine_obs_np)
+            _dist.barrier(dist_info)
+            try:
+                pristine_obs_np = np.load(shared_path, mmap_mode="r")
+                if dist_info.is_root:
+                    print(f"[fwi] pristine_obs_np ({pristine_obs_np.nbytes / (1<<30):.2f} GB) "
+                          f"shared via {shared_path} (mmap'd by every rank)")
+            except Exception as err:  # noqa: BLE001
+                if dist_info.is_root:
+                    print(f"[fwi] pristine_obs_np shared-mmap fallback "
+                          f"failed ({err}); each rank keeps its own copy.")
         # Pristine physical geometry: when SEG-Y was loaded, prefer the
         # ORIGINAL un-rounded physical positions (in meters from SEG-Y
         # headers) over the dh-quantized versions. This is critical for
@@ -2136,6 +2682,31 @@ class TaskRunner:
                 dt=effective_dt, nt=effective_nt,
             )
 
+        # ``pristine_dt`` is the sampling interval of the obs we just snapped
+        # — NOT the solver's dt. For SEG-Y obs the runner did NOT resample
+        # at load time (per-stage helpers do the dt-sync), so pristine_dt
+        # must reflect the SEG-Y file's native dt; otherwise the first
+        # stage's ``_resample_obs_time(obs, pristine_dt, new_dt)`` mis-
+        # interprets the time axis and either decimates valid samples or
+        # smears the trace via fake up-sampling. ``data_plan.dt_target_s``
+        # already resampled the obs to ``effective_dt`` upstream, so in
+        # that path we keep the effective_dt label.
+        obs_native_dt = float(effective_dt)
+        if (spec.data_plan is None or spec.data_plan.dt_target_s is None) and (
+            (getattr(spec.obs, "segy", None) is not None
+             or getattr(spec.obs, "segy_index", None) is not None
+             or getattr(spec.obs, "plan", None) is not None)
+        ) and segy_cache:
+            for payload in segy_cache.values():
+                if isinstance(payload, dict) and "dt_s" in payload:
+                    obs_native_dt = float(payload["dt_s"])
+                    break
+            if abs(obs_native_dt - float(effective_dt)) > 1e-12 and dist_info.is_root:
+                print(f"[fwi] obs native dt={obs_native_dt}s differs from solver "
+                      f"dt={effective_dt}s; pristine_dt set to SEG-Y native so "
+                      f"per-stage resample lines up. Set spec.data_plan.dt_target_s "
+                      f"to force an upfront resample.")
+
         # Per-stage mutable state. Seeded with the post-step-7 baseline.
         # Per-stage helpers consult / mutate this dict; everything the
         # train step needs lives in here.
@@ -2155,7 +2726,7 @@ class TaskRunner:
             "obs": obs, "batchsize": int(spec.batchsize),
             # pristine sources for re-derivation
             "pristine_obs_np": pristine_obs_np,
-            "pristine_dt": float(effective_dt),
+            "pristine_dt": obs_native_dt,
             "pristine_obs_time_axis": pristine_time_axis,
             "pristine_obs_receiver_axis": pristine_recv_axis,
             "pristine_physical_geom": pristine_physical_geom,
@@ -2238,6 +2809,7 @@ class TaskRunner:
                     local_window_ctx=local_window_ctx,
                     syn_bandpass=stage_bandpass,
                     stage_dt=state["dt"],
+                    state_for_dump=state,
                 )
                 losses.append(loss_value)
                 if scheduler is not None:
@@ -2340,10 +2912,9 @@ class TaskRunner:
     def _fwi_generate_obs(self, spec, equation_cls, solver, wavelet,
                           sources, receivers, shape, dev, nshots,
                           *, segy_cache: dict | None = None):
-        """Return obs tensor — shape depends on backend:
-            eager:  (nshots, nt, nrec, 1)
-            c:      (nshots, nrec, nt)
-        Always CPU-resident.
+        """Return obs tensor in canonical layout (nshots, nt, nrec, 1)
+        for both backends (geophyai 21041c5 aligned the c-backend record
+        output). Always CPU-resident.
 
         For SEG-Y sources, when the same file / index was already scanned by
         the geometry resolver, the cached obs is reused without a second read.
@@ -2362,14 +2933,12 @@ class TaskRunner:
             return obs
 
         def _adapt_segy_obs_to_backend(obs_nrec_nt: np.ndarray) -> "torch.Tensor":
-            """SEGYReader always returns (nshots, nrec, nt). Match sweep's syn:
-                eager → (nshots, nt, nrec, 1)
-                c     → (nshots, nrec, nt)
+            """SEGYReader always returns (nshots, nrec, nt). Match sweep's
+            canonical syn layout shared by both backends after geophyai
+            commit 21041c5: (nshots, nt, nrec, 1).
             """
             arr = obs_nrec_nt.astype(np.float32, copy=False)
-            if spec.backend.impl == "eager":
-                # transpose to (nshots, nt, nrec) and add the trailing channel.
-                arr = np.ascontiguousarray(arr.transpose(0, 2, 1))[..., None]
+            arr = np.ascontiguousarray(arr.transpose(0, 2, 1))[..., None]
             return torch.from_numpy(arr)
 
         if obs_spec.segy is not None:
@@ -2413,6 +2982,25 @@ class TaskRunner:
             if obs_aligned.shape[0] != nshots:
                 raise ValueError(
                     f"obs.segy_index gave {obs_aligned.shape[0]} shots but "
+                    f"geometry-derived nshots={nshots}."
+                )
+            return _adapt_segy_obs_to_backend(obs_aligned)
+
+        if obs_spec.plan is not None:
+            cfg = obs_spec.plan
+            grid_ndim = len(spec.grid.shape) if spec.grid.shape is not None else None
+            payload = _load_seismic_plan_payload(
+                cfg.plan_path,
+                cache_all=bool(cfg.cache_all),
+                grid_ndim=grid_ndim,
+                cache=segy_cache,
+            )
+            _, _, obs_aligned = _segy_geometry_to_grid_indices(
+                payload, float(spec.grid.dh), dedupe=False, dedup_method="nearest",
+            )
+            if obs_aligned.shape[0] != nshots:
+                raise ValueError(
+                    f"obs.plan gave {obs_aligned.shape[0]} shots but "
                     f"geometry-derived nshots={nshots}."
                 )
             return _adapt_segy_obs_to_backend(obs_aligned)
@@ -2483,36 +3071,36 @@ class TaskRunner:
 
         extract = None
         if spec.qc.shot_gather:
-            n_obs = int(state["obs"].shape[0])
-            n_pick = max(1, min(int(spec.qc.shot_gather_n_shots), n_obs))
-            shot_ids = np.linspace(0, n_obs - 1, n_pick, dtype=int).tolist()
+            # Reuse the syn / obs snapshot captured at the end of the most
+            # recent train step's last chunk. This avoids running an extra
+            # solver forward inside the QC path (which doubles per-iter
+            # GPU work) AND guarantees we visualise exactly what the loss
+            # compared — including the syn bandpass applied in the train
+            # step.
+            snap = getattr(self, "_last_qc_snapshot", None)
+            if snap is None:
+                # First QC fires before the first train step on rare cold
+                # paths; nothing to plot. Skip silently.
+                extract = None
+            else:
+                n_pick = max(1, min(int(spec.qc.shot_gather_n_shots),
+                                    int(snap["syn"].shape[0])))
+                # Evenly subsample within the last chunk to give a
+                # representative sample at low cost.
+                snap_n = int(snap["syn"].shape[0])
+                pick_within = np.linspace(0, snap_n - 1, n_pick, dtype=int)
+                shot_ids = [int(snap["chunk_indices"][int(i)]) for i in pick_within]
 
             def _extract():
-                # One extra forward over the picked shots. Build a list of
-                # ``models`` matching the train step's chunk forward — use
-                # the current vp (rendered if reparam, leaf otherwise).
-                with torch.no_grad():
-                    if state.get("reparam_net") is not None:
-                        models = [state["reparam_net"]().detach()]
-                    else:
-                        models = state["inv_in_order"]
-                    src = state["sources"][shot_ids]
-                    rec = state["receivers"][shot_ids]
-                    syn = state["solver"](state["wavelet"], src, rec, models=models)
-                syn_np = syn.detach().cpu().numpy()
-                obs_chunk = state["obs"][shot_ids].detach().cpu().numpy() \
-                    if hasattr(state["obs"][shot_ids], "detach") \
-                    else np.asarray(state["obs"][shot_ids])
-                # Normalise both to (n_shots, nt, nrec) — same as canonical sweep_loss
-                # layout, so the QC plotter can assume time is on axis -2.
-                if spec.backend.impl == "eager":
-                    if syn_np.ndim == 4 and syn_np.shape[-1] == 1:
-                        syn_np = syn_np[..., 0]
-                    if obs_chunk.ndim == 4 and obs_chunk.shape[-1] == 1:
-                        obs_chunk = obs_chunk[..., 0]
-                else:  # c backend: (n, nrec, nt) → transpose to (n, nt, nrec)
-                    syn_np = np.transpose(syn_np, (0, 2, 1))
-                    obs_chunk = np.transpose(obs_chunk, (0, 2, 1))
+                syn_np = snap["syn"][pick_within].numpy()
+                obs_chunk = snap["obs"][pick_within].numpy()
+                # Both backends emit canonical (n_shots, nt, nrec, nchan).
+                # Squeeze the trailing channel for the QC plotter which
+                # expects (n_shots, nt, nrec) with time on axis -2.
+                if syn_np.ndim == 4 and syn_np.shape[-1] == 1:
+                    syn_np = syn_np[..., 0]
+                if obs_chunk.ndim == 4 and obs_chunk.shape[-1] == 1:
+                    obs_chunk = obs_chunk[..., 0]
 
                 # Per-shot dedupe: at coarse dh, multiple physical receivers
                 # snap to the same grid cell, producing identical syn traces.
@@ -2556,11 +3144,71 @@ class TaskRunner:
         except Exception as err:  # noqa: BLE001
             print(f"[qc] epoch {epoch} failed: {err}")
 
+    def _maybe_dump_loss_inputs(self, obs_chunk, syn, chunk, dist_info,
+                                syn_bandpass, stage_dt,
+                                state: dict | None = None) -> None:
+        """One-shot debug dump of the exact obs/syn pair the loss consumed.
+
+        Activated by env ``DUMP_LOSS_INPUTS=<path.npz>``. Fires once per
+        process — saves the last chunk's CPU-side obs and syn (post
+        bandpass), the chunk shot indices, and the current stage's dt /
+        bandpass metadata. With ``DUMP_LOSS_INPUTS_EXIT=1`` the runner
+        exits cleanly right after the dump, so users can capture a
+        single iter's loss inputs with one sbatch and read them back
+        offline.
+        """
+        if not dist_info.is_root:
+            return
+        dump_path = os.environ.get("DUMP_LOSS_INPUTS")
+        if not dump_path or getattr(self, "_loss_inputs_dumped", False):
+            return
+        payload: dict = {
+            "obs": obs_chunk.detach().cpu().numpy(),
+            "syn": syn.detach().cpu().numpy(),
+            "chunk_indices": np.asarray(chunk, dtype=np.int64),
+            "stage_dt_s": float(stage_dt) if stage_dt is not None else float("nan"),
+        }
+        if syn_bandpass is not None:
+            payload["bandpass_lo_hz"] = float(syn_bandpass.lo_hz)
+            payload["bandpass_hi_hz"] = float(syn_bandpass.hi_hz)
+            payload["bandpass_order"] = int(syn_bandpass.order)
+        # Optional: snapshot the runner-side per-shot positions + pre-bandpass
+        # pristine obs slice for the same chunk, so the user can verify
+        # exactly what raw data the bandpass was applied to.
+        if state is not None:
+            try:
+                src = np.asarray(state.get("sources"))[np.asarray(chunk, dtype=np.int64)]
+                payload["source_grid_idx"] = np.asarray(src, dtype=np.int64)
+                rec = np.asarray(state.get("receivers"))[np.asarray(chunk, dtype=np.int64)]
+                payload["receiver_grid_idx"] = np.asarray(rec, dtype=np.int64)
+                payload["grid_dh_m"] = float(state.get("dh", float("nan")))
+                pristine = state.get("pristine_obs_np")
+                if pristine is not None:
+                    payload["pristine_obs_for_chunk"] = (
+                        np.asarray(pristine)[np.asarray(chunk, dtype=np.int64)]
+                        .astype(np.float32, copy=False)
+                    )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[debug] dump-state extras failed: {exc}", flush=True)
+        out_dir = os.path.dirname(dump_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        np.savez(dump_path, **payload)
+        self._loss_inputs_dumped = True
+        print(f"[debug] dumped loss inputs to {dump_path} "
+              f"(obs={payload['obs'].shape}, syn={payload['syn'].shape})",
+              flush=True)
+        if os.environ.get("DUMP_LOSS_INPUTS_EXIT"):
+            print("[debug] DUMP_LOSS_INPUTS_EXIT set; exiting cleanly",
+                  flush=True)
+            raise SystemExit(0)
+
     def _fwi_train_step(self, spec, solver, wavelet, sources, receivers,
                         inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
                         *, dist_info=None, stage_batchsize: int | None = None,
                         reparam_net=None, local_window_ctx=None,
-                        syn_bandpass=None, stage_dt: float | None = None) -> float:
+                        syn_bandpass=None, stage_dt: float | None = None,
+                        state_for_dump: dict | None = None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -2715,11 +3363,36 @@ class TaskRunner:
             else "single_step"
         )
 
+        illum_spec = getattr(spec, "illumination_precondition", None)
+        illum_on = bool(illum_spec is not None and illum_spec.enabled)
+        if illum_on and local_window_ctx is not None:
+            raise NotImplementedError(
+                "illumination_precondition is not supported together with "
+                "local_model_window: the per-window illumination tensor "
+                "shape varies per chunk, so per-window accumulation is "
+                "not implemented. Disable one of the two."
+            )
+        # The eager (autograd PyTorch) backend does not populate
+        # ``solver.source_illumination`` / ``receiver_illumination`` — those
+        # are a feature of the compiled C kernel. Warn once per train step
+        # so the user isn't silently running a no-op precondition.
+        if illum_on and dist_info.is_root and getattr(spec.backend, "impl", "eager") == "eager":
+            if not getattr(self, "_illum_eager_warned", False):
+                print(
+                    "[illum] WARN: illumination_precondition is enabled but "
+                    "spec.backend.impl='eager' — the eager autograd backend "
+                    "does not populate solver.source_illumination / "
+                    "receiver_illumination, so the precondition is a no-op. "
+                    "Switch to backend.impl='c' for the production path."
+                )
+                self._illum_eager_warned = True
         if reparam_net is None or reparam_mode == "single_step":
             # ---- (A) single-step: everything inside one autograd graph ----
             optimizer.zero_grad()
             acc_loss_local = 0.0
-            for chunk in chunks:
+            sill_sum = None
+            rill_sum = None
+            for chunk_idx_in_iter, chunk in enumerate(chunks):
                 models, chunk_solver, chunk_src, chunk_rec = _chunk_inputs(chunk)
                 syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
                 if syn_bandpass is not None and stage_dt is not None:
@@ -2729,14 +3402,52 @@ class TaskRunner:
                 loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
                 (loss_t / global_norm).backward()
                 acc_loss_local += float(loss_t.detach().cpu())
+                if illum_on:
+                    sill_sum, rill_sum = _accumulate_illumination(
+                        chunk_solver, sill_sum, rill_sum,
+                    )
+                # Snapshot last chunk for QC reuse (avoid running a fresh
+                # forward inside ``_run_epoch_qc_safe._extract``). Only the
+                # final chunk's syn/obs survive across iters; QC at every
+                # show_every iter will see the most recent train batch.
+                if dist_info.is_root and chunk_idx_in_iter == len(chunks) - 1:
+                    self._last_qc_snapshot = {
+                        "chunk_indices": np.asarray(chunk, dtype=np.int64).copy(),
+                        "syn": syn.detach().to("cpu"),
+                        "obs": obs_chunk.detach().to("cpu"),
+                    }
+                    self._maybe_dump_loss_inputs(
+                        obs_chunk, syn, chunk, dist_info, syn_bandpass, stage_dt,
+                        state=state_for_dump,
+                    )
             if reparam_net is None:
                 _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
                 _dist.all_reduce_grad_sum(inv_in_order, dist_info)
+                if illum_on:
+                    # Match the gradient's all-reduce so multi-rank accumulation
+                    # is consistent. We only support per-cell vp illumination
+                    # here (the only inverted model in OBN FWI).
+                    if sill_sum is not None and rill_sum is not None:
+                        _dist.all_reduce_sum_inplace(sill_sum, dist_info)
+                        _dist.all_reduce_sum_inplace(rill_sum, dist_info)
+                    vp_grad = inv_by_name.get("vp").grad if "vp" in inv_by_name else None
+                    _apply_illumination_precond(
+                        vp_grad, sill_sum, rill_sum,
+                        eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                    )
             else:
                 _dist.all_reduce_grad_sum(
                     [p for p in reparam_net.parameters() if p.grad is not None],
                     dist_info,
                 )
+                if illum_on and dist_info.is_root:
+                    # Reparam + single_step: net params don't have a per-cell
+                    # illumination correspondence. Use two_pass_full instead
+                    # to get illumination preconditioning on the leaf gradient
+                    # before the network backward.
+                    print("[illum] WARN: illumination_precondition is "
+                          "a no-op under reparam.backward_mode='single_step'. "
+                          "Switch to 'two_pass_full' to enable it.")
             optimizer.step()
         else:
             # ---- (B) two-pass: solver phase against a leaf, then net phase ----
@@ -2789,7 +3500,9 @@ class TaskRunner:
                 models = [leaf[z0:z1, x0:x1].contiguous()]
                 return models, local_solver, local_src, local_rec
 
-            for chunk in chunks:
+            sill_sum = None
+            rill_sum = None
+            for chunk_idx_in_iter, chunk in enumerate(chunks):
                 models, chunk_solver, chunk_src, chunk_rec = _two_pass_chunk_inputs(chunk, base_leaf)
                 syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
                 if syn_bandpass is not None and stage_dt is not None:
@@ -2799,10 +3512,39 @@ class TaskRunner:
                 loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
                 (loss_t / global_norm).backward()
                 acc_loss_local += float(loss_t.detach().cpu())
+                if illum_on:
+                    sill_sum, rill_sum = _accumulate_illumination(
+                        chunk_solver, sill_sum, rill_sum,
+                    )
+                # Snapshot last chunk for QC reuse (see single-step branch).
+                if dist_info.is_root and chunk_idx_in_iter == len(chunks) - 1:
+                    self._last_qc_snapshot = {
+                        "chunk_indices": np.asarray(chunk, dtype=np.int64).copy(),
+                        "syn": syn.detach().to("cpu"),
+                        "obs": obs_chunk.detach().to("cpu"),
+                    }
+                    self._maybe_dump_loss_inputs(
+                        obs_chunk, syn, chunk, dist_info, syn_bandpass, stage_dt,
+                        state=state_for_dump,
+                    )
 
             # leaf.grad now holds the full-grid FWI gradient ∂L/∂v.
             # Push it through the network in a second pass.
             v_grad = base_leaf.grad
+            # Illumination precondition the leaf gradient BEFORE the
+            # network backward so the network sees the preconditioned
+            # velocity gradient. The all-reduce of the leaf gradient
+            # happens implicitly via the network backward (each rank
+            # computes its own contribution and gradients on net params
+            # are all_reduced after).
+            if illum_on and v_grad is not None:
+                if sill_sum is not None and rill_sum is not None:
+                    _dist.all_reduce_sum_inplace(sill_sum, dist_info)
+                    _dist.all_reduce_sum_inplace(rill_sum, dist_info)
+                _apply_illumination_precond(
+                    v_grad, sill_sum, rill_sum,
+                    eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                )
             if v_grad is None:
                 # Nothing actually backpropped (e.g. all chunks were empty);
                 # nothing to do.
@@ -2841,6 +3583,2090 @@ class TaskRunner:
         return acc_loss_global / global_norm if global_norm else 0.0
 
     # -- lsrtm -------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # OBN 3-D CRG-plan FWI (source-encoded supershot path)
+    # ------------------------------------------------------------------
+
+    def _run_fwi_multisource(self, spec: FWISpec, task_dir: Path):
+        """3-D OBN FWI driver — unified plan + UTM rotation + source encoding.
+
+        Implements the production OBN 1-GPU path on the unified plan stack:
+        every iteration draws a shared-shots batch from a
+        ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`,
+        encodes it as a ±1-signed supershot, runs one ``Acoustic3D``
+        forward + adjoint with ``source_encoding=True``, and steps the
+        optimizer. Per-shot multi-GPU CRG mode (without encoding) is not
+        yet wired and will raise a clear error.
+
+        Setup deviations from :meth:`_run_fwi` (the static-obs CSG path):
+
+        * Geometry comes from :class:`FromPlanGeometry` configured with
+          ``rotation_metadata`` + (optionally) ``dh_xyz_m`` /
+          ``grid_origin_xyz_m`` / ``auto_origin_pad_cells``. UTM source /
+          shot positions get rotated via
+          :class:`sweep_io.geometry.RotatedFrame` into the model frame,
+          then quantised to grid indices.
+        * Obs is streamed per iter via
+          :class:`sweep_io.seismic_plan.PlanReader.read_rows` (one SEG-Y
+          read pass per iter). No giant ``(nshots, nrec, nt)`` tensor
+          materialised at task start.
+        * Source encoding flips ``signs ∈ {-1, +1}^B`` per iter; the
+          wavelet becomes ``(1, B, nt)`` and obs becomes
+          ``Σ_i sign_i · obs_i`` of shape ``(1, n_shared, nt)`` — one
+          forward call per iter regardless of B.
+
+        Activated via the ``obs.plan.sampling`` block — when that's set on
+        a ``grouping='crg'`` plan the runner dispatches here; otherwise it
+        runs the static-obs CSG loop in :meth:`_run_fwi`.
+        """
+        import torch
+
+        from sweep_io.geometry import load_rotation_metadata
+        from sweep_io.seismic_plan import (
+            PlanReader,
+            SeismicPlan,
+            precompute_group_unique_keys,
+            sample_shared_shots_from_plan,
+        )
+        from sweep_runner import distributed as _dist
+
+        dist_info = getattr(self, "_dist", None)
+        if dist_info is None:
+            dist_info = _dist.init_distributed_if_needed()
+            self._dist = dist_info
+        if dist_info.is_distributed:
+            raise NotImplementedError(
+                "Multisource supershot FWI does not support torchrun "
+                "multi-GPU in this phase. Run on a single GPU (the "
+                "source-encoded supershot path is 1-GPU by construction) "
+                "or open an issue."
+            )
+
+        if spec.obs.plan is None or spec.obs.plan.sampling is None:
+            raise ValueError(
+                "_run_fwi_multisource requires obs.plan.sampling to be set "
+                "(PlanSamplingConfig — see ObsPlanConfig.sampling)."
+            )
+        sampling_cfg = spec.obs.plan.sampling
+        if Path(spec.geometry.plan_path) != Path(spec.obs.plan.plan_path):
+            raise ValueError(
+                "geometry.plan_path and obs.plan.plan_path must point at "
+                f"the same file; got {spec.geometry.plan_path!r} vs "
+                f"{spec.obs.plan.plan_path!r}."
+            )
+
+        _apply_seed(spec.seed)
+        dev = _resolve_device(spec.device)
+
+        encoding_spec = spec.source_encoding
+        encoding_on = bool(encoding_spec is not None and encoding_spec.enabled)
+        if not encoding_on:
+            raise NotImplementedError(
+                "Per-shot CRG (multi-GPU) mode is not yet wired; set "
+                "source_encoding.enabled=true for the production 1-GPU "
+                "supershot path."
+            )
+        if int(sampling_cfg.shared_shots_per_iter) == 0:
+            raise ValueError(
+                "source_encoding requires obs.plan.sampling.shared_shots_per_iter > 0 "
+                "(the runner needs the shared-shots sampler so every batch "
+                "group sees the same receiver set)."
+            )
+
+        # Setup-phase timer: each major step prints its wall time so the
+        # iter-loop profile isn't bottlenecked by setup costs we can't see.
+        _t_setup0 = time.perf_counter()
+        def _stage(label: str, t_start: float) -> float:
+            now = time.perf_counter()
+            print(f"[multisource] setup {label}: {now - t_start:.2f}s "
+                  f"(cumulative {now - _t_setup0:.2f}s)")
+            return now
+
+        # --- 1) Load plan + rotation, apply min_coverage filter.
+        _t = time.perf_counter()
+        plan = SeismicPlan.load(spec.geometry.plan_path)
+        _t = _stage(f"SeismicPlan.load (n_rows={plan.n_rows:,}, n_groups={plan.n_groups})", _t)
+        if plan.grouping != "crg":
+            raise ValueError(
+                "_run_fwi_multisource requires a grouping='crg' SeismicPlan "
+                f"(got {plan.grouping!r}). Use 'sweep-tasks build-plan "
+                "--grouping crg --receiver-quantize-m ...' to build one."
+            )
+        if spec.geometry.rotation_metadata is None:
+            raise ValueError(
+                "Multisource FWI on a CRG plan requires "
+                "geometry.rotation_metadata (UTM → model-frame transform). "
+                "Set FromPlanGeometry.rotation_metadata to the dataset's "
+                "rotation_metadata.json."
+            )
+        min_cov = max(int(encoding_spec.min_coverage),
+                      int(sampling_cfg.min_coverage))
+        # NOTE: we do NOT pre-filter the plan by min_coverage at this point.
+        # `sample_shared_shots_from_plan` accepts min_coverage as a sampling
+        # parameter and applies it as a cheap per-group-row-counts mask
+        # each iter (microseconds). Pre-filtering via plan.filter_groups
+        # rewrites the entire multi-GB plan even when only a few
+        # groups are dropped — costs minutes of setup on a large survey
+        # and saves zero solver compute.
+        if min_cov > 0:
+            n_below = int((plan.per_group_row_counts() < min_cov).sum())
+            print(f"[multisource] min_coverage={min_cov}: deferred to sampler "
+                  f"(would drop {n_below}/{plan.n_groups} groups; pre-filtering "
+                  "the plan is too expensive on a multi-GB CRG layout).")
+        frame = load_rotation_metadata(spec.geometry.rotation_metadata)
+        _t = _stage("load_rotation_metadata", _t)
+
+        # --- 2) Init model + shape + dh.
+        init_models = _normalize_fwi_init_models(spec)
+        if init_models[0].path is None:
+            raise ValueError(
+                "Multisource FWI requires init_model.path (a 3-D vp "
+                "npy); ModelRef.constant is not supported on this path."
+            )
+        init_vp_np = np.load(init_models[0].path).astype(np.float32)
+        if init_vp_np.ndim != 3:
+            raise ValueError(
+                f"CRG-plan FWI expects a 3-D init_model (nz, ny, nx); "
+                f"got shape {init_vp_np.shape}"
+            )
+        dh_xyz = spec.geometry.dh_xyz_m
+        if dh_xyz is None:
+            dh = float(spec.grid.dh)
+            dh_xyz = (dh, dh, dh)
+        dz_m, dy_m, dx_m = float(dh_xyz[0]), float(dh_xyz[1]), float(dh_xyz[2])
+
+        # --- 3) Pre-project UTM → model frame xy.
+        # ONE rotation pass per array. Rotation is a numpy matmul on every
+        # point — was previously called 2-3 times (auto-origin, initial
+        # projection, post-filter re-projection); each call took tens of seconds
+        # on a large plan, even Lustre-warm, summing to minutes of dead
+        # setup time. Now we project once, reuse via fancy-indexing.
+        # MOVED UP (was post-crop): the auto-origin is now computed
+        # before the model_plan crop so the crop can be origin-aware
+        # (see the fix below). Same data, same single rotation pass —
+        # just relocated.
+        plan_model_xy = frame.to_model(plan.row_source_xyz[:, :2])
+        _t = _stage(f"frame.to_model on plan.row_source_xy ({plan.n_rows:,} pts)", _t)
+        src_model_xy = frame.to_model(plan.group_xyz[:, :2])
+        _t = _stage(f"frame.to_model on plan.group_xy ({plan.n_groups} pts)", _t)
+
+        # --- 3b) Grid origin (auto from rotated bbox if not given). The
+        # init_vp_np grid uses THIS same origin (it's built with the same
+        # auto-pad rule); the model_plan crop below converts user-space
+        # x/y/z windows in model meters → cell indices via this origin.
+        origin = spec.geometry.grid_origin_xyz_m
+        pad_z, pad_y, pad_x = (int(p) for p in spec.geometry.auto_origin_pad_cells)
+        if origin is None:
+            x_min = float(min(src_model_xy[:, 0].min(), plan_model_xy[:, 0].min()))
+            y_min = float(min(src_model_xy[:, 1].min(), plan_model_xy[:, 1].min()))
+            z_min = float(min(plan.group_xyz[:, 2].min(),
+                              plan.row_source_xyz[:, 2].min()))
+            origin = (
+                z_min - pad_z * dz_m,
+                y_min - pad_y * dy_m,
+                x_min - pad_x * dx_m,
+            )
+            print(f"[multisource] auto grid_origin_xyz_m = "
+                  f"({origin[0]:.1f}, {origin[1]:.1f}, {origin[2]:.1f})")
+            _t = _stage("auto grid_origin (bbox.min - pad)", _t)
+        init_origin_z = float(origin[0])
+        init_origin_y = float(origin[1])
+        init_origin_x = float(origin[2])
+
+        # --- 2b) Optional ModelPlan: crop vp to inversion window. The
+        # crop is ORIGIN-AWARE: ``x_lo = floor((x_window - origin_x) / dh)``
+        # so the data slice corresponds to the requested model-meter
+        # window. Earlier versions computed ``x_lo = floor(x_window / dh)``
+        # (no origin shift) — with a negative auto-origin (the edge pad) this
+        # shifted the actual grid coverage left by the pad,
+        # silently chopping the OBN nodes on the right edge of every run.
+        nz_pre, ny_pre, nx_pre = init_vp_np.shape
+        z_lo, z_hi = 0, nz_pre
+        y_lo, y_hi = 0, ny_pre
+        x_lo, x_hi = 0, nx_pre
+        crop_origin_offset = (0.0, 0.0, 0.0)
+        if spec.model_plan is not None:
+            mp = spec.model_plan
+            z_lo = int(np.floor((mp.z_window_m[0] - init_origin_z) / dz_m)) if mp.z_window_m else 0
+            z_hi = int(np.ceil((mp.z_window_m[1] - init_origin_z) / dz_m)) + 1 if mp.z_window_m else nz_pre
+            y_lo = int(np.floor((mp.y_window_m[0] - init_origin_y) / dy_m)) if mp.y_window_m else 0
+            y_hi = int(np.ceil((mp.y_window_m[1] - init_origin_y) / dy_m)) + 1 if mp.y_window_m else ny_pre
+            x_lo = int(np.floor((mp.x_window_m[0] - init_origin_x) / dx_m)) if mp.x_window_m else 0
+            x_hi = int(np.ceil((mp.x_window_m[1] - init_origin_x) / dx_m)) + 1 if mp.x_window_m else nx_pre
+            z_lo = max(0, z_lo); z_hi = min(nz_pre, z_hi)
+            y_lo = max(0, y_lo); y_hi = min(ny_pre, y_hi)
+            x_lo = max(0, x_lo); x_hi = min(nx_pre, x_hi)
+            if z_hi <= z_lo or y_hi <= y_lo or x_hi <= x_lo:
+                raise ValueError(
+                    f"model_plan window collapsed: "
+                    f"z=[{z_lo},{z_hi}) y=[{y_lo},{y_hi}) x=[{x_lo},{x_hi})"
+                )
+            init_vp_np = init_vp_np[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi].copy()
+            crop_origin_offset = (z_lo * dz_m, y_lo * dy_m, x_lo * dx_m)
+            print(f"[multisource] model_plan crop: vp shape "
+                  f"({nz_pre},{ny_pre},{nx_pre}) -> {init_vp_np.shape}, "
+                  f"crop_origin_offset += ({crop_origin_offset[0]:.1f}, "
+                  f"{crop_origin_offset[1]:.1f}, {crop_origin_offset[2]:.1f}) m "
+                  f"(model-x window covered: "
+                  f"[{init_origin_x + crop_origin_offset[2]:.1f}, "
+                  f"{init_origin_x + crop_origin_offset[2] + init_vp_np.shape[-1] * dx_m:.1f}) m)")
+        shape = tuple(int(v) for v in init_vp_np.shape)
+        nz, ny, nx = shape
+
+        # Final cropped-frame origin (used by all grid-index projections).
+        origin_z = init_origin_z + crop_origin_offset[0]
+        origin_y = init_origin_y + crop_origin_offset[1]
+        origin_x = init_origin_x + crop_origin_offset[2]
+
+        # --- 4) Compute integer grid indices (no more rotations).
+        plan_grid_x = np.rint((plan_model_xy[:, 0] - origin_x) / dx_m).astype(np.int64)
+        plan_grid_y = np.rint((plan_model_xy[:, 1] - origin_y) / dy_m).astype(np.int64)
+        plan_grid_z = np.rint(
+            (plan.row_source_xyz[:, 2] - origin_z) / dz_m
+        ).astype(np.int64)
+        src_grid_x = np.rint((src_model_xy[:, 0] - origin_x) / dx_m).astype(np.int64)
+        src_grid_y = np.rint((src_model_xy[:, 1] - origin_y) / dy_m).astype(np.int64)
+        src_grid_z = np.rint(
+            (plan.group_xyz[:, 2] - origin_z) / dz_m
+        ).astype(np.int64)
+        # Sweep's source/receiver coord convention is (x, y, z) along the
+        # last axis (matches Acoustic3D's grid).
+        plan_grid_xyz = np.stack([plan_grid_x, plan_grid_y, plan_grid_z], axis=-1)
+        src_grid_xyz = np.stack([src_grid_x, src_grid_y, src_grid_z], axis=-1)
+        _t = _stage("grid index projection (rint + stack)", _t)
+
+        # When the grid is smaller than the rotated survey extent, drop
+        # rows/groups whose source position falls outside.
+        row_in = (
+            (plan_grid_xyz[:, 0] >= 0) & (plan_grid_xyz[:, 0] < nx)
+            & (plan_grid_xyz[:, 1] >= 0) & (plan_grid_xyz[:, 1] < ny)
+            & (plan_grid_xyz[:, 2] >= 0) & (plan_grid_xyz[:, 2] < nz)
+        )
+        slot_in = (
+            (src_grid_xyz[:, 0] >= 0) & (src_grid_xyz[:, 0] < nx)
+            & (src_grid_xyz[:, 1] >= 0) & (src_grid_xyz[:, 1] < ny)
+            & (src_grid_xyz[:, 2] >= 0) & (src_grid_xyz[:, 2] < nz)
+        )
+        _t = _stage(f"bounds check (row_in={row_in.sum()}/{row_in.size}, "
+                    f"slot_in={slot_in.sum()}/{slot_in.size})", _t)
+
+        # Bounds-check soft-drop. We keep the PLAN itself unchanged and
+        # just compute the eligible-groups mask + per-row keep mask. The
+        # sampler is parameterized by eligible_groups; per-iter, we filter
+        # sampler-returned rows by row_in_keep. This avoids the 3-minute
+        # filter_rows() rewrite on a multi-GB plan (with its fancy-index
+        # copy of every row × 4 arrays). The WARN still tells users when
+        # they're dropping data.
+        eligible_groups = np.flatnonzero(slot_in).astype(np.int64)
+        row_in_keep = row_in  # per-row keep mask, original-index space
+        if not (row_in.all() and slot_in.all()):
+            n_oob_rows = int((~row_in).sum())
+            n_oob_groups = int((~slot_in).sum())
+            if spec.model_plan is None:
+                print(
+                    f"[multisource] WARN: dropping {n_oob_rows} "
+                    f"({n_oob_rows / max(row_in.size, 1):.3%}) shot rows "
+                    f"and {n_oob_groups} ({n_oob_groups / max(slot_in.size, 1):.3%}) "
+                    f"virtual sources OUTSIDE the auto-sized grid "
+                    f"(nz,ny,nx={nz},{ny},{nx}). Set spec.model_plan "
+                    "explicitly if you want deterministic crop semantics "
+                    "or to silence this warning."
+                )
+            print(f"[multisource] geometry filter (DEFERRED to sampler): "
+                  f"{eligible_groups.size}/{plan.n_groups} eligible groups, "
+                  f"{int(row_in_keep.sum())}/{plan.n_rows} eligible rows")
+            _t = _stage("eligible-mask compute (no plan rewrite)", _t)
+
+        # --- 4b) QC: dump the receiver layout in BOTH UTM (raw) and model
+        # frame (post-rotation, origin-shifted) so the user can confirm the
+        # rotation_metadata.json gives the same survey layout as the
+        # legacy pipeline. Side effect: writes
+        # ``qc/receiver_layout_rotation.png`` + ``qc/receiver_layout.npz``.
+        try:
+            _dump_receiver_rotation_qc(
+                task_dir=task_dir,
+                recv_model_xy=src_model_xy,                # (n_groups, 2) rotated
+                recv_utm_xy=plan.group_xyz[:, :2],         # (n_groups, 2) raw UTM
+                recv_z=plan.group_xyz[:, 2],               # (n_groups,)  z (vertical, no rotation)
+                grid_origin_xyz=(origin_x, origin_y, origin_z),
+                grid_shape=(nx, ny, nz),
+                dh_xyz=(dx_m, dy_m, dz_m),
+            )
+        except Exception as qerr:  # noqa: BLE001
+            print(f"[multisource] receiver layout QC skipped: {qerr}")
+        _t = _stage("receiver-layout QC dump", _t)
+
+        # --- 5) Build solver, wavelet, vp tensor (+ optional reparam_net).
+        effective_dt = float(spec.time.dt)
+        effective_nt = int(spec.time.nt)
+        _cfl_check(
+            float(init_vp_np.max()), float(min(dx_m, dy_m, dz_m)), effective_dt,
+        )
+        solver = _build_solver(
+            spec.physics, spec.backend, shape, dx_m, effective_dt, effective_nt, dev,
+        )
+        _t = _stage(f"_build_solver ({spec.physics.equation}, shape={shape})", _t)
+        wavelet_np = _build_wavelet(
+            spec.wavelet, spec.time,
+            override_dt=effective_dt, override_nt=effective_nt,
+        )
+        wavelet_t = torch.as_tensor(wavelet_np, dtype=torch.float32, device=dev)
+        # SIREN-pipeline wavelet has a zero-prepad (``source_delay_s``)
+        # at the start of the wavelet array — main bang sits at sample
+        # ``round(source_delay_s / dt)``. SIREN training also pre-padded
+        # ``observed`` by the same amount, so to reuse the SIREN wavelet
+        # as-is we mirror that frame: shift the prefetched obs forward
+        # in time by the same number of samples each iter. Without this,
+        # syn and obs are off by ``source_delay_s`` (a systematic
+        # cycle-skip once the delay is a sizeable part of a period).
+        obs_prepad_s = _get_wavelet_source_delay_s(spec.wavelet)
+        obs_prepad_samples = (
+            int(round(obs_prepad_s / float(effective_dt)))
+            if obs_prepad_s > 0.0 else 0
+        )
+        if obs_prepad_samples > 0:
+            print(
+                f"[multisource] wavelet source_delay_s={obs_prepad_s*1000:.1f} ms "
+                f"→ obs left-shifted by {obs_prepad_samples} samples "
+                f"(@ effective_dt={effective_dt*1000:.2f} ms) each iter to "
+                f"align syn/obs in the SIREN frame"
+            )
+        # Optional bandpass: pre-filter the wavelet once at setup, then
+        # filter the per-iter encoded obs supershot below. Differentiable
+        # via :func:`sweep_preproc.filter.bandpass_torch`.
+        bandpass_spec = getattr(spec, "bandpass", None)
+        if bandpass_spec is not None:
+            from sweep_preproc.filter import bandpass_torch
+            wavelet_t = bandpass_torch(
+                wavelet_t, lo=float(bandpass_spec.lo_hz),
+                hi=float(bandpass_spec.hi_hz),
+                dt=float(effective_dt),
+                order=int(bandpass_spec.order),
+                axis=-1,
+            ).detach()
+            print(f"[crg] wavelet bandpass {bandpass_spec.lo_hz}-"
+                  f"{bandpass_spec.hi_hz} Hz order={bandpass_spec.order} "
+                  "applied at setup")
+        vp_leaf = torch.from_numpy(init_vp_np).to(dev).requires_grad_(True)
+        inv_by_name = {"vp": vp_leaf}
+        reparam_net = None
+        # Pre-build the SIREN water mask from a 2-D seabed-depth map
+        # (preferred — geological data) before constructing the reparam
+        # net. The full-extent npz is sliced with the SAME (y_lo:y_hi,
+        # x_lo:x_hi) window that cropped init_vp_np above, so the
+        # broadcast 3-D mask lines up voxel-for-voxel with vp_leaf.
+        water_mask_override = None
+        if (spec.reparam is not None
+                and bool(getattr(spec.reparam, "mask_water_layer", False))
+                and getattr(spec.reparam, "seabed_depth_path", None) is not None):
+            from sweep_tasks.bathymetry import (
+                load_seabed_depth_npz, water_mask_from_seabed_depth,
+            )
+            full_sd = load_seabed_depth_npz(spec.reparam.seabed_depth_path)
+            if full_sd.ndim != 2:
+                raise ValueError(
+                    f"reparam.seabed_depth_path: expected 2-D (ny, nx) "
+                    f"seabed_depth for 3-D FWI; got shape {full_sd.shape}"
+                )
+            if (full_sd.shape[0] != ny_pre or full_sd.shape[1] != nx_pre):
+                raise ValueError(
+                    f"reparam.seabed_depth_path shape {full_sd.shape} "
+                    f"!= init_vp pre-crop (ny, nx) ({ny_pre}, {nx_pre}); "
+                    "regenerate the bathymetry from the same init_vp."
+                )
+            cropped_sd = full_sd[y_lo:y_hi, x_lo:x_hi]
+            mask_np = water_mask_from_seabed_depth(
+                cropped_sd, nz=int(init_vp_np.shape[0]), dh_z_m=float(dz_m),
+            )
+            water_mask_override = torch.from_numpy(mask_np)
+            print(
+                f"[crg] reparam water_mask from {spec.reparam.seabed_depth_path}: "
+                f"shape={tuple(mask_np.shape)}, "
+                f"voxels={int(mask_np.sum()):,}/{mask_np.size:,} "
+                f"({100*mask_np.sum()/mask_np.size:.2f}%), "
+                f"depth range [{cropped_sd.min():.1f}, {cropped_sd.max():.1f}] m"
+            )
+        if spec.reparam is not None:
+            reparam_net = _build_reparam_net(
+                spec.reparam, vp_leaf, spec.model_bounds.get("vp"),
+                water_mask_override=water_mask_override,
+            )
+            with torch.no_grad():
+                rendered = reparam_net().detach()
+            inv_by_name["vp"] = rendered
+            n_params = sum(p.numel() for p in reparam_net.parameters())
+            print(f"[crg] reparam=velocity_inr  net_params={n_params:,}  "
+                  f"lr={spec.reparam.lr:.3e}")
+
+        _t = _stage(f"build wavelet + bandpass + vp_leaf + reparam_net "
+                    f"({'SIREN' if reparam_net is not None else 'no reparam'})", _t)
+
+        # --- 6) Optimizer.
+        if reparam_net is not None:
+            optimizer = _build_reparam_optimizer(
+                spec.optimizer, reparam_net.parameters(), float(spec.reparam.lr),
+            )
+        else:
+            optimizer = _build_optimizer(spec.optimizer, inv_by_name, ["vp"])
+        _t = _stage("optimizer build", _t)
+
+        # --- 7) Plan reader + RNG for the per-iter sampler.
+        # PlanReader serves SEG-Y trace bytes through MultiFileSEGYReader
+        # under the hood. cache_all=False keeps memory bounded (about a GB
+        # even on a large survey) at the cost of decoding bytes per call;
+        # cache_all=True is fine for ≤ ~50 GB plans that fit in RAM.
+        # Trace cache + coalesce gap: legacy OBN-supershot IO optimisations
+        # that absorb cold-Lustre re-reads (hot traces in RAM) and merge
+        # adjacent intra-file ``pread``s into one big read. Without these
+        # wait_io dominated every iteration on a large survey; with them it is a fraction.
+        _trace_stride_bytes = int(
+            plan.trace_size_per_file[0]
+        ) if plan.trace_size_per_file.size else (
+            240 + int(plan.samples_per_trace) * 4
+        )
+        # 4× trace stride: coalesces any two traces within 4 strides of
+        # each other in the same file (typical for shared-shot sampling
+        # where the CDF of intra-file gaps clusters near the stride).
+        _coalesce_gap = max(0, 4 * _trace_stride_bytes)
+        reader = PlanReader(
+            plan, mmap=True,
+            cache_all=bool(spec.obs.plan.cache_all),
+            trace_cache_bytes=int(getattr(sampling_cfg, "trace_cache_bytes", 0)),
+            coalesce_gap=_coalesce_gap,
+        )
+        if bool(spec.obs.plan.cache_all):
+            print(f"[multisource] PlanReader: cache_all=True "
+                  f"(eagerly loaded {plan.n_rows} traces into RAM)")
+        else:
+            _tcb = int(getattr(sampling_cfg, "trace_cache_bytes", 0))
+            if _tcb < 0:
+                cache_desc = "per-trace LRU, unbounded"
+            elif _tcb > 0:
+                cache_desc = f"per-trace LRU, budget {_tcb / 1e9:.2f} GB"
+            else:
+                cache_desc = "DISABLED — wait_io may dominate on cold-Lustre"
+            print(f"[multisource] PlanReader: trace_cache={cache_desc}, "
+                  f"coalesce_gap={_coalesce_gap} bytes "
+                  f"(= 4× stride {_trace_stride_bytes})")
+        sign_rng = np.random.default_rng(encoding_spec.sign_seed)
+        sample_rng = np.random.default_rng(spec.seed)
+        _t = _stage(f"PlanReader init (cache_all={bool(spec.obs.plan.cache_all)})", _t)
+
+        # Pre-compute sorted-unique (sx, sy) keys for every CRG group once
+        # at setup. The shared-shot sampler then skips ``np.unique`` per
+        # group per iter (saves O(B × N log N) Python work × 1000 iters).
+        # On a large survey: seconds ONCE here save seconds per iter in the sampler.
+        group_unique_keys = precompute_group_unique_keys(plan)
+        _t = _stage(
+            f"precompute_group_unique_keys ({plan.n_groups} groups)", _t,
+        )
+
+        # Survey-wide sub-sample of every physical shot's (sx, sy) — used
+        # as the faint background in the per-iter QC map. The full
+        # set kills matplotlib; ~20k random hits give a clear footprint.
+        # NOTE: the QC map is drawn in MODEL frame (post-rotation,
+        # origin-shifted), not UTM — that's the frame the inversion
+        # actually operates in. We capture the bg-row indices now and
+        # do the rotation lookup once via the already-computed
+        # plan_model_xy / src_model_xy arrays (no extra rotation pass).
+        _SURVEY_MAP_MAX_SHOTS = 20_000
+        if int(plan.n_rows) > _SURVEY_MAP_MAX_SHOTS:
+            _rng_map = np.random.default_rng(0)
+            _bg_idx = _rng_map.choice(
+                int(plan.n_rows), size=_SURVEY_MAP_MAX_SHOTS, replace=False,
+            )
+        else:
+            _bg_idx = np.arange(int(plan.n_rows), dtype=np.int64)
+        all_shots_model_bg = plan_model_xy[_bg_idx].astype(np.float64)
+        all_groups_model_bg = src_model_xy.astype(np.float64)
+        # Inversion-active extent (model-frame meters) — what the solver
+        # actually sees. ymin/xmin = grid origin (post-crop, post-pad);
+        # max = origin + n*dh. Drawn as a dashed rectangle on the QC map
+        # so the user immediately sees which picked OBN / used shots
+        # land INSIDE the active inversion window.
+        inversion_extent_xy_m = (
+            float(origin_x), float(origin_x + nx * dx_m),
+            float(origin_y), float(origin_y + ny * dy_m),
+        )
+        _t = _stage(
+            f"survey-map background sample ({all_shots_model_bg.shape[0]} "
+            f"shots / {all_groups_model_bg.shape[0]} OBN nodes; model frame; "
+            f"grid {nx}×{ny} cells "
+            f"= {nx*dx_m/1000:.1f}×{ny*dy_m/1000:.1f} km)", _t,
+        )
+
+        # Well-log QC positions: 6 pseudo-wells on a 3×2 (x × y) grid
+        # spaced across the cropped inversion extent. (x_km, y_km) are
+        # in MODEL frame meters; converted to grid (iy, ix) via the
+        # current origin / dh. Wells outside the grid render as
+        # "OUT OF GRID" stubs (the helper handles it cleanly).
+        _well_x_m = np.linspace(
+            float(origin_x) + 0.15 * nx * dx_m,
+            float(origin_x) + 0.85 * nx * dx_m, 3,
+        )
+        _well_y_m = np.linspace(
+            float(origin_y) + 0.25 * ny * dy_m,
+            float(origin_y) + 0.75 * ny * dy_m, 2,
+        )
+        well_xy_m = np.array(
+            [(x, y) for y in _well_y_m for x in _well_x_m],
+            dtype=np.float64,
+        )
+        well_grid_idx = np.stack([
+            np.rint((well_xy_m[:, 1] - origin_y) / dy_m).astype(np.int64),
+            np.rint((well_xy_m[:, 0] - origin_x) / dx_m).astype(np.int64),
+        ], axis=-1)
+        well_labels = [
+            f"x={xy[0]/1000:.1f} y={xy[1]/1000:.1f} km"
+            for xy in well_xy_m
+        ]
+        _t = _stage(
+            f"well-log QC wells ({len(well_labels)} pseudo-wells: "
+            f"{', '.join(well_labels)})", _t,
+        )
+
+        # Cross-iter SEG-Y prefetcher. Each iter's batch sampling + SEG-Y
+        # read runs in a background thread so the GPU can compute on iter
+        # N while we fetch iter N+1's traces. Without this, random batches
+        # past the OS pagecache working set blow up wait_io from ~0.5s to
+        # tens of seconds per iter (a survey larger than the available RAM).
+        #
+        # Inside the loader we also parallelise the per-slot SEG-Y reads
+        # across an inner thread pool (``num_workers`` from the config) —
+        # the SEG-Y reader releases the GIL during mmap reads so threads
+        # see real concurrency on NVMe storage.
+        from concurrent.futures import ThreadPoolExecutor
+
+        n_io_workers = max(1, int(sampling_cfg.num_workers))
+        # Outer pool: cross-iter pre-load (1 worker is enough — we only
+        # need one prefetched batch at a time).
+        prefetch_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="sharedshot-prefetch",
+        )
+        # Inner pool: per-group SEG-Y reads inside one iter's load.
+        io_pool = (
+            ThreadPoolExecutor(max_workers=n_io_workers,
+                                thread_name_prefix="sharedshot-io")
+            if n_io_workers > 1 else None
+        )
+
+        # Per-iter timing accumulator for the prefetch worker so we can
+        # break down wait_io into (sample / read / resample / trim) — the
+        # main loop's wait_io only tells us the OUTER prefetcher cost.
+        # Each entry is one iter's dict; reset by main loop after read.
+        prefetch_timings: list[dict] = []
+
+        def _load_iter_payload(rng_state):
+            """Sample shared-shots + read all per-group traces. Returns
+            ``(batch, traces_per_group)`` where ``traces_per_group`` is a
+            ``(B, n_shared, nt_segy)`` ``float32`` numpy array.
+
+            ``rng_state`` seeds the sampler for determinism — the caller
+            (the main loop) advances the master ``sample_rng`` state so
+            re-runs with the same seed produce the same iter sequence.
+            """
+            tstats = {"sample": 0.0, "alloc": 0.0, "read": 0.0,
+                      "resample": 0.0, "trim": 0.0}
+            t_sample0 = time.perf_counter()
+            local_rng = np.random.default_rng(rng_state)
+            b = sample_shared_shots_from_plan(
+                plan, local_rng,
+                batch_size=int(spec.batchsize),
+                source_lines_per_group=int(sampling_cfg.source_lines_per_group),
+                max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
+                # min_coverage + eligible_groups applied per-iter at sample
+                # time (instead of pre-filtering the plan via filter_groups
+                # / filter_rows) — see _run_fwi_multisource setup.
+                min_coverage=int(min_cov),
+                eligible_groups=eligible_groups,
+                precomputed_group_unique_keys=group_unique_keys,
+            )
+            tstats["sample"] = time.perf_counter() - t_sample0
+            t_alloc0 = time.perf_counter()
+            B = int(b.group_indices.size)
+            n_shared = int(b.n_shared)
+            t_np = np.empty(
+                (B, n_shared, plan.samples_per_trace), dtype=np.float32,
+            )
+            tstats["alloc"] = time.perf_counter() - t_alloc0
+
+            def _read_one(i):
+                # b.rows_per_group[i] holds ABSOLUTE plan-row indices —
+                # PlanReader.read_rows takes those directly.
+                t_np[i] = reader.read_rows(b.rows_per_group[i])
+
+            t_read0 = time.perf_counter()
+            if io_pool is None:
+                for i in range(B):
+                    _read_one(i)
+            else:
+                list(io_pool.map(_read_one, range(B)))
+            tstats["read"] = time.perf_counter() - t_read0
+
+            t_resample0 = time.perf_counter()
+            # Resample obs time axis on the prefetcher thread too so the
+            # main loop's wait_io covers resample as well.
+            if abs(plan.dt_s - effective_dt) > 1.0e-12:
+                from sweep_preproc.resample import resample_time
+                t_np = resample_time(t_np, plan.dt_s, effective_dt, axis=-1)
+            tstats["resample"] = time.perf_counter() - t_resample0
+
+            t_trim0 = time.perf_counter()
+            # Trim / zero-pad to match effective_nt — unconditionally,
+            # since SEG-Y trace length can differ from spec.time.nt even
+            # when dt matches (field SEG-Y often stores a longer record than the
+            # YAML asks for). Previously this trim was nested
+            # inside the dt-mismatch branch and missed nt-only mismatches.
+            cur_nt = t_np.shape[-1]
+            if cur_nt > effective_nt:
+                t_np = t_np[..., :effective_nt]
+            elif cur_nt < effective_nt:
+                pad = [(0, 0)] * t_np.ndim
+                pad[-1] = (0, effective_nt - cur_nt)
+                t_np = np.pad(t_np, pad)
+            t_np = t_np.astype(np.float32, copy=False)
+            tstats["trim"] = time.perf_counter() - t_trim0
+            tstats["B"] = B
+            tstats["n_shared"] = n_shared
+            prefetch_timings.append(tstats)
+            return b, t_np
+
+        def _next_rng_state():
+            """Draw + return a fresh seed for the next iter's sampler,
+            keeping ``sample_rng`` as the single source of randomness."""
+            return int(sample_rng.integers(0, 2**31 - 1))
+
+        # --- 7b) Optional priors: TVPrior + SeabedFreezeMask.
+        tv_prior = None
+        smooth_spec = getattr(spec, "smooth_regularization", None)
+        if smooth_spec is not None and float(smooth_spec.weight) > 0.0:
+            from sweep_nn import TVPrior
+
+            tv_prior = TVPrior(
+                order=smooth_spec.order,
+                x_weight=float(smooth_spec.x_weight),
+                y_weight=float(smooth_spec.y_weight),
+                z_weight=float(smooth_spec.z_weight),
+                velocity_scale_m_s=float(smooth_spec.velocity_scale_m_s),
+            )
+        seabed_mask = None
+        freeze_spec = getattr(spec, "freeze_water_layer", None)
+        if freeze_spec is not None and freeze_spec.enabled:
+            from sweep_nn import SeabedFreezeMask
+
+            sb = np.load(freeze_spec.seabed_depth_path)
+            if isinstance(sb, np.lib.npyio.NpzFile):
+                sb = sb["seabed_depth"]
+            seabed_mask = SeabedFreezeMask(
+                np.asarray(sb), dz_m=dz_m,
+                buffer_cells=int(freeze_spec.buffer_cells),
+            )
+
+        # --- 8) Outputs / QC dirs (rank-0 / single-rank).
+        out_dir = task_dir / "output"
+        out_dir.mkdir(exist_ok=True)
+        snapshots_dir = out_dir / "epochs"
+        snapshots_dir.mkdir(exist_ok=True)
+        qc_dir = task_dir / "qc"
+        qc_enabled = spec.qc is not None and spec.qc.every_n_epochs > 0
+
+        # --- 9) Per-iter loop.
+        total_epochs = int(spec.epochs)
+        losses: list[float] = []
+        illum_spec = getattr(spec, "illumination_precondition", None)
+        illum_on = bool(illum_spec is not None and illum_spec.enabled)
+        if illum_on and getattr(spec.backend, "impl", "eager") == "eager":
+            print("[illum] WARN: eager backend does not populate solver "
+                  "illumination buffers; precondition is a no-op.")
+        loss_fn = lambda syn, obs: _compute_loss(syn, obs, spec.loss)
+        def _csync():
+            if dev.type == "cuda":
+                torch.cuda.synchronize(dev)
+
+        _t = _stage("priors + output dirs + loss_fn ready (setup DONE)", _t)
+
+        # Dump the resolved config + comprehensive runtime metadata at
+        # task_dir root. Captures everything a future reader needs to
+        # interpret this run: full pydantic-expanded YAML, host / GPU
+        # / package versions / git SHAs, plus derived setup quantities
+        # (shape, origin, n_groups, water_mask voxel count, obs prepad
+        # samples, sampler config, ...). Best-effort — wrapped so any
+        # I/O hiccup never blocks the run.
+        try:
+            _runtime_extras = {
+                "device": str(dev),
+                "epochs": int(total_epochs),
+                "batchsize": int(spec.batchsize),
+                "effective_dt_s": float(effective_dt),
+                "effective_nt": int(effective_nt),
+                "grid_shape_zyx": list(shape),
+                "dh_xyz_m": [float(dz_m), float(dy_m), float(dx_m)],
+                "origin_xyz_m": [
+                    float(origin_z), float(origin_y), float(origin_x),
+                ],
+                "crop_origin_offset_m": list(crop_origin_offset),
+                "init_vp_min_mean_max": [
+                    float(init_vp_np.min()),
+                    float(init_vp_np.mean()),
+                    float(init_vp_np.max()),
+                ],
+                "plan_n_rows": int(plan.n_rows),
+                "plan_n_groups": int(plan.n_groups),
+                "plan_samples_per_trace": int(plan.samples_per_trace),
+                "eligible_groups": int(eligible_groups.size),
+                "min_coverage": int(min_cov),
+                "n_picked_per_iter_B": int(spec.batchsize),
+                "obs_prepad_s": float(obs_prepad_s),
+                "obs_prepad_samples": int(obs_prepad_samples),
+                "wavelet_kind": getattr(spec.wavelet, "kind", None),
+                "loss_kind": getattr(spec.loss, "kind", None),
+                "reparam_kind": (
+                    getattr(spec.reparam, "kind", None)
+                    if spec.reparam is not None else None
+                ),
+                "reparam_net_params": (
+                    int(sum(p.numel() for p in reparam_net.parameters()))
+                    if reparam_net is not None else None
+                ),
+                "reparam_lr": (
+                    float(spec.reparam.lr) if spec.reparam is not None else None
+                ),
+                "reparam_vp_std": (
+                    float(spec.reparam.vp_std) if spec.reparam is not None else None
+                ),
+                "reparam_vp_mean": (
+                    float(spec.reparam.vp_mean) if spec.reparam is not None else None
+                ),
+                "reparam_mask_water_layer": (
+                    bool(getattr(spec.reparam, "mask_water_layer", False))
+                    if spec.reparam is not None else False
+                ),
+                "reparam_water_vp_m_s": (
+                    float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
+                    if spec.reparam is not None else None
+                ),
+                "reparam_seabed_depth_path": (
+                    str(getattr(spec.reparam, "seabed_depth_path", None))
+                    if (spec.reparam is not None
+                        and getattr(spec.reparam, "seabed_depth_path", None)
+                        is not None)
+                    else None
+                ),
+                "water_mask_voxels_true": (
+                    int(water_mask_override.sum().item())
+                    if water_mask_override is not None else None
+                ),
+                "water_mask_voxels_total": (
+                    int(water_mask_override.numel())
+                    if water_mask_override is not None else None
+                ),
+                "bandpass_hz": (
+                    [float(bandpass_spec.lo_hz),
+                     float(bandpass_spec.hi_hz),
+                     int(bandpass_spec.order)]
+                    if bandpass_spec is not None else None
+                ),
+                "sampling": {
+                    "shared_shots_per_iter": int(sampling_cfg.shared_shots_per_iter),
+                    "source_lines_per_group": int(sampling_cfg.source_lines_per_group),
+                    "max_traces_per_sourceline": int(sampling_cfg.max_traces_per_sourceline),
+                    "min_coverage": int(sampling_cfg.min_coverage),
+                    "num_workers": int(sampling_cfg.num_workers),
+                    "prefetch_factor": int(sampling_cfg.prefetch_factor),
+                    "trace_cache_bytes": int(
+                        getattr(sampling_cfg, "trace_cache_bytes", 0)
+                    ),
+                    "dedup_mode": str(getattr(sampling_cfg, "dedup_mode", "none")),
+                },
+                "qc_every_n_epochs": (
+                    int(spec.qc.every_n_epochs) if spec.qc is not None else None
+                ),
+                "show_every": int(spec.show_every),
+                "setup_wall_s": float(time.perf_counter() - _t_setup0),
+            }
+            _dump_run_metadata(spec, task_dir, extras=_runtime_extras)
+            print(f"[run-meta] wrote {task_dir/'config_resolved.yaml'} "
+                  f"+ {task_dir/'run_meta.json'}")
+        except Exception as meta_err:  # noqa: BLE001
+            print(f"[run-meta] dump skipped: {meta_err}")
+
+        # Prime the prefetcher with iter 0's load so the first iter's
+        # ``wait_io`` is also overlapped (with setup work above, ideally).
+        next_future = prefetch_pool.submit(_load_iter_payload, _next_rng_state())
+        for epoch in range(total_epochs):
+            t_iter = time.perf_counter()
+            # Wait for the prefetched iter's payload (already in flight).
+            t = time.perf_counter()
+            batch, traces_per_group = next_future.result()
+            t_wait = time.perf_counter() - t
+            # Kick off iter N+1's load BEFORE doing iter N's GPU work so
+            # the I/O overlaps with the solver fwd/bwd.
+            if epoch + 1 < total_epochs:
+                next_future = prefetch_pool.submit(
+                    _load_iter_payload, _next_rng_state(),
+                )
+            B = int(batch.group_indices.size)
+            n_shared = int(batch.n_shared)
+            t = time.perf_counter()
+            obs_t = torch.as_tensor(traces_per_group, dtype=torch.float32, device=dev)
+            # SIREN-frame alignment: shift obs forward in time by the
+            # wavelet's ``source_delay_s`` (computed once at setup) so
+            # the main wavelet bang at sample ``obs_prepad_samples`` in
+            # syn lines up with the actual event in obs. ``torch.roll``
+            # is cyclic, then we zero the wrapped tail to be safe
+            # (legacy ``_run_fwi_3d_crg.py:1715-1719`` behaviour).
+            if obs_prepad_samples > 0:
+                obs_t = torch.roll(obs_t, shifts=obs_prepad_samples, dims=-1)
+                obs_t[..., :obs_prepad_samples] = 0.0
+            t_h2d = time.perf_counter() - t
+            # The prefetcher absorbed the SEG-Y read AND the dt resample;
+            # ``t_wait`` is the blocking portion (~0 when compute > io).
+            t_sample = 0.0  # sampling now happens inside the prefetch worker
+            t_io = t_wait + t_h2d
+            t_resample = 0.0  # resample now happens inside the prefetch worker
+
+            # Grid-indexed sources / receivers for this iter.
+            sources_grid = src_grid_xyz[batch.group_indices]  # (B, 3)
+            recv_grid = plan_grid_xyz[batch.rows_per_group[0]]  # (n_shared, 3)
+            # Track the post-dedup plan-row indices in lock-step with
+            # obs_t / recv_grid so downstream QC can join back to the
+            # plan (file_id, sx_utm, etc.) for sorting / labelling.
+            rows0_used = batch.rows_per_group[0]
+
+            # Optional per-iter dedupe: collapse duplicate (gx,gy,gz) cells.
+            # ``"first"`` keeps the first hit; ``"nearest"`` keeps the
+            # receiver whose pre-quantisation model-xy was closest to the
+            # cell center. Apply the same row mask to obs traces across
+            # all groups so the encoded supershot stays receiver-consistent.
+            dedup_mode = getattr(sampling_cfg, "dedup_mode", "none")
+            if dedup_mode != "none" and n_shared > 1:
+                if dedup_mode == "first":
+                    _, keep_idx = np.unique(
+                        recv_grid, axis=0, return_index=True,
+                    )
+                    keep_idx = np.sort(keep_idx)
+                else:  # "nearest"
+                    # Compute model-frame xy of each shared shot (already
+                    # available via rows_per_group[0] + frame.to_model).
+                    rows0 = batch.rows_per_group[0]
+                    mxy = frame.to_model(plan.row_source_xyz[rows0, :2])
+                    mz = plan.row_source_xyz[rows0, 2]
+                    cell_center_x = recv_grid[:, 0] * dx_m + origin_x
+                    cell_center_y = recv_grid[:, 1] * dy_m + origin_y
+                    cell_center_z = recv_grid[:, 2] * dz_m + origin_z
+                    d2 = ((mxy[:, 0] - cell_center_x) ** 2
+                          + (mxy[:, 1] - cell_center_y) ** 2
+                          + (mz - cell_center_z) ** 2)
+                    # Bucket rows by their (gx,gy,gz) cell key.
+                    key = (
+                        (recv_grid[:, 2].astype(np.int64) * (1 << 22))
+                        | (recv_grid[:, 1].astype(np.int64) * (1 << 11))
+                        | recv_grid[:, 0].astype(np.int64)
+                    )
+                    order = np.argsort(key, kind="stable")
+                    key_s = key[order]
+                    starts = np.concatenate(
+                        [[0], np.flatnonzero(np.diff(key_s) != 0) + 1]
+                    )
+                    ends = np.concatenate([starts[1:], [key.size]])
+                    keep_idx = []
+                    for s_i, e_i in zip(starts, ends):
+                        local = order[s_i:e_i]
+                        keep_idx.append(int(local[int(np.argmin(d2[local]))]))
+                    keep_idx = np.sort(np.asarray(keep_idx, dtype=np.int64))
+                if keep_idx.size < n_shared:
+                    obs_t = obs_t[:, keep_idx, :].contiguous()
+                    recv_grid = recv_grid[keep_idx]
+                    rows0_used = rows0_used[keep_idx]
+                    n_shared = int(keep_idx.size)
+            # source_encoding expects shapes (1, *, 3) and wavelet (1, B, nt).
+            sources_super = sources_grid[None, :, :].astype(np.int64)
+            receivers_super = recv_grid[None, :, :].astype(np.int64)
+            signs_np = sign_rng.choice([-1.0, 1.0], size=B).astype(np.float32)
+            signs_t = torch.as_tensor(signs_np, device=dev)
+            wavelet_super = (wavelet_t[None, :] * signs_t[:, None]).unsqueeze(0)
+            obs_super = (obs_t * signs_t[:, None, None]).sum(dim=0, keepdim=True)
+            # Bandpass the encoded obs supershot to match the (already
+            # bandpassed) wavelet. Linearity: filtering each obs_i then
+            # summing == filtering the sum (so equivalent to per-slot
+            # pre-filtering, with one filter call per iter).
+            if bandpass_spec is not None:
+                from sweep_preproc.filter import bandpass_torch
+                obs_super = bandpass_torch(
+                    obs_super, lo=float(bandpass_spec.lo_hz),
+                    hi=float(bandpass_spec.hi_hz),
+                    dt=float(effective_dt),
+                    order=int(bandpass_spec.order),
+                    axis=-1,
+                )
+
+            optimizer.zero_grad()
+            if reparam_net is None:
+                models = [vp_leaf]
+                v_leaf_for_illum = vp_leaf
+            elif spec.reparam.backward_mode == "single_step":
+                models = [reparam_net()]
+                v_leaf_for_illum = None  # net params; illum precond no-op
+            else:
+                with torch.no_grad():
+                    base_leaf = reparam_net().detach().clone()
+                base_leaf = base_leaf.requires_grad_(True)
+                models = [base_leaf]
+                v_leaf_for_illum = base_leaf
+
+            t = time.perf_counter()
+            syn = solver(
+                wavelet_super, sources_super, receivers_super,
+                models=models, source_encoding=True,
+            )
+            _csync()
+            t_fwd = time.perf_counter() - t
+            # Adapt obs to syn's canonical layout (n, nt, nrec, 1).
+            # ``obs_super`` from the CRG prefetcher is (n, nrec, nt), so we
+            # always permute + unsqueeze. After geophyai 21041c5 both
+            # backends emit syn as 4-D canonical, so this is unconditional.
+            obs_match = obs_super.permute(0, 2, 1).unsqueeze(-1).contiguous()
+            t = time.perf_counter()
+            loss_t = loss_fn(syn, obs_match).sum()
+            global_norm = float(syn.numel())
+            (loss_t / global_norm).backward()
+            _csync()
+            t_bwd = time.perf_counter() - t
+            losses.append(float(loss_t.detach().cpu()) / global_norm)
+
+            # --- Illumination precond (single_step + grid; or two_pass leaf).
+            if illum_on:
+                sill = getattr(solver, "source_illumination", None)
+                rill = getattr(solver, "receiver_illumination", None)
+                if reparam_net is None or v_leaf_for_illum is not None:
+                    target_grad = v_leaf_for_illum.grad if v_leaf_for_illum is not None else None
+                    _apply_illumination_precond(
+                        target_grad, sill, rill,
+                        eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                    )
+
+            # --- Smooth regularization (TVPrior on the current vp/leaf).
+            if tv_prior is not None and v_leaf_for_illum is not None:
+                reg_loss = float(smooth_spec.weight) * tv_prior(v_leaf_for_illum)
+                # Accumulate into v_leaf_for_illum.grad (.backward adds).
+                reg_loss.backward(retain_graph=False)
+
+            # --- Seabed-freeze mask on the leaf gradient (post illum +
+            # post smooth-reg so any mask zeros take precedence).
+            if seabed_mask is not None and v_leaf_for_illum is not None:
+                seabed_mask.apply_to(v_leaf_for_illum.grad)
+
+            # --- Reparam two-pass full: push leaf grad through the net.
+            t = time.perf_counter()
+            if (reparam_net is not None
+                    and spec.reparam.backward_mode == "two_pass_full"):
+                v_grad = v_leaf_for_illum.grad
+                if v_grad is not None:
+                    rendered = reparam_net()
+                    rendered.backward(v_grad)
+            elif (reparam_net is not None
+                  and spec.reparam.backward_mode == "two_pass_chunked"):
+                v_grad = v_leaf_for_illum.grad
+                if v_grad is not None:
+                    reparam_net.backward_velocity_gradient(
+                        v_grad, chunk_rows=int(spec.reparam.backward_chunk_rows),
+                    )
+            _csync()
+            t_reparam_bwd = time.perf_counter() - t
+
+            t = time.perf_counter()
+            optimizer.step()
+            _csync()
+            t_opt = time.perf_counter() - t
+            if reparam_net is None:
+                bound = spec.model_bounds.get("vp")
+                if bound is not None:
+                    vp_leaf.data.clamp_(min=bound.min, max=bound.max)
+            else:
+                with torch.no_grad():
+                    inv_by_name["vp"] = reparam_net().detach()
+
+            iter_s = time.perf_counter() - t_iter
+            cache_str = ""
+            if hasattr(reader, "trace_cache_stats"):
+                cs = reader.trace_cache_stats
+                if cs is not None:
+                    total = cs["hits"] + cs["misses"]
+                    hit_rate = cs["hits"] / total if total > 0 else 0.0
+                    cache_str = (f"  cache:[hit_rate={hit_rate:.1%} "
+                                 f"entries={cs['entries']:,} "
+                                 f"bytes={cs['bytes']/1e9:.1f}GB]")
+            # Prefetch-worker per-stage breakdown for THIS iter.
+            # prefetch_timings[-1] = the iter we just consumed (FIFO).
+            pf_str = ""
+            if prefetch_timings:
+                pf = prefetch_timings[-2] if len(prefetch_timings) >= 2 else prefetch_timings[-1]
+                # NOTE: the timing belongs to the iter we just finished
+                # waiting on (= iter N); the next-submitted future is iter
+                # N+1. With prime_pool[0] = iter 0, the pool of timings
+                # contains [iter 0, iter 1, ...] in order; len at this
+                # point equals number of FINISHED prefetch loads.
+                pf_str = (f"  prefetch:[sample={pf['sample']:.2f} "
+                          f"alloc={pf['alloc']:.2f} read={pf['read']:.2f} "
+                          f"resample={pf['resample']:.2f} trim={pf['trim']:.2f}]")
+            print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
+                  f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}  "
+                  f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
+                  f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} reparam_bwd={t_reparam_bwd:.2f} "
+                  f"opt={t_opt:.2f}]{cache_str}{pf_str}")
+
+            # --- Snapshots + QC.
+            snapshot_now = (epoch % spec.show_every == 0
+                            or epoch == total_epochs - 1)
+            if snapshot_now:
+                vp_now = inv_by_name["vp"]
+                np.save(
+                    snapshots_dir / f"vp_epoch_{epoch:04d}.npy",
+                    vp_now.detach().cpu().numpy(),
+                )
+            if qc_enabled and (epoch % spec.qc.every_n_epochs == 0
+                               or epoch == total_epochs - 1):
+                state_for_qc = {
+                    "inv_by_name": inv_by_name,
+                    "dh": float(dx_m),
+                    "dh_xyz": (float(dz_m), float(dy_m), float(dx_m)),
+                    "dt": float(effective_dt),
+                    "qc_initial_vp": torch.from_numpy(init_vp_np),
+                }
+                self._run_epoch_qc_safe(
+                    spec=spec, state=state_for_qc, qc_dir=qc_dir,
+                    epoch=epoch, dev=dev,
+                )
+
+                # Multisource supershot QC: obs/syn interleave gather,
+                # amplitude spectrum, and the per-iter survey footprint
+                # (picked OBN nodes + used physical shots in the FULL
+                # acquisition context). Snapshot the CPU tensors from
+                # this iter — obs_super / syn are still alive here. Use
+                # rows0_used (post-dedup) so length matches obs/syn.
+                # Gated on ``qc.supershot_panel`` (independent of the
+                # legacy 2D ``shot_gather`` knob).
+                if bool(getattr(spec.qc, "supershot_panel", True)):
+                    try:
+                        from sweep_tasks.qc import save_supershot_qc_panel
+                        # All coords in MODEL frame (post-rotation, in meters)
+                        # so the QC map matches the frame the inversion
+                        # runs in, and the dashed grid-extent rectangle
+                        # (xmin/xmax, ymin/ymax in model meters) is
+                        # meaningful on the same axes.
+                        used_shot_model_xy = plan_model_xy[
+                            rows0_used
+                        ].astype(np.float64)
+                        picked_group_model_xy = src_model_xy[
+                            batch.group_indices
+                        ].astype(np.float64)
+                        f_hi = (float(bandpass_spec.hi_hz)
+                                if bandpass_spec is not None else None)
+                        # Source-line id per physical-shot column — lets
+                        # the plotter sort gather columns by line so the
+                        # eye sees along-line moveout cleanly (sampler
+                        # natural order is (sx, sy)-key, which scatters
+                        # lines randomly). Secondary key = absolute plan-
+                        # row index: within a source line, rows are
+                        # stored in SEG-Y file order (= along-sail-line
+                        # order) regardless of survey orientation.
+                        # Sorting by model_x as secondary collapses to
+                        # chaos for sail lines that run along the y axis
+                        # (common once a survey is rotated into the model frame).
+                        used_sourceline_ids = plan.row_file_id[
+                            rows0_used
+                        ].astype(np.int64)
+                        save_supershot_qc_panel(
+                            obs_super.detach().cpu(),
+                            syn.detach().cpu(),
+                            picked_group_utm_xy=picked_group_model_xy,
+                            used_shot_utm_xy=used_shot_model_xy,
+                            all_groups_utm_xy=all_groups_model_bg,
+                            all_shots_utm_xy=all_shots_model_bg,
+                            sourceline_ids=used_sourceline_ids,
+                            within_sourceline_sort_key=np.asarray(
+                                rows0_used, dtype=np.int64,
+                            ),
+                            frame_label="model",
+                            inversion_extent_xy_m=inversion_extent_xy_m,
+                            dt=float(effective_dt),
+                            out_path=qc_dir / "supershot" / f"iter_{epoch:04d}.png",
+                            epoch=epoch,
+                            f_hi_hz=f_hi,
+                        )
+                    except Exception as ss_err:  # noqa: BLE001
+                        print(f"[multisource] supershot QC skipped: {ss_err}")
+
+                # Well-log QC: vp(z) at the 6 pseudo-wells set up at
+                # session start. Quick sanity probe on the water layer,
+                # seabed jump, and shallow gradient — flat 1500 m/s
+                # across the water column is the strong expected signal.
+                if bool(getattr(spec.qc, "well_logs", True)):
+                    try:
+                        from sweep_tasks.qc import save_vp_well_logs_png
+                        vp_now_np = inv_by_name["vp"].detach().cpu().numpy()
+                        save_vp_well_logs_png(
+                            vp_now_np, init_vp_np,
+                            well_grid_idx=well_grid_idx,
+                            well_labels=well_labels,
+                            dz_m=float(dz_m),
+                            out_path=qc_dir / "well_logs" / f"iter_{epoch:04d}.png",
+                            epoch=epoch,
+                            vmin=(spec.model_bounds.get("vp").min
+                                  if spec.model_bounds.get("vp") else None),
+                            vmax=(spec.model_bounds.get("vp").max
+                                  if spec.model_bounds.get("vp") else None),
+                        )
+                    except Exception as wl_err:  # noqa: BLE001
+                        print(f"[multisource] well-log QC skipped: {wl_err}")
+
+                # Gradient ortho-slice QC: dump the per-voxel velocity
+                # gradient (post illumination precond + smooth-reg +
+                # seabed mask, just before SIREN's reparam_bwd push)
+                # next to the vp ortho slices. Uses sweep_image cmap +
+                # symmetric percentile clipping so the sign structure is
+                # visible. Snapshot ``v_leaf_for_illum.grad`` if it
+                # exists (reparam two-pass path); fall back to
+                # ``vp_leaf.grad`` for the direct-velocity path.
+                # Gated on ``qc.gradient_png`` (shared with the 2D path).
+                if bool(getattr(spec.qc, "gradient_png", False)):
+                    try:
+                        from sweep_tasks.qc import save_gradient_ortho_slices_png
+                        grad_now = None
+                        if (v_leaf_for_illum is not None
+                                and v_leaf_for_illum.grad is not None):
+                            grad_now = (
+                                v_leaf_for_illum.grad.detach().cpu().numpy()
+                            )
+                        elif vp_leaf.grad is not None:
+                            grad_now = vp_leaf.grad.detach().cpu().numpy()
+                        if grad_now is not None:
+                            save_gradient_ortho_slices_png(
+                                grad_now,
+                                dh=(float(dz_m), float(dy_m), float(dx_m)),
+                                out_path=qc_dir / "gradient" / f"iter_{epoch:04d}.png",
+                                epoch=epoch,
+                            )
+                    except Exception as g_err:  # noqa: BLE001
+                        print(f"[multisource] gradient QC skipped: {g_err}")
+
+                # Loss-curve QC: refresh ``qc/loss_curve.png`` (overwrites
+                # in place each QC epoch) + dump the raw ``losses[]`` to
+                # ``output/loss.npy`` so the user can monitor convergence
+                # without waiting for the final-outputs block. Cheap —
+                # one matplotlib call on a few-hundred-point list.
+                # Gated on ``qc.loss_curve`` (shared with the 2D path).
+                if bool(getattr(spec.qc, "loss_curve", True)):
+                    try:
+                        if losses:
+                            _plot_loss_curve(
+                                losses,
+                                qc_dir / "loss_curve.png",
+                                title=(
+                                    f"OBN multisource FWI loss "
+                                    f"(epoch {epoch}/{total_epochs - 1})"
+                                ),
+                            )
+                            np.save(
+                                out_dir / "loss.npy",
+                                np.array(losses, dtype=np.float64),
+                            )
+                    except Exception as lc_err:  # noqa: BLE001
+                        print(f"[multisource] loss-curve QC skipped: {lc_err}")
+
+        # --- 10) Final outputs.
+        prefetch_pool.shutdown(wait=False, cancel_futures=True)
+        if io_pool is not None:
+            io_pool.shutdown(wait=False, cancel_futures=True)
+        reader.close()
+        artifacts: list[Path] = []
+        final_vp_path = out_dir / "inverted_vp.npy"
+        np.save(final_vp_path, inv_by_name["vp"].detach().cpu().numpy())
+        artifacts.append(final_vp_path)
+        loss_path = out_dir / "loss.npy"
+        np.save(loss_path, np.array(losses, dtype=np.float64))
+        artifacts.append(loss_path)
+        try:
+            artifacts.append(_plot_loss_curve(losses, out_dir / "loss.png",
+                                              title="OBN multisource FWI Loss"))
+        except Exception as plot_err:  # noqa: BLE001
+            print(f"[multisource] loss plot skipped: {plot_err}")
+
+        summary = {
+            "epochs": total_epochs,
+            "final_loss": losses[-1] if losses else None,
+            "loss_decreased": (losses[-1] < losses[0]) if len(losses) >= 2 else None,
+            "n_virtual_sources": plan.n_groups,
+            "batchsize": int(spec.batchsize),
+            "encoding": True,
+            "shape": list(shape),
+        }
+        return artifacts, summary
+
+    # -- rtm ---------------------------------------------------------------
+
+    def _run_rtm(self, spec: RTMSpec, task_dir: Path):
+        """Post-FWI Reverse Time Migration: one pass over all shots, no iteration.
+
+        Per batch: forward, bandpass syn/obs, backward → the gradient image
+        IS the RTM cross-correlation under the chosen matching loss. The
+        c-backend forward call (re)populates ``solver.source_illumination``
+        and ``solver.receiver_illumination`` during backward, so the two
+        illumination maps come for free; no separate ``solver.rtm`` call.
+        Accumulate sums across all shots, then normalise by
+        ``sqrt(S * R + eps)`` and save raw + normalised products.
+
+        Legacy reference: :func:`fwi_workflow.imaging.rtm.run_sweep_imaging`
+        (which DID call ``solver.rtm`` separately because the older sweep
+        backend did not expose illumination via the regular forward path).
+        """
+        import torch
+
+        from sweep_runner import distributed as _dist
+
+        dist_info = getattr(self, "_dist", None)
+        if dist_info is None:
+            dist_info = _dist.init_distributed_if_needed()
+            self._dist = dist_info
+
+        _apply_seed(spec.seed)
+        dev = _dist.resolve_dist_device(spec.device, dist_info.local_rank)
+        equation_cls = _get_equation_class(spec.physics.equation)
+        _validate_single_model(equation_cls, spec.velocity_model)
+
+        # ---- 1) Shape, solver, wavelet, geometry, obs ------------------------
+        # Mirror _run_fwi's data_plan.dt_target_s sync: when obs is resampled
+        # via data_plan, the solver runs at the matching dt so syn/obs align.
+        effective_dt = float(spec.time.dt)
+        effective_nt = int(spec.time.nt)
+        if spec.data_plan is not None and spec.data_plan.dt_target_s is not None:
+            target_dt = float(spec.data_plan.dt_target_s)
+            if abs(target_dt - effective_dt) > 1e-12:
+                new_nt = int(round(effective_dt * effective_nt / target_dt))
+                if dist_info.is_root:
+                    print(f"[rtm] data_plan.dt_target_s={target_dt}s -> auto-sync "
+                          f"solver: dt {effective_dt} -> {target_dt}, nt "
+                          f"{effective_nt} -> {new_nt}")
+                effective_dt = target_dt
+                effective_nt = new_nt
+
+        vm_ref = spec.velocity_model
+        if spec.grid.shape is not None:
+            shape = tuple(int(v) for v in spec.grid.shape)
+        elif vm_ref.constant is not None:
+            shape = tuple(int(v) for v in vm_ref.shape)
+        else:
+            shape = tuple(np.load(vm_ref.path, mmap_mode="r").shape)
+
+        try:
+            if vm_ref.path is not None:
+                vmax_estimate = float(np.load(vm_ref.path, mmap_mode="r").max())
+            elif vm_ref.constant is not None:
+                vmax_estimate = float(vm_ref.constant)
+            else:
+                vmax_estimate = 0.0
+            if vmax_estimate > 0 and dist_info.is_root:
+                _cfl_check(vmax_estimate, float(spec.grid.dh), effective_dt)
+        except FileNotFoundError:
+            pass
+
+        solver = _build_solver(
+            spec.physics, spec.backend, shape, spec.grid.dh,
+            effective_dt, effective_nt, dev,
+        )
+        wavelet = _build_wavelet(
+            spec.wavelet, spec.time,
+            override_dt=effective_dt, override_nt=effective_nt,
+        )
+
+        segy_cache: dict = {}
+        sources, receivers = _build_geometry_2d(
+            spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+        )
+        nshots = int(sources.shape[0])
+
+        # Load velocity (as a fresh leaf each batch — we need grad on vp to
+        # derive the FWI gradient image; the input itself is constant).
+        vp_base = _load_model_tensor(vm_ref).to(dev)
+
+        # ---- Obs source decision: lazy PlanReader vs eager fallback ----------
+        # When ``spec.obs.plan`` is set we use a PlanReader directly so each
+        # batch's traces are read on demand (cache_all=True keeps them hot in
+        # RAM after the first pass; cache_all=False keeps memory bounded to
+        # one batch — required for production OBN-scale obs). Per-batch resample +
+        # bandpass move into the batch loop so the lazy path doesn't have to
+        # materialise a full (nshots, nt, nrec, 1) tensor.
+        #
+        # All other obs sources (synthetic, npy, segy, segy_index) fall back
+        # to the eager `_fwi_load_obs` route. They could be lazy-fied later
+        # by adding similar reader objects; for now they stay one-shot.
+        from sweep_io.seismic_plan import PlanReader, SeismicPlan
+
+        plan_reader: "PlanReader | None" = None
+        plan_obj: "SeismicPlan | None" = None
+        obs_np = None
+        if getattr(spec.obs, "plan", None) is not None:
+            plan_obj = SeismicPlan.load(spec.obs.plan.plan_path)
+            if plan_obj.grouping != "csg":
+                raise NotImplementedError(
+                    f"[rtm] obs.plan lazy reader currently supports "
+                    f"grouping='csg' only (got {plan_obj.grouping!r}); "
+                    "use the legacy CRG path for OBN datasets."
+                )
+            counts = plan_obj.per_group_row_counts()
+            if not (counts == counts[0]).all():
+                raise ValueError(
+                    "[rtm] obs.plan with non-uniform receiver count per shot; "
+                    "rebuild the plan with a filter that yields constant nrec."
+                )
+            if int(plan_obj.n_groups) != nshots:
+                raise ValueError(
+                    f"[rtm] obs.plan n_groups={plan_obj.n_groups} != "
+                    f"geometry-derived nshots={nshots}. The plan must match "
+                    "the geometry source (use geometry.kind=from_plan with "
+                    "the same plan_path)."
+                )
+            plan_reader = PlanReader(plan_obj, cache_all=bool(spec.obs.plan.cache_all))
+            if dist_info.is_root:
+                cache_label = ("cache_all=True (pre-loaded to RAM)"
+                               if spec.obs.plan.cache_all
+                               else "cache_all=False (per-batch disk read)")
+                print(f"[rtm] obs.plan lazy reader open: {plan_obj.n_groups} "
+                      f"groups, {int(counts[0])} rec/group, dt={plan_obj.dt_s:.4g}s, "
+                      f"{cache_label}")
+        else:
+            # Eager fallback for non-plan obs (synthetic / npy / segy / segy_index).
+            obs = self._fwi_generate_obs(
+                spec, equation_cls, solver, wavelet,
+                sources, receivers, shape, dev, nshots,
+                segy_cache=segy_cache,
+            )
+            sources, receivers, obs = _apply_data_plan_to_fwi(
+                spec, sources, receivers, obs, spec.grid.dh,
+                spec.time.dt, spec.time.nt, dev,
+            )
+            nshots = int(sources.shape[0])
+            obs_np = (obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor)
+                      else np.asarray(obs))
+            if obs_np.ndim != 4:
+                raise ValueError(
+                    f"[rtm] eager obs.ndim={obs_np.ndim} not supported; "
+                    "expected canonical 4-D (nshots, nt, nrec, 1)."
+                )
+            obs_np = np.ascontiguousarray(obs_np.astype(np.float32, copy=False))
+
+        # ---- 2) pristine_dt fix (mirror _run_fwi exactly) --------------------
+        # SEG-Y / plan-backed obs is read at the file's native dt; we resample
+        # per-batch below. Don't let a mis-labelled pristine_dt corrupt the
+        # resample (the same bug that bit the Viking benchmark).
+        obs_native_dt = float(effective_dt)
+        if spec.data_plan is None or spec.data_plan.dt_target_s is None:
+            if plan_obj is not None:
+                obs_native_dt = float(plan_obj.dt_s)
+            elif segy_cache and (
+                getattr(spec.obs, "segy", None) is not None
+                or getattr(spec.obs, "segy_index", None) is not None
+            ):
+                for payload in segy_cache.values():
+                    if isinstance(payload, dict) and "dt_s" in payload:
+                        obs_native_dt = float(payload["dt_s"])
+                        break
+        if abs(obs_native_dt - float(effective_dt)) > 1e-12 and dist_info.is_root:
+            print(f"[rtm] obs native dt={obs_native_dt}s differs from solver "
+                  f"dt={effective_dt}s; per-batch resample will sync.")
+
+        imaging = spec.imaging
+        lo_hz = imaging.filter_lowcut_hz
+        hi_hz = imaging.filter_highcut_hz
+        bandpass_obs = (lo_hz is not None and hi_hz is not None)
+
+        # ---- 2c) Optional wavelet bandpass (filter_target='wavelet') ---------
+        # Mirrors the FWI ``stage.bandpass.target == 'wavelet'`` path: pre-
+        # filter the source wavelet ONCE so the solver outputs naturally band-
+        # limited syn, and we then skip the per-batch syn bandpass entirely.
+        # Useful when the user wants to keep syn out of the autograd-filter
+        # path (cheaper) or to mirror legacy FWI imaging that applied filter
+        # on obs + wavelet rather than on syn.
+        filter_target = getattr(imaging, "filter_target", "syn")
+        if bandpass_obs and filter_target == "wavelet":
+            from sweep_preproc.filter import bandpass as _bp_cpu
+            pad_arg = imaging.filter_padtype
+            if pad_arg == "none":
+                pad_arg = None
+            is_torch = hasattr(wavelet, "detach")
+            if is_torch:
+                wav_np = wavelet.detach().cpu().numpy()
+                wav_dtype = wav_np.dtype
+                wav_device = wavelet.device
+            else:
+                wav_np = np.asarray(wavelet)
+                wav_dtype = wav_np.dtype
+                wav_device = None
+            wav_filt = _bp_cpu(
+                wav_np, lo=float(lo_hz), hi=float(hi_hz), dt=effective_dt,
+                order=int(imaging.filter_order), axis=-1, padtype=pad_arg,
+            ).astype(wav_dtype, copy=False)
+            wav_filt = np.ascontiguousarray(wav_filt)
+            if is_torch:
+                wavelet = torch.from_numpy(wav_filt).to(wav_device)
+            else:
+                wavelet = wav_filt
+            if dist_info.is_root:
+                peak = float(np.abs(wav_filt).max())
+                print(f"[rtm] wavelet bandpass {lo_hz}-{hi_hz} Hz applied "
+                      f"(peak now {peak:.3f}) -> syn naturally band-limited; "
+                      "syn filter SKIPPED per-batch")
+        elif bandpass_obs and filter_target not in ("syn", "wavelet"):
+            raise ValueError(
+                f"[rtm] imaging.filter_target must be 'syn' or 'wavelet'; "
+                f"got {filter_target!r}"
+            )
+
+        # ---- 3) Distribute shot batches across DDP ranks ---------------------
+        shots_per_batch = max(1, int(imaging.shots_per_batch))
+        shot_indices_all = np.arange(nshots, dtype=np.int64)
+        all_batches = [
+            shot_indices_all[start:start + shots_per_batch]
+            for start in range(0, nshots, shots_per_batch)
+        ]
+        # Round-robin batches across ranks (each rank processes its slice; the
+        # final all_reduce SUMs the four accumulators across ranks).
+        local_batches = (
+            all_batches[dist_info.rank::dist_info.world_size]
+            if dist_info.is_distributed else all_batches
+        )
+
+        if dist_info.is_root:
+            print(f"[rtm] shape={shape} nshots={nshots} shots_per_batch={shots_per_batch} "
+                  f"n_batches={len(all_batches)} world_size={dist_info.world_size} "
+                  f"normalize_by_illumination={imaging.normalize_by_illumination}")
+
+        # ---- 4) Per-batch local-window context (optional) --------------------
+        local_window_ctx = None
+        if (spec.local_model_window is not None
+                and spec.local_model_window.enabled):
+            local_window_ctx = {
+                "spec": spec.local_model_window,
+                "shape": tuple(shape),
+                "dh": float(spec.grid.dh),
+                "dt": float(effective_dt),
+                "nt": int(effective_nt),
+                "solver_cache": {},
+            }
+
+        # ---- 5) Output dirs + history CSV ------------------------------------
+        out_dir = task_dir / "output"
+        qc_dir = task_dir / "qc"
+        per_shot_dir = out_dir / "per_shot"
+        if dist_info.is_root:
+            out_dir.mkdir(exist_ok=True)
+            qc_dir.mkdir(parents=True, exist_ok=True)
+            if imaging.save_per_shot:
+                per_shot_dir.mkdir(parents=True, exist_ok=True)
+        _dist.barrier(dist_info)
+
+        # ---- 6) Accumulators -------------------------------------------------
+        full_shape = tuple(int(v) for v in shape)
+        gradient_sum = np.zeros(full_shape, dtype=np.float32)
+        rtm_sum = np.zeros(full_shape, dtype=np.float32)
+        source_illum_sum = np.zeros(full_shape, dtype=np.float32)
+        receiver_illum_sum = np.zeros(full_shape, dtype=np.float32)
+        # Per-shot illumination-normalised accumulators: each batch's
+        # gradient / RTM image gets divided by its OWN illumination before
+        # the sum, so deep / weakly-illuminated cells are not drowned by
+        # high-illumination shallow regions. This is what the legacy Viking
+        # imaging step ships as the canonical product
+        # (illumination_normalized_rtm_per_shot.npy + the matching FWI
+        # gradient variant). Mirrors fwi_workflow.imaging.rtm lines 563-576.
+        gradient_per_shot_norm_sum = np.zeros(full_shape, dtype=np.float32)
+        rtm_per_shot_norm_sum = np.zeros(full_shape, dtype=np.float32)
+        history: list[dict] = []
+
+        history_path = task_dir / "history.csv"
+        history_file = None
+        history_writer = None
+        if dist_info.is_root:
+            import csv as _csv
+            history_file = history_path.open("w", newline="")
+            history_writer = _csv.DictWriter(
+                history_file,
+                fieldnames=[
+                    "batch_index", "shot_count", "shot_id_min", "shot_id_max",
+                    "loss", "gradient_rms", "gradient_abs_max",
+                    "rtm_abs_max", "local_z0", "local_z1",
+                    "local_x0", "local_x1",
+                ],
+            )
+            history_writer.writeheader()
+            history_file.flush()
+
+        # ---- 7) Main one-pass loop -------------------------------------------
+        # Derive the per-batch loss spec. ``imaging.loss_kind`` overrides
+        # ``spec.loss.kind`` (the imaging block is the authoritative source for
+        # post-FWI products), but secondary knobs (huber_delta, trace_cosine_eps)
+        # still come from ``spec.loss``.
+        from sweep_tasks.schemas import LossSpec as _LossSpec
+        loss_spec_for_grad = _LossSpec(
+            kind=imaging.loss_kind,
+            huber_delta=float(spec.loss.huber_delta),
+            trace_cosine_demean=bool(imaging.trace_cosine_demean),
+            trace_cosine_eps=float(spec.loss.trace_cosine_eps),
+        )
+
+        # Bandpass kwargs for the per-batch obs prep (shared by both lazy
+        # and eager paths). Wavelet was already pre-filtered above when
+        # filter_target == 'wavelet', so we still bandpass obs here either
+        # way — only the syn bandpass inside _rtm_process_batch is gated.
+        if bandpass_obs:
+            _bp_pad = imaging.filter_padtype
+            if _bp_pad == "none":
+                _bp_pad = None
+            bandpass_kwargs = dict(
+                lo=float(lo_hz), hi=float(hi_hz),
+                dt=float(effective_dt),
+                order=int(imaging.filter_order),
+                padtype=_bp_pad,
+            )
+        else:
+            bandpass_kwargs = None
+
+        for local_idx, batch_indices in enumerate(local_batches):
+            global_batch_index = (
+                (local_idx * dist_info.world_size + dist_info.rank)
+                if dist_info.is_distributed else local_idx
+            )
+            try:
+                obs_chunk = self._rtm_prep_obs_batch(
+                    batch_indices=batch_indices,
+                    plan_reader=plan_reader,
+                    obs_np=obs_np,
+                    obs_native_dt=obs_native_dt,
+                    effective_dt=float(effective_dt),
+                    effective_nt=int(effective_nt),
+                    bandpass_kwargs=bandpass_kwargs,
+                    dev=dev,
+                )
+                self._rtm_process_batch(
+                    spec=spec,
+                    solver=solver,
+                    wavelet=wavelet,
+                    sources=sources,
+                    receivers=receivers,
+                    obs_chunk=obs_chunk,
+                    vp_base=vp_base,
+                    full_shape=full_shape,
+                    dev=dev,
+                    batch_indices=batch_indices,
+                    global_batch_index=global_batch_index,
+                    loss_spec=loss_spec_for_grad,
+                    imaging=imaging,
+                    bandpass_obs=bandpass_obs,
+                    filter_target=filter_target,
+                    effective_dt=float(effective_dt),
+                    local_window_ctx=local_window_ctx,
+                    gradient_sum=gradient_sum,
+                    rtm_sum=rtm_sum,
+                    source_illum_sum=source_illum_sum,
+                    receiver_illum_sum=receiver_illum_sum,
+                    gradient_per_shot_norm_sum=gradient_per_shot_norm_sum,
+                    rtm_per_shot_norm_sum=rtm_per_shot_norm_sum,
+                    history=history,
+                    history_writer=history_writer,
+                    history_file=history_file,
+                    per_shot_dir=per_shot_dir,
+                    qc_dir=qc_dir,
+                    dist_info=dist_info,
+                )
+            except Exception as berr:  # noqa: BLE001
+                # One bad batch (e.g. boundary saving issue at extreme window
+                # shape) should not nuke the whole RTM run. Log + continue.
+                import traceback as _tb
+                print(f"[rtm] batch {global_batch_index} failed: "
+                      f"{type(berr).__name__}: {berr}")
+                _tb.print_exc()
+
+            # Periodic live QC re-render (rank 0 only — uses local accumulators
+            # which differ between ranks, but the user just wants something to
+            # eyeball; the final reduced result lives in qc/ after the loop).
+            if (dist_info.is_root
+                    and (local_idx + 1) % int(imaging.live_update_every_batches) == 0):
+                try:
+                    _save_rtm_qc_pngs(
+                        gradient_sum=gradient_sum,
+                        rtm_sum=rtm_sum,
+                        source_illum_sum=source_illum_sum,
+                        receiver_illum_sum=receiver_illum_sum,
+                        gradient_per_shot_norm_sum=gradient_per_shot_norm_sum,
+                        rtm_per_shot_norm_sum=rtm_per_shot_norm_sum,
+                        qc_dir=qc_dir,
+                        suffix="_latest",
+                        eps=float(imaging.illumination_epsilon),
+                        normalize=bool(imaging.normalize_by_illumination),
+                    )
+                except Exception as qerr:  # noqa: BLE001
+                    print(f"[rtm] live QC skipped at batch {local_idx + 1}: {qerr}")
+
+        if history_file is not None:
+            history_file.close()
+
+        # Close the lazy plan reader (closes SEG-Y handles + frees the cache
+        # tensor when cache_all=True). Eager path has nothing to close.
+        if plan_reader is not None:
+            plan_reader.close()
+
+        # ---- 8) All-reduce across ranks --------------------------------------
+        if dist_info.is_distributed:
+            for buf in (gradient_sum, rtm_sum,
+                        source_illum_sum, receiver_illum_sum,
+                        gradient_per_shot_norm_sum, rtm_per_shot_norm_sum):
+                t = torch.from_numpy(buf)
+                if dev.type == "cuda":
+                    t = t.to(dev)
+                _dist.all_reduce_sum_inplace(t, dist_info)
+                buf[...] = t.detach().cpu().numpy()
+
+        # ---- 9) Save outputs (rank 0 only) -----------------------------------
+        artifacts: list[Path] = []
+        if dist_info.is_root:
+            np.save(out_dir / "fwi_gradient_image.npy", gradient_sum)
+            np.save(out_dir / "rtm_image.npy", rtm_sum)
+            np.save(out_dir / "source_illumination.npy", source_illum_sum)
+            np.save(out_dir / "receiver_illumination.npy", receiver_illum_sum)
+            eps = float(imaging.illumination_epsilon)
+            denom = np.sqrt(np.maximum(source_illum_sum * receiver_illum_sum, 0.0) + eps)
+            grad_norm = (gradient_sum / denom).astype(np.float32)
+            rtm_norm = (rtm_sum / denom).astype(np.float32)
+            np.save(out_dir / "fwi_gradient_image_normalised.npy", grad_norm)
+            np.save(out_dir / "rtm_image_normalised.npy", rtm_norm)
+            # Per-shot illumination-normalised products: each shot's image was
+            # divided by its OWN sqrt(S*R+eps) BEFORE summation, so deep /
+            # weakly-illuminated cells survive the stack. Legacy Viking's
+            # canonical RTM display is this variant — strongly recommended
+            # over the global-normalised one for plotting.
+            np.save(out_dir / "fwi_gradient_image_per_shot_normalised.npy",
+                    gradient_per_shot_norm_sum)
+            np.save(out_dir / "rtm_image_per_shot_normalised.npy",
+                    rtm_per_shot_norm_sum)
+            np.savez_compressed(
+                out_dir / "rtm_result.npz",
+                fwi_gradient_image=gradient_sum,
+                rtm_image=rtm_sum,
+                source_illumination=source_illum_sum,
+                receiver_illumination=receiver_illum_sum,
+                fwi_gradient_image_normalised=grad_norm,
+                rtm_image_normalised=rtm_norm,
+                fwi_gradient_image_per_shot_normalised=gradient_per_shot_norm_sum,
+                rtm_image_per_shot_normalised=rtm_per_shot_norm_sum,
+                illumination_epsilon=np.float32(eps),
+                dh=np.float32(spec.grid.dh),
+                dt=np.float32(effective_dt),
+                nt=np.int64(effective_nt),
+                shape=np.asarray(full_shape, dtype=np.int64),
+                n_shots=np.int64(nshots),
+                n_batches=np.int64(len(all_batches)),
+            )
+            artifacts.extend([
+                out_dir / "fwi_gradient_image.npy",
+                out_dir / "rtm_image.npy",
+                out_dir / "source_illumination.npy",
+                out_dir / "receiver_illumination.npy",
+                out_dir / "fwi_gradient_image_normalised.npy",
+                out_dir / "rtm_image_normalised.npy",
+                out_dir / "fwi_gradient_image_per_shot_normalised.npy",
+                out_dir / "rtm_image_per_shot_normalised.npy",
+                out_dir / "rtm_result.npz",
+                history_path,
+            ])
+            try:
+                qc_artefacts = _save_rtm_qc_pngs(
+                    gradient_sum=gradient_sum,
+                    rtm_sum=rtm_sum,
+                    source_illum_sum=source_illum_sum,
+                    receiver_illum_sum=receiver_illum_sum,
+                    gradient_per_shot_norm_sum=gradient_per_shot_norm_sum,
+                    rtm_per_shot_norm_sum=rtm_per_shot_norm_sum,
+                    qc_dir=qc_dir,
+                    suffix="",
+                    eps=eps,
+                    normalize=bool(imaging.normalize_by_illumination),
+                )
+                artifacts.extend(qc_artefacts)
+            except Exception as qerr:  # noqa: BLE001
+                print(f"[rtm] final QC PNG skipped: {qerr}")
+
+            # ---- 9b) Optional post-filter (depth-tapered z-low-cut) ---------
+            # Mirrors legacy ``07_filter_imaging.py``. Runs only when the user
+            # opts in via ``imaging.post_filter``; outputs land next to the raw
+            # npy files as ``<stem>_shallow_zlowcut.{npy,png}``. The same
+            # algorithm is exposed standalone as ``sweep-tasks filter-image``
+            # so users can iterate on params without re-running the RTM.
+            post_filter = getattr(imaging, "post_filter", None)
+            if post_filter is not None and bool(post_filter.enabled):
+                from sweep_tasks.postproc.filter_image import filter_image_file
+
+                all_targets = [
+                    "fwi_gradient_image",
+                    "rtm_image",
+                    "fwi_gradient_image_normalised",
+                    "rtm_image_normalised",
+                    "fwi_gradient_image_per_shot_normalised",
+                    "rtm_image_per_shot_normalised",
+                ]
+                if post_filter.targets == "all":
+                    pf_targets = all_targets
+                else:
+                    pf_targets = [str(t) for t in post_filter.targets]
+                dh = float(spec.grid.dh)
+                nx_full = int(full_shape[1])
+                x_max_m = float((nx_full - 1) * dh)
+                for stem in pf_targets:
+                    src = out_dir / f"{stem}.npy"
+                    if not src.is_file():
+                        print(f"[rtm] post_filter skip {stem}: {src} not found")
+                        continue
+                    try:
+                        meta = filter_image_file(
+                            src,
+                            output_dir=out_dir,
+                            output_name=f"{stem}_shallow_zlowcut",
+                            dz_m=dh,
+                            dx_m=dh,
+                            wavelength_m=float(post_filter.wavelength_m),
+                            depth_m=float(post_filter.depth_m),
+                            taper_m=float(post_filter.taper_m),
+                            clip_percentile=float(post_filter.clip_percentile),
+                            display_scale=float(post_filter.display_scale),
+                            x_origin_m=0.0,
+                            z_origin_m=0.0,
+                            x_max_m=x_max_m,
+                            cmap=str(post_filter.cmap),
+                            save_png=bool(post_filter.save_png),
+                        )
+                    except Exception as ferr:  # noqa: BLE001
+                        print(f"[rtm] post_filter {stem} skipped: "
+                              f"{type(ferr).__name__}: {ferr}")
+                        continue
+                    out_stem = out_dir / f"{stem}_shallow_zlowcut"
+                    artifacts.append(out_stem.with_suffix(".npy"))
+                    artifacts.append(Path(meta["removed"]))
+                    artifacts.append(Path(meta["z_taper"]))
+                    artifacts.append(out_dir / f"{stem}_shallow_zlowcut_metadata.json")
+                    if bool(post_filter.save_png):
+                        artifacts.append(out_stem.with_suffix(".png"))
+                        artifacts.append(out_dir / f"{stem}_shallow_zlowcut_comparison.png")
+                    print(f"[rtm] post_filter -> {out_stem.name}.npy "
+                          f"(wavelength={post_filter.wavelength_m}m, "
+                          f"depth={post_filter.depth_m}m, "
+                          f"taper={post_filter.taper_m}m)")
+
+        _dist.barrier(dist_info)
+
+        summary = {
+            "n_shots": int(nshots),
+            "n_batches": int(len(all_batches)),
+            "shots_per_batch": int(shots_per_batch),
+            "image_abs_max": float(np.abs(rtm_sum).max()),
+            "image_per_shot_norm_abs_max": float(np.abs(rtm_per_shot_norm_sum).max()),
+            "gradient_abs_max": float(np.abs(gradient_sum).max()),
+            "gradient_per_shot_norm_abs_max": float(np.abs(gradient_per_shot_norm_sum).max()),
+            "source_illum_max": float(source_illum_sum.max()),
+            "receiver_illum_max": float(receiver_illum_sum.max()),
+            "world_size": dist_info.world_size,
+            "normalize_by_illumination": bool(imaging.normalize_by_illumination),
+        }
+        return artifacts, summary
+
+    # -- rtm per-batch obs prep (lazy / eager unified) --------------------
+
+    def _rtm_prep_obs_batch(
+        self,
+        *,
+        batch_indices,
+        plan_reader,
+        obs_np,
+        obs_native_dt: float,
+        effective_dt: float,
+        effective_nt: int,
+        bandpass_kwargs: dict | None,
+        dev,
+    ):
+        """Materialise one shot batch's obs as a torch ``(B, nt, nrec, 1)`` tensor.
+
+        Two routes selected by argument presence:
+
+        * ``plan_reader`` set → **lazy**: read each shot's traces via
+          :meth:`PlanReader.read_group`. With ``cache_all=True`` on the
+          reader, traces are already in RAM (slice is cheap); with
+          ``cache_all=False`` it's a per-batch SEG-Y read.
+        * ``obs_np`` set → **eager**: slice the in-RAM
+          ``(nshots, nt, nrec, 1)`` tensor produced by ``_fwi_load_obs``.
+
+        Per-batch ops (resample → trim/pad → bandpass) are applied here so
+        the lazy path doesn't have to materialise the full obs. Returns a
+        contiguous ``torch.float32`` tensor on ``dev``.
+        """
+        import torch
+
+        batch_arr = np.asarray(batch_indices, dtype=np.int64)
+        if plan_reader is not None:
+            # (B, nrec, nt_native) from PlanReader
+            chunks = [plan_reader.read_group(int(s)) for s in batch_arr]
+            raw = np.stack(chunks, axis=0).astype(np.float32, copy=False)
+            # Canonical layout: (B, nt, nrec, 1)
+            raw = np.ascontiguousarray(raw.transpose(0, 2, 1))[..., None]
+        elif obs_np is not None:
+            raw = np.take(obs_np, batch_arr, axis=0)
+        else:
+            raise RuntimeError(
+                "[rtm] _rtm_prep_obs_batch: neither plan_reader nor obs_np "
+                "provided. This is a runner-internal bug."
+            )
+
+        # time_axis on canonical 4-D is axis=1; resample/trim/pad/bandpass
+        # helpers default to axis=-1, so pass time_axis explicitly.
+        time_axis = 1
+        if abs(obs_native_dt - effective_dt) > 1.0e-12:
+            raw = _resample_obs_time(raw, obs_native_dt, effective_dt,
+                                     time_axis=time_axis)
+        raw = _trim_or_pad_time(raw, effective_nt, time_axis=time_axis)
+
+        if bandpass_kwargs is not None:
+            raw = _bandpass_obs(raw, time_axis=time_axis, **bandpass_kwargs)
+
+        raw = np.ascontiguousarray(raw.astype(np.float32, copy=False))
+        return torch.as_tensor(raw, dtype=torch.float32, device=dev)
+
+    # -- rtm per-batch kernel ---------------------------------------------
+
+    def _rtm_process_batch(
+        self,
+        *,
+        spec: "RTMSpec",
+        solver,
+        wavelet,
+        sources,
+        receivers,
+        obs_chunk,
+        vp_base,
+        full_shape: tuple,
+        dev,
+        batch_indices,
+        global_batch_index: int,
+        loss_spec,
+        imaging,
+        bandpass_obs: bool,
+        filter_target: str = "syn",
+        effective_dt: float,
+        local_window_ctx,
+        gradient_sum,
+        rtm_sum,
+        source_illum_sum,
+        receiver_illum_sum,
+        gradient_per_shot_norm_sum=None,
+        rtm_per_shot_norm_sum=None,
+        history,
+        history_writer,
+        history_file,
+        per_shot_dir: Path,
+        qc_dir: Path,
+        dist_info,
+    ) -> None:
+        """Run one shot batch: forward + backward populates both the
+        gradient image (= RTM cross-correlation under the matching loss) and
+        the solver-side ``source_illumination`` / ``receiver_illumination``
+        attributes. No separate ``solver.rtm`` invocation is needed — the
+        c-backend's regular adjoint pass owns illumination since the layout
+        unification (sweep commit 21041c5).
+
+        Mutates the four accumulator buffers (gradient_sum / rtm_sum /
+        *_illum_sum) in-place, writes one history row, and (when
+        ``imaging.save_per_shot``) dumps a per-shot npz. The ``rtm_sum`` and
+        ``gradient_sum`` accumulators receive the same per-batch image; the
+        duplication is kept so downstream consumers expecting the legacy
+        filename split (rtm_image.npy vs fwi_gradient_image.npy) still get
+        both outputs without surprises.
+        """
+        import torch
+
+        # ---- Resolve solver + window slice for this batch --------------------
+        if local_window_ctx is None:
+            chunk_solver = solver
+            z0, z1 = 0, int(full_shape[0])
+            x0, x1 = 0, int(full_shape[1])
+            chunk_src = sources[batch_indices]
+            chunk_rec = receivers[batch_indices]
+            chunk_vp_base = vp_base
+        else:
+            win_spec = local_window_ctx["spec"]
+            dh = local_window_ctx["dh"]
+            z0, z1, x0, x1 = _compute_local_window(
+                sources[batch_indices], receivers[batch_indices],
+                full_shape, dh, win_spec,
+            )
+            local_shape = (z1 - z0, x1 - x0)
+            cache = local_window_ctx["solver_cache"]
+            if local_shape not in cache:
+                # Mirror _fwi_train_step's cache cap.
+                if len(cache) >= 4:
+                    oldest = next(iter(cache))
+                    del cache[oldest]
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                cache[local_shape] = _build_solver(
+                    spec.physics, spec.backend, local_shape, dh,
+                    local_window_ctx["dt"], local_window_ctx["nt"], dev,
+                )
+            else:
+                cache[local_shape] = cache.pop(local_shape)  # LRU touch
+            chunk_solver = cache[local_shape]
+            chunk_src, chunk_rec = _rebase_geometry_to_window(
+                sources[batch_indices], receivers[batch_indices], z0, x0,
+            )
+            chunk_vp_base = vp_base[z0:z1, x0:x1].contiguous()
+
+        # ---- Forward + bandpass syn + loss + backward → FWI grad image ------
+        # Fresh leaf each batch (we discard grads between batches; the RTM
+        # accumulator on the caller side does the summation).
+        local_vp = chunk_vp_base.detach().clone().requires_grad_(True)
+        syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=[local_vp])
+
+        # Syn bandpass is needed ONLY when ``filter_target='syn'``: with
+        # ``filter_target='wavelet'`` the wavelet itself was pre-filtered in
+        # the driver, so the solver output is already band-limited and an
+        # extra autograd-aware filter on syn would just double-apply the
+        # response.
+        if bandpass_obs and filter_target == "syn":
+            syn_filt = _bandpass_syn_torch(
+                syn, float(imaging.filter_lowcut_hz),
+                float(imaging.filter_highcut_hz),
+                effective_dt, order=int(imaging.filter_order),
+            )
+        else:
+            syn_filt = syn
+
+        # ``obs_chunk`` arrives pre-prepared (sliced + resampled + bandpassed
+        # + on-device) from the caller's ``_rtm_prep_obs_batch`` — that helper
+        # serves both the lazy PlanReader and the eager full-RAM paths so we
+        # do not have to materialise a production OBN-scale obs tensor in this loop.
+
+        loss = _compute_loss(syn_filt, obs_chunk, loss_spec).sum()
+        loss.backward()
+        if local_vp.grad is None:
+            raise RuntimeError(
+                f"[rtm] batch {global_batch_index}: vp.grad is None — backward "
+                "did not populate the gradient image."
+            )
+        gradient_local = (
+            local_vp.grad.detach().nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+            .cpu().numpy().astype(np.float32)
+        )
+        loss_value = float(loss.detach().cpu())
+
+        # ---- Illumination snapshot ------------------------------------------
+        # The c-backend forward call zeros + (re)populates
+        # ``solver.source_illumination`` and ``solver.receiver_illumination``
+        # during the backward pass.  No separate ``solver.rtm`` invocation is
+        # required — the gradient we just took IS the imaging-condition
+        # cross-correlation (gradient = RTM image under the chosen loss).
+        sill_attr = getattr(chunk_solver, "source_illumination", None)
+        rill_attr = getattr(chunk_solver, "receiver_illumination", None)
+        if sill_attr is None or rill_attr is None:
+            raise RuntimeError(
+                "[rtm] backend did not expose solver.source_illumination / "
+                "receiver_illumination after backward. Confirm backend.impl='c' "
+                "(the eager autograd backend does not populate these)."
+            )
+
+        target_shape = tuple(int(v) for v in local_vp.shape)
+        src_illum = _crop_padded_volume_to_model(
+            sill_attr.detach(), target_shape, spec.physics,
+        )
+        rec_illum = _crop_padded_volume_to_model(
+            rill_attr.detach(), target_shape, spec.physics,
+        )
+
+        # RTM image == FWI gradient under the chosen matching loss.  Keep the
+        # two output arrays identical so downstream consumers that expect the
+        # legacy filename split (rtm_image.npy vs fwi_gradient_image.npy) keep
+        # working without surprises.
+        rtm_image = gradient_local
+
+        # ---- Scatter local batch products into the full-grid accumulators ----
+        zslice = slice(z0, z1)
+        xslice = slice(x0, x1)
+        gradient_sum[zslice, xslice] += gradient_local
+        rtm_sum[zslice, xslice] += rtm_image
+        source_illum_sum[zslice, xslice] += src_illum
+        receiver_illum_sum[zslice, xslice] += rec_illum
+
+        # Per-shot illumination-normalised contribution: divide this batch's
+        # image by its OWN sqrt(S*R+eps) BEFORE adding to the stack. Cleans
+        # deep / weakly-illuminated cells that the global-normalised stack
+        # buries under shallow energy (legacy
+        # ``illumination_*_per_shot.npy``). Optional buffers — only filled
+        # when the caller passes them.
+        if gradient_per_shot_norm_sum is not None or rtm_per_shot_norm_sum is not None:
+            eps_ps = float(imaging.illumination_epsilon)
+            denom_local = np.sqrt(
+                np.maximum(src_illum.astype(np.float64) * rec_illum.astype(np.float64), 0.0)
+                + eps_ps
+            ).astype(np.float32)
+            if gradient_per_shot_norm_sum is not None:
+                gradient_per_shot_norm_sum[zslice, xslice] += (
+                    gradient_local / denom_local
+                ).astype(np.float32)
+            if rtm_per_shot_norm_sum is not None:
+                rtm_per_shot_norm_sum[zslice, xslice] += (
+                    rtm_image / denom_local
+                ).astype(np.float32)
+
+        # ---- History row -----------------------------------------------------
+        grad_abs_max = float(np.abs(gradient_local).max())
+        grad_rms = float(np.sqrt(np.mean(gradient_local.astype(np.float64) ** 2)))
+        rtm_abs_max = float(np.abs(rtm_image).max())
+        entry = {
+            "batch_index": int(global_batch_index),
+            "shot_count": int(np.asarray(batch_indices).size),
+            "shot_id_min": int(np.min(batch_indices)),
+            "shot_id_max": int(np.max(batch_indices)),
+            "loss": loss_value,
+            "gradient_rms": grad_rms,
+            "gradient_abs_max": grad_abs_max,
+            "rtm_abs_max": rtm_abs_max,
+            "local_z0": int(z0), "local_z1": int(z1),
+            "local_x0": int(x0), "local_x1": int(x1),
+        }
+        history.append(entry)
+        if history_writer is not None and dist_info.is_root:
+            history_writer.writerow(entry)
+            if history_file is not None:
+                history_file.flush()
+
+        # ---- Optional per-shot npz dump -------------------------------------
+        if imaging.save_per_shot and dist_info.is_root:
+            for k, shot_id in enumerate(np.asarray(batch_indices)):
+                np.savez_compressed(
+                    per_shot_dir / f"shot_{int(shot_id):05d}.npz",
+                    gradient=gradient_local,
+                    rtm_image=rtm_image,
+                    source_illumination=src_illum,
+                    receiver_illumination=rec_illum,
+                    shot_id=np.int64(int(shot_id)),
+                    z0=np.int32(z0), z1=np.int32(z1),
+                    x0=np.int32(x0), x1=np.int32(x1),
+                    loss=np.float32(loss_value),
+                )
+
+        print(f"[rtm] batch {global_batch_index:04d} "
+              f"shots={batch_indices.size} loss={loss_value:.6e} "
+              f"grad_rms={grad_rms:.3e} rtm_max={rtm_abs_max:.3e} "
+              f"window=z[{z0},{z1})x[{x0},{x1})", flush=True)
+
+        # Free per-batch tensors so subsequent batches see a clean allocator.
+        del syn, syn_filt, obs_chunk, local_vp
+        if dev.type == "cuda":
+            torch.cuda.empty_cache()
 
     def _run_lsrtm(self, spec: LSRTMSpec, task_dir: Path):
         import torch
@@ -3111,6 +5937,293 @@ def _lsrtm_background_equation(lsrtm_name: str) -> str:
 
 
 # ---------- lightweight plotting helpers ---------------------------------
+
+def _crop_padded_volume_to_model(volume, target_shape: tuple, physics) -> "np.ndarray":
+    """Crop a sweep c-backend RTM/illumination volume back to the model shape.
+
+    The c-backend pads each model side by ``M = spatial_order // 2`` (for FD
+    stencil) and ``abcn`` (for the absorbing layer). For free-surface runs,
+    the top z-side is padded only by ``M`` instead of ``M + abcn``.
+
+    Mirrors ``fwi_workflow.imaging.rtm._crop_solver_volume_2d``. 2-D-only;
+    3-D RTM cropping is not yet implemented (raise a clear error).
+    """
+    import torch as _torch
+
+    if isinstance(volume, _torch.Tensor):
+        values = volume.detach().cpu()
+        while values.ndim > 2:
+            # Squeeze leading shot / channel axes (typical c-backend output is
+            # (B, 1, nz, nx) for 2-D acoustic; sum over the batch axis to merge
+            # contributions from multiple shots in the same batch).
+            if int(values.shape[0]) == 1:
+                values = values.squeeze(0)
+            else:
+                values = values.sum(dim=0)
+        array = values.numpy().astype(np.float32, copy=False)
+    else:
+        array = np.asarray(volume, dtype=np.float32)
+        while array.ndim > 2:
+            if int(array.shape[0]) == 1:
+                array = array[0]
+            else:
+                array = array.sum(axis=0)
+
+    if tuple(array.shape) == tuple(target_shape):
+        return np.ascontiguousarray(array)
+    if array.ndim != 2:
+        raise NotImplementedError(
+            f"_crop_padded_volume_to_model: only 2-D crops are supported; "
+            f"got array shape {tuple(array.shape)} (3-D RTM cropping not yet "
+            "implemented)."
+        )
+    margin = max(0, int(physics.spatial_order) // 2)
+    pad = max(0, int(physics.abcn)) + margin
+    nz_pad, nx_pad = int(array.shape[0]), int(array.shape[1])
+    nz_target, nx_target = int(target_shape[0]), int(target_shape[1])
+    x_slice = slice(pad, nx_pad - pad if pad > 0 else None)
+    z_slice = slice(
+        margin if physics.free_surface else pad,
+        nz_pad - pad if pad > 0 else None,
+    )
+    cropped = array[z_slice, x_slice]
+    # Some backends return a slightly larger volume than the strict crop;
+    # if the strict slice is wrong by 1-2 cells, take the leading sub-array
+    # that matches the target shape (matches the legacy fallback path).
+    if cropped.shape != (nz_target, nx_target):
+        if (cropped.shape[0] >= nz_target and cropped.shape[1] >= nx_target):
+            cropped = cropped[:nz_target, :nx_target]
+        else:
+            raise ValueError(
+                f"_crop_padded_volume_to_model: cannot crop from {array.shape} "
+                f"to {target_shape}; got {cropped.shape}."
+            )
+    return np.ascontiguousarray(cropped, dtype=np.float32)
+
+
+def _save_rtm_qc_pngs(
+    *,
+    gradient_sum,
+    rtm_sum,
+    source_illum_sum,
+    receiver_illum_sum,
+    gradient_per_shot_norm_sum=None,
+    rtm_per_shot_norm_sum=None,
+    qc_dir: Path,
+    suffix: str = "",
+    eps: float = 1.0e-6,
+    normalize: bool = True,
+) -> list[Path]:
+    """Write the standard RTM QC PNGs to ``qc_dir``.
+
+    ``suffix`` lets the live-update path emit ``*_latest.png`` without
+    overwriting the final products.
+
+    Returns the list of written paths (so the caller can register them as
+    artifacts in the task status).
+    """
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+    # Side-effect import: registers ``sweep_image`` / ``sweep_vp`` so the
+    # RTM panels below resolve. Tolerate sweep_viz being missing — caller
+    # gets a clear matplotlib error in that case.
+    try:
+        from sweep_viz.colormaps import IMAGE_CMAP as _RTM_CMAP
+    except Exception:  # noqa: BLE001
+        _RTM_CMAP = "seismic"
+
+    qc_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+
+    def _imshow(ax, array, title, *, symmetric: bool, cmap: str, perc=(1.0, 99.0)):
+        finite = array[np.isfinite(array)]
+        if finite.size:
+            vmin, vmax = np.percentile(finite, list(perc))
+            if symmetric:
+                m = max(abs(float(vmin)), abs(float(vmax)))
+                vmin, vmax = -m, m
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
+                vmin, vmax = None, None
+        else:
+            vmin, vmax = None, None
+        im = ax.imshow(array, cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.set_xlabel("x index")
+        ax.set_ylabel("z index")
+        return im
+
+    def _single_png(array, title, path, *, symmetric, cmap):
+        fig, ax = plt.subplots(1, 1, figsize=(11, 3.8))
+        try:
+            im = _imshow(ax, array, title, symmetric=symmetric, cmap=cmap)
+            fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+            fig.tight_layout()
+            fig.savefig(path, dpi=150, bbox_inches="tight")
+        finally:
+            plt.close(fig)
+        return path
+
+    # Raw RTM image
+    paths.append(_single_png(
+        rtm_sum, f"RTM image{suffix}", qc_dir / f"rtm_image{suffix}.png",
+        symmetric=True, cmap=_RTM_CMAP,
+    ))
+    # Raw FWI gradient image
+    paths.append(_single_png(
+        gradient_sum, f"FWI gradient image{suffix}",
+        qc_dir / f"gradient_image{suffix}.png",
+        symmetric=True, cmap=_RTM_CMAP,
+    ))
+
+    # Normalised image (only when normalize_by_illumination is on; otherwise
+    # the raw RTM is already the deliverable)
+    if normalize:
+        denom = np.sqrt(np.maximum(source_illum_sum * receiver_illum_sum, 0.0) + float(eps))
+        rtm_norm = (rtm_sum / denom).astype(np.float32)
+        paths.append(_single_png(
+            rtm_norm,
+            f"RTM image (global illumination-normalised){suffix}",
+            qc_dir / f"rtm_image_normalised{suffix}.png",
+            symmetric=True, cmap=_RTM_CMAP,
+        ))
+
+    # Per-shot illumination-normalised image — the canonical Viking RTM
+    # display (legacy `illumination_normalized_rtm_per_shot.png`). Each
+    # shot's contribution was divided by its own illumination BEFORE the
+    # stack, so deep / weakly-illuminated cells survive instead of being
+    # drowned by the strong shallow energy in the global-normalised view.
+    if rtm_per_shot_norm_sum is not None:
+        paths.append(_single_png(
+            np.asarray(rtm_per_shot_norm_sum),
+            f"RTM image (per-shot illumination-normalised){suffix}",
+            qc_dir / f"rtm_image_per_shot_normalised{suffix}.png",
+            symmetric=True, cmap=_RTM_CMAP,
+        ))
+    if gradient_per_shot_norm_sum is not None:
+        paths.append(_single_png(
+            np.asarray(gradient_per_shot_norm_sum),
+            f"FWI gradient (per-shot illumination-normalised){suffix}",
+            qc_dir / f"gradient_image_per_shot_normalised{suffix}.png",
+            symmetric=True, cmap=_RTM_CMAP,
+        ))
+
+    # Illumination panel: source / receiver / product
+    try:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 3.8), squeeze=False)
+        _imshow(axes[0, 0], source_illum_sum, "Source illumination", symmetric=False, cmap="magma")
+        _imshow(axes[0, 1], receiver_illum_sum, "Receiver illumination", symmetric=False, cmap="magma")
+        prod = source_illum_sum * receiver_illum_sum
+        _imshow(axes[0, 2], prod, "S * R (illumination product)", symmetric=False, cmap="magma")
+        fig.tight_layout()
+        ill_path = qc_dir / f"illumination{suffix}.png"
+        fig.savefig(ill_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        paths.append(ill_path)
+    except Exception:  # noqa: BLE001
+        plt.close("all")
+
+    return paths
+
+
+def _dump_receiver_rotation_qc(
+    *,
+    task_dir: Path,
+    recv_model_xy: np.ndarray,
+    recv_utm_xy: np.ndarray,
+    recv_z: np.ndarray,
+    grid_origin_xyz: tuple[float, float, float],
+    grid_shape: tuple[int, int, int],
+    dh_xyz: tuple[float, float, float],
+) -> Path:
+    """Save a receiver-layout PNG + npz showing the UTM→model rotation.
+
+    Two-panel PNG (model frame on left, raw UTM on right) for visual
+    confirmation that the ``rotation_metadata.json`` projects the OBN
+    nodes the same way the legacy pipeline did. Companion npz holds the
+    underlying float64 arrays so the user can do ``np.allclose`` against
+    a legacy reference.
+
+    Inputs are POST-filter (after any ModelPlan crop) — exactly the
+    receivers the FWI run will actually see.
+    """
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    qc_dir = task_dir / "qc"
+    qc_dir.mkdir(parents=True, exist_ok=True)
+
+    nx, ny, _nz = (int(v) for v in grid_shape)
+    dx_m, dy_m, _dz_m = (float(v) for v in dh_xyz)
+    origin_x, origin_y, _origin_z = (float(v) for v in grid_origin_xyz)
+    recv_model_xy = np.asarray(recv_model_xy, dtype=np.float64)
+    recv_utm_xy = np.asarray(recv_utm_xy, dtype=np.float64)
+    recv_z = np.asarray(recv_z, dtype=np.float64)
+
+    # Origin-shifted model coords so (0, 0) = grid corner; matches the
+    # propagator's local frame. Helpful when overlaying the grid bbox.
+    shifted = recv_model_xy - np.asarray([origin_x, origin_y])[None, :]
+    bbox_x = [0.0, nx * dx_m, nx * dx_m, 0.0, 0.0]
+    bbox_y = [0.0, 0.0, ny * dy_m, ny * dy_m, 0.0]
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    # Left — model frame, origin-shifted, grid bbox overlay.
+    sc0 = axes[0].scatter(
+        shifted[:, 0], shifted[:, 1], c=recv_z, cmap="viridis",
+        s=18, edgecolors="k", linewidths=0.4,
+    )
+    axes[0].plot(bbox_x, bbox_y, "k--", lw=1, label="grid bbox")
+    axes[0].set_xlabel("x (m, model frame; origin at 0)")
+    axes[0].set_ylabel("y (m, model frame; origin at 0)")
+    axes[0].set_title(
+        f"Receivers in model frame (n={len(shifted)})  "
+        f"grid={nx}×{ny} @ ({dx_m:.1f}, {dy_m:.1f}) m"
+    )
+    axes[0].set_aspect("equal", adjustable="datalim")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend(loc="best", fontsize=8)
+    cb0 = fig.colorbar(sc0, ax=axes[0], fraction=0.04, pad=0.02)
+    cb0.set_label("receiver z (m)")
+
+    # Right — raw UTM (pre-rotation) for direct comparison with legacy outputs.
+    sc1 = axes[1].scatter(
+        recv_utm_xy[:, 0], recv_utm_xy[:, 1], c=recv_z, cmap="viridis",
+        s=18, edgecolors="k", linewidths=0.4,
+    )
+    axes[1].set_xlabel("UTM x (m)")
+    axes[1].set_ylabel("UTM y (m)")
+    axes[1].set_title(f"Receivers in UTM (raw, n={len(recv_utm_xy)})")
+    axes[1].set_aspect("equal", adjustable="datalim")
+    axes[1].grid(alpha=0.3)
+    cb1 = fig.colorbar(sc1, ax=axes[1], fraction=0.04, pad=0.02)
+    cb1.set_label("receiver z (m)")
+
+    fig.suptitle(
+        "Receiver layout — rotation QC "
+        "(left = post-rotation model frame, right = raw UTM)",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    out_png = qc_dir / "receiver_layout_rotation.png"
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    # Companion npz — full float64 arrays for np.allclose vs. legacy.
+    out_npz = qc_dir / "receiver_layout.npz"
+    np.savez(
+        out_npz,
+        recv_model_xy=recv_model_xy.astype(np.float64, copy=False),
+        recv_utm_xy=recv_utm_xy.astype(np.float64, copy=False),
+        recv_z=recv_z.astype(np.float64, copy=False),
+        grid_origin_xyz=np.asarray(grid_origin_xyz, dtype=np.float64),
+        grid_shape=np.asarray(grid_shape, dtype=np.int64),
+        dh_xyz=np.asarray(dh_xyz, dtype=np.float64),
+    )
+    print(f"[multisource] receiver layout QC -> {out_png}")
+    print(f"[multisource] receiver layout npz -> {out_npz}")
+    return out_png
+
 
 def _plot_loss_curve(losses, path: Path, title: str) -> Path:
     """Loss curve via `sweep_viz.convergence.plot_loss`."""

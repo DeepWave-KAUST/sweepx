@@ -1,0 +1,157 @@
+# OBN 3-D source-encoded supershot FWI — annotated reference YAML.
+#
+# Run via:
+#   sweep-tasks run examples/tasks/obn3d_fwi_encoded.yaml \
+#       --override epochs=1000 \
+#       --override output_dir=runs/obn_encoded_$(date +%Y%m%d_%H%M)
+#
+# Path placeholders (REPLACE before running on real data):
+#   /path/to/init_vp_75m.npy          — 3-D vp initial model, shape (nz, ny, nx)
+#   /path/to/crg_fwi_plan_v1.npz      — CRG plan cache (see sweep_io.crg_plan)
+#   /path/to/rotation_metadata.json   — RotatedFrame JSON
+#   /path/to/optimized_wavelet.npz    — SIREN-pipeline wavelet
+#
+# The SEG-Y files referenced by the plan cache are resolved on the host
+# at runtime via the FWI_SEGY_ROOT env var; export it before submitting.
+
+task_type: fwi
+output_dir: runs/obn3d_encoded
+seed: 0
+device: auto
+
+# Grid: a coarse cubic dh as the default — override on a per-stage basis
+# if/when multistage scheduling is wired through to _run_fwi_crg.
+grid:
+  dh: 75.0
+  shape: [40, 160, 160]   # (nz, ny, nx)  inversion window
+time:
+  dt: 0.002
+  nt: 2001
+
+# Source wavelet from the SIREN wavelet-fit pipeline; the runner
+# auto-resamples to solver dt when needed.
+wavelet:
+  kind: siren_pipeline_npz
+  path: /path/to/optimized_wavelet.npz
+  scale: 1.0
+
+# 3-D OBN CRG geometry on the unified plan stack: UTM → model frame via
+# rotation_metadata. auto_origin_pad_cells leaves a 4-cell margin on every
+# axis so the auto-computed origin avoids hugging the survey edge.
+geometry:
+  kind: from_plan
+  plan_path: /path/to/seismic_plan_v1.npz   # build with: sweep-tasks build-plan --grouping crg --receiver-quantize-m ...
+  rotation_metadata: /path/to/rotation_metadata.json
+  dh_xyz_m: [75.0, 75.0, 75.0]
+  auto_origin_pad_cells: [4, 4, 4]
+
+physics:
+  equation: Acoustic3D
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+# Use the compiled CUDA backend for production runs; only it populates
+# solver.source_illumination / receiver_illumination for the precond.
+backend:
+  impl: c
+  use_ckpt: false
+
+init_model:
+  name: vp
+  path: /path/to/init_vp_75m.npy
+
+# Unified-plan obs: PlanReader streams SEG-Y bytes per iter via the
+# shared-shot sampler. Set sampling.shared_shots_per_iter > 0 to enable
+# the supershot loop that source encoding needs; leave sampling unset
+# (or absent) to use static CSG-style obs.
+obs:
+  plan:
+    plan_path: /path/to/seismic_plan_v1.npz
+    cache_all: false                  # lazy per-iter reads (OBN-scale)
+    sampling:                         # CRG / OBN supershot mode
+      min_coverage: 50000
+      shared_shots_per_iter: 50000    # cap on shared-shot intersection per iter
+      source_lines_per_group: 10
+      max_traces_per_sourceline: 1000
+      num_workers: 4
+      prefetch_factor: 2
+      persistent_workers: true
+
+# SIREN reparam — the OBN production path uses a hash-encoded SIREN net.
+reparam:
+  kind: velocity_inr
+  hidden_features: 256
+  hidden_layers: 6
+  first_omega0: 10.0
+  hidden_omega0: 10.0
+  use_bias: false
+  vp_mean: 0.0
+  vp_std: 500.0
+  direct_velocity: false
+  lr: 1.0e-4
+  backward_mode: two_pass_full
+  hash:
+    enabled: false   # plain SIREN by default; flip to true for hash-encoded
+
+optimizer:
+  kind: adam
+  lr: 25.0           # ignored in reparam mode; reparam.lr is used instead
+  eps: 1.0e-22
+scheduler:
+  kind: constant
+
+# Cosine trace misfit (amplitude-normalised). Matches fwi_workflow-dev.
+loss:
+  kind: trace_cosine
+  trace_cosine_demean: true
+
+# Source encoding — single supershot per iter, ±1 signs reseed every iter.
+source_encoding:
+  enabled: true
+  min_coverage: 50000
+  sign_seed: 0
+  reseed_every_iter: true
+
+# Illumination preconditioning (sqrt variant matches the legacy in-flight
+# OBN feature). Requires backend.impl='c' to actually fire.
+illumination_precondition:
+  enabled: true
+  epsilon: 1.0e-6
+  exponent: 0.5
+
+# Soft Sobolev smoothness regularizer; weight to be tuned per dataset.
+smooth_regularization:
+  weight: 1.0e-3
+  order: first
+  x_weight: 1.0
+  y_weight: 1.0
+  z_weight: 1.0
+  velocity_scale_m_s: 1000.0
+
+# Freeze water column: set seabed_depth_path to a (ny, nx) numpy file
+# with per-trace seabed depths in meters from grid index z=0.
+freeze_water_layer:
+  enabled: false
+  seabed_depth_path: null
+  buffer_cells: 2
+
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+epochs: 1000
+batchsize: 24
+show_every: 10
+
+qc:
+  every_n_epochs: 10
+  vp_png: true        # 1×3 orthogonal-slice PNG (XY/XZ/YZ)
+  vp_diff_png: true
+  gradient_png: true  # post-illum gradient ortho slices
+  shot_gather: false  # 2-D-only shot gather not used in 3-D mode
+  loss_curve: true

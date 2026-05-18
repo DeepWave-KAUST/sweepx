@@ -5,6 +5,7 @@ from sweep_tasks.schemas import (
     FWISpec,
     IntrospectSpec,
     LSRTMSpec,
+    RTMSpec,
     WavefieldSpec,
 )
 
@@ -14,4 +15,5 @@ TASK_TYPES: dict[str, type] = {
     "wavefield": WavefieldSpec,
     "fwi": FWISpec,
     "lsrtm": LSRTMSpec,
+    "rtm": RTMSpec,
 }

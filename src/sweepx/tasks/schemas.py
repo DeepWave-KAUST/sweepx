@@ -10,7 +10,8 @@ Discriminated unions are used for sub-structures that admit several shapes:
   Geometry := LineGeometry  | ExplicitGeometry
                             | FromFileGeometry          (tag: kind)
   TaskSpec := IntrospectSpec | ForwardSpec | WavefieldSpec
-                             | FWISpec    | LSRTMSpec   (tag: task_type)
+                             | FWISpec    | LSRTMSpec
+                             | RTMSpec                  (tag: task_type)
 """
 
 from __future__ import annotations
@@ -139,7 +140,31 @@ class FromNpyWavelet(_Forbid):
     scale: float = 1.0
 
 
-Wavelet = Annotated[Union[RickerWavelet, FromNpyWavelet], Discriminator("kind")]
+class FromSirenPipelineNpzWavelet(_Forbid):
+    """Load wavelet samples from a SIREN-pipeline ``.npz`` container.
+
+    Auto-detects the array key (one of ``"wavelet"``,
+    ``"optimized_siren_wavelet"``, ``"direct_causal_wavelet"``,
+    ``"initial_causal_wavelet"``) and the sample interval (``dt_s`` scalar
+    or ``time_s`` array). The runner resamples to the solver's ``dt`` when
+    they differ and truncates / zero-pads to length ``time.nt``. Mirrors
+    the loader at :func:`sweep_io.wavelet.load_wavelet_npz`.
+
+    ``explicit_key`` forces one of the listed keys (helpful when the
+    container has both an initial and an optimised wavelet and you want
+    the initial one explicitly).
+    """
+
+    kind: Literal["siren_pipeline_npz"] = "siren_pipeline_npz"
+    path: Path
+    explicit_key: str | None = None
+    scale: float = 1.0
+
+
+Wavelet = Annotated[
+    Union[RickerWavelet, FromNpyWavelet, FromSirenPipelineNpzWavelet],
+    Discriminator("kind"),
+]
 
 
 # ----- geometry ----------------------------------------------------------
@@ -236,7 +261,7 @@ class FromSegyGeometry(_Forbid):
 class FromSegyIndexGeometry(_Forbid):
     """Derive sources / receivers from a pre-built :class:`sweep_io.SEGYIndex`.
 
-    Use this for multi-file projects (OBN-3D-scale) where the SEG-Y header
+    Use this for multi-file projects (production OBN-scale) where the SEG-Y header
     catalogue has been built once via ``sweep_io.segy_index.build_segy_index``
     and saved as an ``.npz``. The same index can back :class:`SegyIndexObsSpec`
     for lazy obs loading — see the matching ``obs.kind="segy_index"``.
@@ -252,9 +277,54 @@ class FromSegyIndexGeometry(_Forbid):
     dedup_method: Literal["nearest", "first"] = "nearest"
 
 
+class FromPlanGeometry(_Forbid):
+    """Geometry derived from a unified ``seismic_plan_v1`` cache.
+
+    The plan (built via ``sweep-tasks build-plan``) declares the trace
+    catalog + grouping (CSG for streamer-style shot gathers, CRG for
+    OBN receiver gathers). The geometry resolver reads its
+    ``row_source_xyz`` / ``row_receiver_xyz`` arrays and snaps them to
+    the FWI grid via ``spec.grid.dh``.
+
+    For ``grouping="csg"`` (typical 2-D / 3-D streamer): each shot's
+    receiver layout is taken from the rows of that group; the runner
+    requires a uniform receiver count per shot. Use
+    ``geometry.dedupe=True`` to grid-snap-dedupe per shot when the
+    layout varies across shots.
+
+    For ``grouping="crg"`` (3-D OBN): pair with
+    :class:`ObsPlanConfig.sampling` to drive the multisource supershot
+    loop. ``rotation_metadata`` + ``dh_xyz_m`` + ``grid_origin_xyz_m`` /
+    ``auto_origin_pad_cells`` then project UTM xyz into the propagator's
+    axis-aligned model frame.
+    """
+
+    kind: Literal["from_plan"] = "from_plan"
+    plan_path: Path
+    dedupe: bool = True
+    dedup_method: Literal["nearest", "first"] = "nearest"
+
+    # --- 3-D / CRG fields (None on 2-D CSG, set on OBN runs) -----------
+    # Path to the rotation_metadata.json that defines the UTM → model
+    # frame transform. Only required when the underlying plan stores UTM
+    # coordinates that need rotation into an axis-aligned grid.
+    rotation_metadata: Path | None = None
+    # Optional per-axis grid spacing in metres. When None (default) the
+    # runner uses ``spec.grid.dh`` for every axis. Set on anisotropic
+    # grids (e.g. ``(dz=25, dy=75, dx=75)``).
+    dh_xyz_m: tuple[float, float, float] | None = None
+    # The UTM coordinate that maps to grid index 0 on each axis. When
+    # None (default), the runner picks the bounding box of the rotated
+    # source + receiver positions with optional padding.
+    grid_origin_xyz_m: tuple[float, float, float] | None = None
+    # Padding around the snap origin in cells (z, y, x). Used only when
+    # ``grid_origin_xyz_m`` is None.
+    auto_origin_pad_cells: tuple[int, int, int] = (0, 0, 0)
+
+
 Geometry = Annotated[
     Union[LineGeometry, ExplicitGeometry, FromFileGeometry,
-          FromSegyGeometry, FromSegyIndexGeometry],
+          FromSegyGeometry, FromSegyIndexGeometry, FromPlanGeometry],
     Discriminator("kind"),
 ]
 
@@ -409,6 +479,111 @@ class LocalModelWindowSpec(_Forbid):
     min_width_m: float = Field(ge=0, default=0.0)
 
 
+class SmoothRegSpec(_Forbid):
+    """First / second-derivative smoothness penalty on vp (TV-style prior).
+
+    Adds a scalar regularizer ``weight * TVPrior(order, x/y/z weights)(vp)``
+    to the per-iter loss; the gradient flows back into the velocity (or
+    network params in reparam mode). See :class:`sweep_nn.TVPrior` for
+    the math and conventions (in particular ``velocity_scale_m_s``).
+
+    The weight is in the same scale as the data misfit; values around
+    ``1e-4`` to ``1e-2`` are typical for cosine misfit + vp ~2500 m/s.
+    """
+
+    weight: float = Field(ge=0, default=0.0)
+    order: Literal["first", "second", "both", "mixed", "first_second"] = "first"
+    x_weight: float = Field(ge=0, default=1.0)
+    y_weight: float = Field(ge=0, default=1.0)
+    z_weight: float = Field(ge=0, default=1.0)
+    velocity_scale_m_s: float = Field(gt=0, default=1000.0)
+
+
+class FreezeWaterLayerSpec(_Forbid):
+    """Mask the FWI gradient above the seabed (water column).
+
+    Reads a per-trace seabed-depth map (``(nx,)`` for 2-D or ``(ny, nx)``
+    for 3-D) from ``seabed_depth_path``, builds the mask once at task
+    setup, and multiplies it into the vp gradient after backward. See
+    :class:`sweep_nn.SeabedFreezeMask`.
+
+    The npz must contain a single array under the key ``seabed_depth``,
+    in meters from grid index z=0. Use ``buffer_cells`` to freeze a few
+    extra rows below the seabed when the source wavelet's rise time
+    leaks across the interface.
+    """
+
+    enabled: bool = False
+    seabed_depth_path: Path | None = None
+    buffer_cells: int = Field(ge=0, default=0)
+
+    @model_validator(mode="after")
+    def _path_required_when_enabled(self):
+        if self.enabled and self.seabed_depth_path is None:
+            raise ValueError(
+                "FreezeWaterLayerSpec: seabed_depth_path is required when enabled=True"
+            )
+        return self
+
+
+class SourceEncodingSpec(_Forbid):
+    """Random ±1 source encoding for single-supershot OBN FWI.
+
+    When enabled, each iteration:
+
+    1. Picks ``batchsize`` virtual sources (= OBN nodes) that share a
+       common set of physical-shot receivers (via the CRG dataset's
+       shared-shots sampler).
+    2. Draws a random ``signs ∈ {-1, +1}^batchsize`` vector.
+    3. Builds an encoded supershot: wavelet shape becomes
+       ``(1, batchsize, nt)`` (each virtual source carries the same
+       wavelet times its sign), receivers shape ``(1, n_rec, 3)``, and
+       obs is the signed sum ``Σ_i sign_i · obs_i`` of shape
+       ``(1, n_rec, nt)``.
+    4. Calls the propagator once with ``source_encoding=True``.
+
+    One forward + adjoint per iter regardless of ``batchsize``: the OBN
+    1-GPU production path. Re-seeding the signs every iter (the default)
+    de-correlates the cross-talk and keeps the long-run gradient close
+    to the per-shot expectation.
+
+    Pairs with :class:`PlanSamplingConfig` on ``obs.plan.sampling``
+    (``shared_shots_per_iter > 0``); has no effect under the per-shot
+    CRG mode.
+    """
+
+    enabled: bool = False
+    min_coverage: int = Field(ge=0, default=0)
+    sign_seed: int | None = None
+    reseed_every_iter: bool = True
+
+
+class IlluminationPreconditionSpec(_Forbid):
+    """Diagonal pseudo-Hessian illumination preconditioner applied per step.
+
+    When enabled, after each ``_fwi_train_step``'s backward (and after the
+    distributed all-reduce, if any), the FWI gradient ``∂loss/∂vp`` is
+    divided by ``(S * R + eps) ** exponent`` where ``S`` and ``R`` are
+    the per-iter source / receiver illumination tensors accumulated from
+    the sweep propagator's ``solver.source_illumination`` /
+    ``solver.receiver_illumination`` attrs.
+
+    The default ``exponent=0.5`` is the OBN-FWI in-flight feature
+    (sqrt-illumination preconditioning); ``exponent=1.0`` recovers the
+    full pseudo-Hessian inverse (Plessix & Mulder 2004) and is closer
+    to a "raw" preconditioner that can over-flatten weak deep events.
+
+    Active for both grid-mode and reparam-mode FWI. In reparam mode the
+    division is applied to the leaf gradient (``base_leaf.grad``) BEFORE
+    the second-pass back-prop through the network — i.e. the network
+    sees an illumination-preconditioned velocity gradient.
+    """
+
+    enabled: bool = False
+    epsilon: float = Field(gt=0, default=1.0e-6)
+    exponent: float = Field(gt=0, default=0.5)
+
+
 class QCSpec(_Forbid):
     """Optional QC products generated during FWI inversion.
 
@@ -463,6 +638,13 @@ class QCSpec(_Forbid):
     # smaller (12) because we plot one shot per row instead of multi-shot).
     shot_gather_interleave_block: int = Field(ge=1, default=12)
     loss_curve: bool = True
+    # 3-D multisource (CRG-plan + supershot) QC products. Independent
+    # flags so the legacy ``shot_gather`` knob (per-physical-shot rich
+    # 2-D panel) doesn't double-duty for the very different
+    # encoded-supershot 3-panel. Defaults True because for the
+    # multisource path these are the primary visualizations.
+    supershot_panel: bool = True
+    well_logs: bool = True
 
 
 class ReparamSpec(_Forbid):
@@ -490,6 +672,28 @@ class ReparamSpec(_Forbid):
     direct_velocity: bool = False
     coord_min: float = 0.0
     coord_max: float = 1.0
+    # Pin the water column to a fixed velocity at render time. When
+    # ``mask_water_layer`` is True the runner builds a 3-D boolean mask
+    # and passes it to :class:`sweep_nn.VelocityINR`. The SIREN cannot
+    # disturb those voxels — useful because SIREN's natural init has
+    # ~std=0.08 raw output, so with ``vp_std=500`` the water layer
+    # would otherwise sit at 1500±40 m/s of init noise from epoch 0.
+    #
+    # Mask construction: when ``seabed_depth_path`` is set (preferred),
+    # the runner loads a 2-D ``seabed_depth`` array (same npz format
+    # as :class:`FreezeWaterLayerSpec.seabed_depth_path` — key
+    # ``"seabed_depth"``, depths in meters from z=0), crops it to the
+    # post-model_plan window, and broadcasts via ``z*dh < depth[y,x]``
+    # to a 3-D bool mask. This is the geologically-correct path —
+    # per-column bathymetry, robust to smoothed init models that
+    # don't have float-exact 1500 m/s in the water column.
+    #
+    # Fallback when ``seabed_depth_path`` is None: the runner infers
+    # the mask via ``init_vp == water_vp_m_s``. Only works when the
+    # init was stamped to exactly the water velocity.
+    mask_water_layer: bool = False
+    water_vp_m_s: float = Field(gt=0, default=1500.0)
+    seabed_depth_path: Path | None = None
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
     # Optimizer lr override for the network (the top-level optimizer.lr is
     # ignored when reparam is active, since grid-FWI lr ~25 is wildly wrong
@@ -561,6 +765,16 @@ class StageSpec(_Forbid):
 
     - ``wavelet``: replace the source signature for this stage
     - ``lr_scale``: scale the optimizer's initial lr (multiplicative)
+    - ``inr_lr_scale``: scale the reparam network's lr (multiplicative).
+      Only meaningful when :class:`ReparamSpec` is active; ignored otherwise.
+      Lets you slow down the SIREN/hash net on later stages without
+      changing the grid-FWI lr (which is set via ``lr_scale``).
+    - ``optimizer_reset``: when ``True``, rebuild the optimizer at stage
+      entry — drops accumulated Adam first / second moments. Useful when
+      a stage changes regime drastically (e.g. switching from low-freq
+      sweep to high-freq inversion) and the old momentum is misleading.
+      Defaults to ``False``; the runner already auto-resets the optimizer
+      when ``dh_m`` changes (because Adam state is shape-bound).
     - ``dh_m``: rebuild solver + resample vp to this grid spacing
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
@@ -570,6 +784,8 @@ class StageSpec(_Forbid):
     epochs: int = Field(ge=1)
     wavelet: "Wavelet | None" = None
     lr_scale: float = Field(gt=0, default=1.0)
+    inr_lr_scale: float = Field(gt=0, default=1.0)
+    optimizer_reset: bool = False
     dh_m: float | None = None
     dt_s: float | None = None
     nt: int | None = None
@@ -675,6 +891,88 @@ class ObsSegyIndexConfig(_Forbid):
     # nt) tensor at task start — easier on small datasets, OOM-risky on huge.
 
 
+class PlanSamplingConfig(_Forbid):
+    """Stochastic per-iter shared-shot sampler (CRG / OBN supershot mode).
+
+    Attach to :class:`ObsPlanConfig.sampling` when the underlying plan is
+    ``grouping='crg'`` and you want source-encoded supershot FWI (the
+    canonical 3-D OBN training pattern). When unset (default), the runner
+    treats ``obs.plan`` as static per-group obs (the CSG path).
+
+    Grouping-agnostic naming: legacy CRG had ``source_lines_per_crg`` /
+    ``min_shot_coverage`` — the unified path renames these to
+    ``source_lines_per_group`` / ``min_coverage`` because the underlying
+    sampler (:func:`sweep_io.seismic_plan.sample_shared_shots_from_plan`)
+    operates on any grouping that admits a shared-shot intersection.
+
+    Parameters
+    ----------
+    min_coverage
+        Drop plan groups whose row count is below this before sampling.
+        Mirrors legacy ``encoding_min_coverage``. ``0`` = keep all groups.
+    shared_shots_per_iter
+        Number of physical shots sampled per iter from the intersection of
+        the chosen groups (= the n_shared dimension of the supershot).
+        Must be ``> 0`` to enable shared-shot sampling.
+    source_lines_per_group, max_traces_per_sourceline
+        Hierarchical sub-sampling caps inside the shared-shot intersection.
+        ``0`` disables the corresponding cap.
+    num_workers, prefetch_factor, persistent_workers
+        Forwarded to the prefetching DataLoader the runner builds for the
+        per-iter SEG-Y reads. Defaults tuned for compute > I/O.
+    dedup_mode
+        Per-iter dedupe at the grid level. When multiple physical shots in
+        an encoded supershot snap to the same ``(gx, gy, gz)`` cell, keep
+        only one per cell. ``"first"`` keeps the first row, ``"nearest"``
+        the row whose model-frame xy is closest to the cell centre.
+        ``"none"`` disables.
+    trace_cache_bytes
+        Optional in-RAM trace cache shared across iters (bytes). Mirrors
+        legacy ``--trace-cache-bytes``: keeps hot SEG-Y traces so repeated
+        picks avoid cold-Lustre reads. ``0`` disables, ``-1`` = unbounded.
+    """
+
+    min_coverage: int = Field(ge=0, default=0)
+    shared_shots_per_iter: int = Field(ge=1, default=1)
+    source_lines_per_group: int = Field(ge=0, default=0)
+    max_traces_per_sourceline: int = Field(ge=0, default=0)
+    num_workers: int = Field(ge=0, default=4)
+    prefetch_factor: int = Field(ge=1, default=2)
+    persistent_workers: bool = True
+    dedup_mode: Literal["none", "first", "nearest"] = "none"
+    trace_cache_bytes: int = 0
+
+
+class ObsPlanConfig(_Forbid):
+    """Unified obs loader backed by a ``seismic_plan_v1`` plan.
+
+    Reads the SEG-Y trace bytes through :class:`sweep_io.seismic_plan.PlanReader`
+    using the file-id / byte-offset records the plan already stores.
+    Pair with :class:`FromPlanGeometry` (the two normally share the same
+    plan_path so the geometry layout matches what the reader returns).
+
+    Parameters
+    ----------
+    plan_path
+        Path to the ``seismic_plan_v1`` npz (built with ``sweep-tasks build-plan``).
+        SEG-Y paths recorded inside the plan are env-var remappable via
+        ``FWI_SEGY_ROOT`` / ``FWI_SEGY_REMAP``.
+    cache_all
+        When True, eagerly read every plan row into RAM at task start —
+        ~700 MB for Viking-scale 2-D, fine; OOM-risky on production-OBN-scale.
+        Default False (lazy per-iter reads).
+    sampling
+        Optional :class:`PlanSamplingConfig` that switches on stochastic
+        per-iter shared-shot sampling (the OBN supershot pattern). Set
+        only for ``grouping='crg'`` plans; CSG runs leave this ``None``
+        and the runner treats the obs as static per-group tensors.
+    """
+
+    plan_path: Path
+    cache_all: bool = False
+    sampling: PlanSamplingConfig | None = None
+
+
 class ObsSpec(_Forbid):
     """How to get observed data. Pick exactly one source.
 
@@ -684,6 +982,9 @@ class ObsSpec(_Forbid):
       - ``npy_path`` — a pre-saved ``(nshots, nrec, nt)`` ``.npy``.
       - ``segy`` — load straight from a single SEG-Y file (Option A).
       - ``segy_index`` — load from a multi-file SEG-Y index (Option B).
+      - ``plan`` — unified SeismicPlan reader (Option C — the canonical
+        path for both 2-D CSG and 3-D CRG; set ``obs.plan.sampling`` to
+        opt into the OBN multisource supershot loop).
     """
 
     synthetic_from: ModelRef | None = None
@@ -691,6 +992,7 @@ class ObsSpec(_Forbid):
     npy_path: Path | None = None
     segy: ObsSegyConfig | None = None
     segy_index: ObsSegyIndexConfig | None = None
+    plan: ObsPlanConfig | None = None
 
     @model_validator(mode="after")
     def _exactly_one_source(self):
@@ -700,13 +1002,14 @@ class ObsSpec(_Forbid):
             ("npy_path", self.npy_path),
             ("segy", self.segy),
             ("segy_index", self.segy_index),
+            ("plan", self.plan),
         ]
         set_choices = [name for name, value in choices if value is not None]
         if len(set_choices) != 1:
             raise ValueError(
                 "ObsSpec: exactly one of "
                 "synthetic_from / synthetic_from_models / npy_path / "
-                f"segy / segy_index must be set; got {set_choices}."
+                f"segy / segy_index / plan must be set; got {set_choices}."
             )
         return self
 
@@ -846,6 +1149,34 @@ class FWISpec(BaseTaskSpec):
     #   * dict / object      -> on, overriding selected fields
     local_model_window: LocalModelWindowSpec | None = None
 
+    # Optional diagonal pseudo-Hessian illumination preconditioner. See
+    # :class:`IlluminationPreconditionSpec`. When omitted, gradients are
+    # passed through to the optimizer unchanged (current behaviour).
+    illumination_precondition: IlluminationPreconditionSpec | None = None
+
+    # Optional source encoding: one encoded-supershot forward+adjoint per
+    # iter regardless of ``batchsize``. Requires CRG mode + shared-shots
+    # sampling. See :class:`SourceEncodingSpec`.
+    source_encoding: SourceEncodingSpec | None = None
+
+    # Optional zero-phase Butterworth bandpass applied to the wavelet
+    # (once at setup) AND to the per-iter encoded obs supershot (via
+    # the differentiable :func:`sweep_preproc.filter.bandpass_torch`).
+    # Used by the OBN CRG path only; the multi-stage 2-D / 3-D path
+    # uses :class:`StageBandpass` inside ``stages`` instead.
+    bandpass: StageBandpass | None = None
+
+    # Optional Sobolev / TV-style smoothness regularizer on vp. See
+    # :class:`SmoothRegSpec`. The runner adds ``weight * TVPrior(vp)``
+    # to the data misfit; the gradient propagates back into the vp
+    # tensor (or net params in reparam mode).
+    smooth_regularization: SmoothRegSpec | None = None
+
+    # Optional water-column / seabed gradient freeze mask. See
+    # :class:`FreezeWaterLayerSpec`. Built once at setup, applied to
+    # the vp gradient after illumination preconditioning.
+    freeze_water_layer: FreezeWaterLayerSpec | None = None
+
     @field_validator("local_model_window", mode="before")
     @classmethod
     def _local_model_window_bool_shortcut(cls, v):
@@ -871,6 +1202,137 @@ class FWISpec(BaseTaskSpec):
         if self.stages is not None and len(self.stages) == 0:
             raise ValueError("FWISpec.stages must be non-empty when set.")
         return self
+
+
+class PostFilterImageSpec(_Forbid):
+    """Depth-tapered z-axis low-cut on RTM / FWI gradient images.
+
+    When attached to :class:`RTMImagingSpec.post_filter`, the runner
+    auto-applies :func:`sweep_tasks.postproc.filter_image.filter_image_file`
+    to every saved imaging product (raw + globally normalised + per-shot
+    normalised) right after the main RTM finishes. Same algorithm is
+    available as a standalone CLI (``sweep-tasks filter-image <npy>``) for
+    iterating on params without re-running the RTM itself.
+
+    Defaults match the legacy ``07_filter_imaging.py`` Viking recipe.
+    """
+    enabled: bool = True
+    wavelength_m: float = Field(gt=0, default=300.0)
+    depth_m: float = Field(ge=0, default=600.0)
+    taper_m: float = Field(ge=0, default=400.0)
+    clip_percentile: float = Field(ge=0, le=49, default=1.0)
+    display_scale: float = Field(gt=0, default=1.0)
+    # ``sweep_image`` is the bundled diverging LUT from
+    # ``sweep_viz.colormaps`` (registered as a matplotlib cmap at import
+    # time). Tuned for percentile-clipped RTM / kernel images. Override
+    # with any matplotlib cmap name (e.g. ``"seismic"``, ``"gray"``) for
+    # legacy display.
+    cmap: str = "sweep_image"
+    # Which RTM outputs to filter. ``"all"`` covers raw + global-norm +
+    # per-shot-norm; pass an explicit list of basenames (without ``.npy``)
+    # to be selective. Output files land next to the inputs as
+    # ``<stem>_shallow_zlowcut.npy`` + matching PNG.
+    targets: Literal["all"] | list[str] = "all"
+    save_png: bool = True
+
+
+class RTMImagingSpec(_Forbid):
+    """Per-batch RTM imaging knobs for :class:`RTMSpec`.
+
+    Controls the post-FWI imaging loop: how many shots per batch, optional
+    pre-loss bandpass on obs/wavelet/syn, illumination normalisation, QC
+    cadence, and the misfit used to derive the gradient (= RTM) image.
+
+    The RTM image equals the per-batch gradient under the chosen matching
+    loss (the c-backend backward pass also populates
+    ``solver.source_illumination`` / ``receiver_illumination`` for free —
+    no separate ``solver.rtm`` invocation).
+    """
+
+    shots_per_batch: int = Field(ge=1, default=1)
+    filter_lowcut_hz: float | None = None
+    filter_highcut_hz: float | None = None
+    filter_order: int = Field(ge=1, default=4)
+    filter_padtype: Literal["odd", "even", "constant", "none"] | None = "odd"
+    # Where the bandpass is applied. ``"syn"`` (default, FWI-style) filters
+    # obs once at task start AND filters syn per-batch via a differentiable
+    # torchaudio filtfilt — this is the safer numerical choice when the
+    # solver naturally outputs broadband syn (the autograd-aware filter
+    # ensures the residual is band-limited).  ``"wavelet"`` pre-filters the
+    # source wavelet ONCE so the solver's syn is naturally band-limited;
+    # the per-batch syn filter is then skipped (mirrors the legacy
+    # ``stage.bandpass.target='wavelet'`` path on the FWI side).  Obs is
+    # bandpassed once either way.
+    filter_target: Literal["syn", "wavelet"] = "syn"
+    illumination_epsilon: float = Field(gt=0, default=1.0e-6)
+    normalize_by_illumination: bool = True
+    save_per_shot: bool = False
+    live_update_every_batches: int = Field(ge=1, default=10)
+    # Loss kind used to derive the gradient image. Trace-cosine is the
+    # default and matches the FWI benchmark.
+    loss_kind: Literal["mse", "l1", "trace_cosine"] = "trace_cosine"
+    trace_cosine_demean: bool = True
+
+    # Optional post-processing: depth-tapered z-axis low-cut filter that
+    # removes the slowly-varying-with-depth drift contaminating the
+    # shallow part of the stacked image. Same algorithm is also exposed
+    # standalone as ``sweep-tasks filter-image`` so users can iterate on
+    # the filter without re-running the RTM.
+    post_filter: PostFilterImageSpec | None = None
+
+
+class RTMSpec(BaseTaskSpec):
+    """Post-FWI Reverse Time Migration as a one-pass imaging task.
+
+    For each shot batch we:
+      1. Read obs traces, bandpass both obs and syn (when configured).
+      2. Forward solve with the input ``velocity_model`` -> syn.
+      3. Backward through the loss -> FWI gradient image (per cell).
+      4. Call ``solver.rtm`` with residual ``(obs - syn)`` to get the RTM
+         cross-correlation image + source / receiver illumination buffers.
+
+    Accumulate four shape-(nz, nx) buffers across shots, then normalise
+    by ``sqrt(S * R + eps)`` and save both raw and normalised products.
+
+    Unlike FWI, there is no iteration / optimizer / stages: the input
+    ``velocity_model`` is imaged as-is.
+    """
+
+    task_type: Literal["rtm"] = "rtm"
+
+    grid: GridSpec
+    time: TimeSpec
+    wavelet: Wavelet
+    geometry: Geometry
+    physics: PhysicsSpec
+    backend: BackendSpec = Field(default_factory=BackendSpec)
+
+    # Velocity model to image (replaces FWI's ``init_model`` — no inversion).
+    velocity_model: ModelRef
+
+    obs: ObsSpec
+    loss: LossSpec = Field(default_factory=LossSpec)
+
+    # Per-name model bounds (only ``vp`` is currently used). Kept dict-shaped
+    # for parity with FWISpec / future multi-parameter equations.
+    model_bounds: dict[str, ModelBounds] | None = None
+
+    # Optional per-batch local model windowing. Mirrors the FWI path.
+    local_model_window: LocalModelWindowSpec | None = None
+
+    imaging: RTMImagingSpec = Field(default_factory=RTMImagingSpec)
+
+    qc: QCSpec | None = None
+    data_plan: DataPlanSpec | None = None
+
+    @field_validator("local_model_window", mode="before")
+    @classmethod
+    def _local_model_window_bool_shortcut(cls, v):
+        if v is True:
+            return LocalModelWindowSpec()
+        if v is False:
+            return None
+        return v
 
 
 class LSRTMSpec(BaseTaskSpec):
@@ -914,6 +1376,6 @@ class LSRTMSpec(BaseTaskSpec):
 
 
 TaskSpec = Annotated[
-    Union[IntrospectSpec, ForwardSpec, WavefieldSpec, FWISpec, LSRTMSpec],
+    Union[IntrospectSpec, ForwardSpec, WavefieldSpec, FWISpec, LSRTMSpec, RTMSpec],
     Discriminator("task_type"),
 ]

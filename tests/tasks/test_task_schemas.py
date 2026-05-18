@@ -11,6 +11,7 @@ from sweep_tasks import (
     FWISpec,
     IntrospectSpec,
     LSRTMSpec,
+    RTMSpec,
     WavefieldSpec,
     dump_task,
     load_task,
@@ -26,6 +27,7 @@ from sweep_tasks import (
         ("wavefield", WavefieldSpec),
         ("fwi", FWISpec),
         ("lsrtm", LSRTMSpec),
+        ("rtm", RTMSpec),
     ],
 )
 def test_template_yaml_round_trip(tmp_path, task_type, expected_cls):

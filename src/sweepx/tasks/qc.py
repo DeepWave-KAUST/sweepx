@@ -104,21 +104,113 @@ def save_gradient_png(
     out_path: Path,
     epoch: int | None = None,
     perc: float = 99.0,
+    cmap: str | None = None,
 ) -> Path:
-    """Save the FWI gradient ∂loss/∂vp as a diverging map."""
+    """Save the FWI gradient ∂loss/∂vp as a diverging map.
+
+    ``cmap`` defaults to the bundled :data:`sweep_viz.colormaps.IMAGE_CMAP`
+    (``"sweep_image"``) — tuned for percentile-clipped kernel/gradient
+    plots. Pass ``cmap="RdBu_r"`` to recover the legacy red/blue look.
+    """
+    # Import here so a missing sweep-viz at install time doesn't break
+    # other QC paths. The registration side-effect fires on import.
+    from sweep_viz.colormaps import IMAGE_CMAP
+
     grad_np = _to_np(grad)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     s = float(np.percentile(np.abs(grad_np), perc)) or 1.0
     nz, nx = grad_np.shape
     extent = (0.0, nx * float(dh), nz * float(dh), 0.0)
     fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
-    im = ax.imshow(grad_np, cmap="RdBu_r", vmin=-s, vmax=s,
+    im = ax.imshow(grad_np, cmap=cmap or IMAGE_CMAP, vmin=-s, vmax=s,
                    aspect="auto", extent=extent)
     ax.set_xlabel("x (m)")
     ax.set_ylabel("z (m)")
     title = f"∂loss/∂vp (epoch {epoch})" if epoch is not None else "∂loss/∂vp"
     ax.set_title(title)
     fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02, label="gradient")
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def save_gradient_ortho_slices_png(
+    grad_zyx,
+    *,
+    dh: float | tuple[float, float, float],
+    out_path: Path,
+    epoch: int | None = None,
+    perc: float = 99.0,
+    cmap: str | None = None,
+) -> Path:
+    """3-D version of :func:`save_gradient_png` — ortho slices of the
+    velocity gradient with the diverging ``sweep_image`` colormap and
+    symmetric percentile-clipped ``vmin/vmax``.
+
+    Used by the multisource runner to drop a per-QC-epoch gradient
+    visualization next to the vp ortho slices (``qc/gradient/`` parallel
+    to ``qc/vp/``).
+    """
+    from sweep_viz.colormaps import IMAGE_CMAP
+    from sweep_viz.model import plot_vp_ortho_slices
+
+    grad = _to_np(grad_zyx)
+    if grad.ndim != 3:
+        raise ValueError(
+            f"save_gradient_ortho_slices_png expects 3-D grad; got shape {grad.shape}"
+        )
+    s = float(np.percentile(np.abs(grad), perc)) or 1.0
+    dh_tuple = (
+        (float(dh), float(dh), float(dh)) if np.isscalar(dh)
+        else tuple(float(d) for d in dh)
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, _ = plot_vp_ortho_slices(
+        grad, dh_xyz=dh_tuple, vmin=-s, vmax=s,
+        cmap=cmap or IMAGE_CMAP,
+        title_prefix=(
+            f"∂loss/∂vp (epoch {epoch})" if epoch is not None else "∂loss/∂vp"
+        ),
+        cbar_label="gradient",
+    )
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def save_ortho_slices_png(
+    vol_zyx,
+    *,
+    dh: float | tuple[float, float, float],
+    out_path: Path,
+    epoch: int | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    title_prefix: str = "vp",
+    cbar_label: str = "vp (m/s)",
+    cmap: str | None = None,
+) -> Path:
+    """Save a 3-orthogonal-slice PNG for a 3-D velocity volume.
+
+    Thin wrapper around :func:`sweep_viz.model.plot_vp_ortho_slices`;
+    used by ``run_epoch_qc`` when ``state["inv_by_name"]["vp"]`` is 3-D
+    (the OBN CRG-plan FWI case). ``dh`` may be a scalar (cubic dh) or a
+    per-axis ``(dz, dy, dx)`` tuple.
+    """
+    from sweep_viz.colormaps import VP_CMAP
+    from sweep_viz.model import plot_vp_ortho_slices
+
+    vol = _to_np(vol_zyx)
+    if vol.ndim != 3:
+        raise ValueError(f"save_ortho_slices_png expects 3-D vol; got shape {vol.shape}")
+    dh_tuple = (float(dh), float(dh), float(dh)) if np.isscalar(dh) else tuple(float(d) for d in dh)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, _ = plot_vp_ortho_slices(
+        vol, dh_xyz=dh_tuple, vmin=vmin, vmax=vmax,
+        cmap=cmap or VP_CMAP,
+        title_prefix=f"{title_prefix} (epoch {epoch})" if epoch is not None else title_prefix,
+        cbar_label=cbar_label,
+    )
     fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     return out_path
@@ -473,6 +565,522 @@ def save_loss_curve_with_stages(
 
 
 # ----------------------------------------------------------------------
+# Multisource supershot QC (source-encoded FWI)
+# ----------------------------------------------------------------------
+
+
+def save_supershot_qc_panel(
+    obs_super,
+    syn,
+    *,
+    picked_group_utm_xy: np.ndarray,
+    used_shot_utm_xy: np.ndarray,
+    all_groups_utm_xy: np.ndarray,
+    all_shots_utm_xy: np.ndarray | None = None,
+    sourceline_ids: np.ndarray | None = None,
+    within_sourceline_sort_key: np.ndarray | None = None,
+    frame_label: str = "UTM",
+    inversion_extent_xy_m: tuple[float, float, float, float] | None = None,
+    dt: float,
+    out_path: Path,
+    epoch: int,
+    interleave_block: int = 50,
+    perc: float = 99.0,
+    f_hi_hz: float | None = None,
+) -> Path:
+    """Three-panel QC for one source-encoded supershot iter.
+
+    The multisource loss compares ONE encoded supershot
+    ``obs_super`` (sum of ±1 signed obs across ``B`` picked OBN nodes)
+    against the solver's ``syn`` for the same encoded source. The legacy
+    per-shot ``_save_shot_gather_rich`` doesn't fit (there's no
+    per-physical-shot pairing); this panel mirrors its *layout* but on
+    the encoded pair.
+
+    Layout (single figure, ``out_path``):
+
+      ┌─────────────────────────────────────────────────────────────┐
+      │  obs / syn interleave (alternating blocks of `interleave_   │
+      │  block` columns; "receiver" axis = the n_shared physical    │
+      │  shot positions that all picked OBN nodes saw in common)    │
+      ├──────────────────────────┬──────────────────────────────────┤
+      │ Survey map (UTM)         │ Amplitude spectrum               │
+      │  • light dots = ALL OBN  │  • obs (solid), syn (dashed)     │
+      │  • light X    = all phys │  • receiver-averaged             │
+      │    shots                 │  • optional vertical line @ f_hi │
+      │  • red ★      = picked   │                                  │
+      │    OBN nodes (B)         │                                  │
+      │  • blue •     = used     │                                  │
+      │    physical shots        │                                  │
+      └──────────────────────────┴──────────────────────────────────┘
+
+    Parameters
+    ----------
+    obs_super, syn
+        Tensors/ndarrays of shape ``(1, nt, n_shared, 1)`` or
+        ``(1, n_shared, nt)`` (either supported — squeezed/permuted to
+        ``(nt, n_shared)``). The two are compared trace-for-trace —
+        ``n_shared`` MUST match.
+    picked_group_utm_xy
+        ``(B, 2)`` (x, y) of the B picked OBN nodes. Despite the legacy
+        ``_utm_`` suffix, the helper plots **whatever frame the caller
+        provides** — UTM raw, model-frame (rotated, in meters), or any
+        2-D Cartesian frame. ``frame_label`` sets the axis text. All
+        five coord arrays must be in the SAME frame.
+    used_shot_utm_xy
+        ``(n_shared, 2)`` (x, y) of the physical shots used in this
+        iter's supershot.
+    all_groups_utm_xy
+        ``(n_groups_total, 2)`` (x, y) of EVERY OBN node in the survey
+        — gives the "where do my picked nodes sit" context.
+    all_shots_utm_xy
+        Optional ``(K, 2)`` (x, y) positions of every physical shot in
+        the survey (any K). When provided, plotted as faint X markers
+        underneath the used-shot dots. Usually a deduped down-sample of
+        ``plan.row_source_xyz[:, :2]`` (the full set can be huge).
+    dt
+        Time step in seconds — sets the time axis on the gather and the
+        Nyquist on the spectrum.
+    out_path
+        Where to write the PNG.
+    epoch
+        For the figure title.
+    interleave_block
+        Number of adjacent traces per obs/syn alternation. 50 → reading
+        any 100-trace window contains both an obs block and a syn block
+        of the same physical shots (eye sees the cycle-skip directly).
+    perc
+        Percentile (e.g. 99) used as the gather amplitude clip.
+    f_hi_hz
+        Optional vertical guide on the spectrum at the current bandpass
+        upper edge. Useful to check syn isn't leaking energy above the
+        bandpass.
+    frame_label
+        Short label shown on the survey-map axes — e.g. ``"UTM"``
+        (default) or ``"model"`` when the caller passed rotated coords.
+    inversion_extent_xy_m
+        Optional ``(xmin, xmax, ymin, ymax)`` in METERS of the active
+        inversion grid extent — drawn as a dashed yellow rectangle on
+        the survey map so the user can see which picked OBN nodes /
+        physical shots actually sit inside the active model window.
+        Should be in the same frame as the coord arrays.
+    sourceline_ids
+        Optional ``(n_shared,)`` integer array of source-line / file-id
+        per physical-shot column. When provided, traces are sorted by
+        ``(sourceline_id, within_sourceline_sort_key)`` (defaults to
+        the x-coordinate of ``used_shot_utm_xy`` when no secondary key
+        is given) so adjacent gather columns belong to the same sail
+        line — much easier to read than the sampler's natural
+        (sx, sy)-key order, which scatters lines randomly. Thin
+        vertical lines + line-id labels mark the boundaries. The sort
+        permutation is applied to obs / syn / used_shot_utm_xy in
+        lock-step so the survey-map dots still correspond to the
+        gather columns.
+    within_sourceline_sort_key
+        Optional ``(n_shared,)`` array used as the secondary sort key
+        WITHIN each source-line partition. The sensible default for
+        SEG-Y data is the absolute plan-row index of each column — that
+        recovers the original SEG-Y file order (= along-sail-line
+        order) regardless of how the survey is oriented in space. Using
+        the x-coordinate as secondary (the fallback when this is None)
+        only works when the sail line runs along x in the chosen
+        frame; rotated model frames where lines run along y will
+        produce chaos otherwise.
+    """
+    obs_np = _to_np(obs_super).astype(np.float32, copy=False)
+    syn_np = _to_np(syn).astype(np.float32, copy=False)
+
+    def _to_nt_n_shared(arr):
+        if arr.ndim == 4:
+            # (1, ?, ?, 1) — squeeze leading/trailing singletons.
+            arr = np.squeeze(arr, axis=(0, -1))
+        elif arr.ndim == 3 and arr.shape[0] == 1:
+            arr = arr[0]
+        if arr.ndim != 2:
+            raise ValueError(
+                f"save_supershot_qc_panel: expected obs/syn reducible "
+                f"to 2-D (nt, n_shared); got shape {arr.shape}"
+            )
+        # Canonicalise to (nt, n_shared). Heuristic: usually nt >> n_shared.
+        if arr.shape[0] < arr.shape[1]:
+            # Likely (n_shared, nt) — transpose.
+            arr = arr.T
+        return arr
+
+    obs2 = _to_nt_n_shared(obs_np)
+    syn2 = _to_nt_n_shared(syn_np)
+    if obs2.shape != syn2.shape:
+        raise ValueError(
+            f"save_supershot_qc_panel: obs.shape {obs2.shape} != "
+            f"syn.shape {syn2.shape}"
+        )
+    nt, n_shared = obs2.shape
+    B = int(picked_group_utm_xy.shape[0])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # ---- Sort columns by source-line so gather rows make geological sense.
+    # Sampler returns rows in (sx, sy)-key order which scatters source
+    # lines across the gather. With sourceline_ids in hand we sort by
+    # (line_id ASC, sx_utm ASC) — within a line, sx increases along
+    # the sail direction (approximately), giving a clean
+    # "shotpoint vs time" panel per line + a thin divider between lines.
+    used_shot_utm_xy = np.asarray(used_shot_utm_xy, dtype=np.float64)
+    if sourceline_ids is not None:
+        sl_ids = np.asarray(sourceline_ids, dtype=np.int64).reshape(-1)
+        if sl_ids.size != n_shared:
+            raise ValueError(
+                f"save_supershot_qc_panel: sourceline_ids length "
+                f"{sl_ids.size} != n_shared {n_shared}"
+            )
+        # Secondary key: caller-supplied along-line key (preferred — e.g.
+        # absolute plan-row index recovers original SEG-Y file order
+        # regardless of survey orientation). Fallback: x-coord, which is
+        # only valid when the sail line runs along x in the chosen frame.
+        if within_sourceline_sort_key is not None:
+            sk = np.asarray(within_sourceline_sort_key).reshape(-1)
+            if sk.size != n_shared:
+                raise ValueError(
+                    f"save_supershot_qc_panel: "
+                    f"within_sourceline_sort_key length {sk.size} != "
+                    f"n_shared {n_shared}"
+                )
+        else:
+            sk = used_shot_utm_xy[:, 0]
+        sort_order = np.lexsort((sk, sl_ids))
+        obs2 = obs2[:, sort_order]
+        syn2 = syn2[:, sort_order]
+        used_shot_utm_xy = used_shot_utm_xy[sort_order]
+        sl_ids_sorted = sl_ids[sort_order]
+        # Boundary column-indices where the line-id flips.
+        line_boundaries = np.flatnonzero(
+            np.diff(sl_ids_sorted) != 0
+        ) + 1
+        # Per-line spans = (start_col, end_col, line_id) for labelling.
+        seg_edges = np.concatenate((
+            [0], line_boundaries, [n_shared],
+        )).astype(np.int64)
+        line_spans = [
+            (int(seg_edges[i]), int(seg_edges[i + 1]),
+             int(sl_ids_sorted[seg_edges[i]]))
+            for i in range(seg_edges.size - 1)
+        ]
+    else:
+        sl_ids_sorted = None
+        line_boundaries = np.empty(0, dtype=np.int64)
+        line_spans = [(0, n_shared, -1)]
+
+    # Trace-normalise so weak far-offset traces are visible. Joint clip
+    # (same vmin/vmax for obs and syn) — necessary so cycle-skips read
+    # as colour differences, not normalisation artefacts.
+    def _trace_norm(a):
+        rms = np.sqrt((a ** 2).mean(axis=0, keepdims=True)).clip(1e-20)
+        return a / rms
+    obs_n = _trace_norm(obs2)
+    syn_n = _trace_norm(syn2)
+    s = float(np.percentile(
+        np.abs(np.concatenate([obs_n, syn_n], axis=1)), perc,
+    )) or 1.0
+
+    # Build interleaved (nt, n_shared) panel: alternating obs/syn blocks
+    # of `interleave_block` consecutive physical-shot columns.
+    blk = max(1, int(interleave_block))
+    merged_cols: list[np.ndarray] = []
+    block_kinds: list[str] = []
+    block_starts: list[int] = []
+    j, toggle = 0, 0
+    while j < n_shared:
+        end = min(j + blk, n_shared)
+        merged_cols.append((obs_n if toggle == 0 else syn_n)[:, j:end])
+        block_kinds.append("obs" if toggle == 0 else "syn")
+        block_starts.append(j)
+        toggle ^= 1
+        j = end
+    merged = np.concatenate(merged_cols, axis=1)
+
+    # Figure: top = interleave (full width); bottom = map | spectrum.
+    fig = plt.figure(figsize=(14, 9), dpi=120, constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, height_ratios=[3, 2], width_ratios=[3, 2])
+
+    # ---- Interleave gather (full width row 0) ----
+    ax_g = fig.add_subplot(gs[0, :])
+    extent = [0, n_shared, nt * float(dt), 0.0]
+    im = ax_g.imshow(merged, cmap="gray", vmin=-s, vmax=s,
+                     aspect="auto", extent=extent, interpolation="nearest")
+    for k, (start, kind) in enumerate(zip(block_starts, block_kinds)):
+        block_end = min(start + blk, n_shared)
+        mid = 0.5 * (start + block_end)
+        color = "#1F4E79" if kind == "obs" else "#C0392B"
+        ax_g.text(mid, 0.0, kind, ha="center", va="bottom",
+                  fontsize=8, color=color,
+                  transform=ax_g.get_xaxis_transform(), clip_on=False)
+        if k < len(block_kinds) - 1:
+            ax_g.axvline(block_end, color="white", lw=0.4, alpha=0.5)
+    # Source-line boundaries: thick yellow vertical lines + line-id
+    # labels just above the top axis. Drawn AFTER the obs/syn dividers
+    # so they sit on top.
+    for b in line_boundaries:
+        ax_g.axvline(float(b), color="#FFD400", lw=0.8, alpha=0.9)
+    if sl_ids_sorted is not None:
+        for s_col, e_col, lid in line_spans:
+            ax_g.text(0.5 * (s_col + e_col), 1.02, f"L{lid}",
+                      ha="center", va="bottom", fontsize=7,
+                      color="#996600",
+                      transform=ax_g.get_xaxis_transform(),
+                      clip_on=False)
+        title_extra = f", {len(line_spans)} source lines"
+    else:
+        title_extra = ""
+    ax_g.set_title(
+        f"encoded supershot — obs vs syn interleaved "
+        f"(block={blk}, B={B} nodes × n_shared={n_shared} phys shots"
+        f"{title_extra})",
+        fontsize=10,
+    )
+    xlabel = "physical-shot index (alternating obs/syn blocks"
+    if sl_ids_sorted is not None:
+        xlabel += "; sorted by source-line + sx)"
+    else:
+        xlabel += ")"
+    ax_g.set_xlabel(xlabel)
+    ax_g.set_ylabel("time (s)")
+    plt.colorbar(im, ax=ax_g, fraction=0.02, pad=0.01)
+
+    # ---- Survey map (caller-chosen frame; default UTM) ----
+    ax_map = fig.add_subplot(gs[1, 0])
+    if all_shots_utm_xy is not None and all_shots_utm_xy.size:
+        ax_map.scatter(all_shots_utm_xy[:, 0] / 1000.0,
+                       all_shots_utm_xy[:, 1] / 1000.0,
+                       s=2, c="#cccccc", marker="x", alpha=0.5,
+                       label=f"all shots ({len(all_shots_utm_xy):,})")
+    ax_map.scatter(all_groups_utm_xy[:, 0] / 1000.0,
+                   all_groups_utm_xy[:, 1] / 1000.0,
+                   s=4, c="#999999", marker="o", alpha=0.5,
+                   label=f"all OBN nodes ({len(all_groups_utm_xy):,})")
+    ax_map.scatter(used_shot_utm_xy[:, 0] / 1000.0,
+                   used_shot_utm_xy[:, 1] / 1000.0,
+                   s=18, c="#1F77B4", marker="o",
+                   edgecolor="black", linewidth=0.3, alpha=0.85,
+                   label=f"used phys shots ({n_shared})", zorder=4)
+    ax_map.scatter(picked_group_utm_xy[:, 0] / 1000.0,
+                   picked_group_utm_xy[:, 1] / 1000.0,
+                   s=90, c="#D62728", marker="*",
+                   edgecolor="black", linewidth=0.5,
+                   label=f"picked OBN nodes (B={B})", zorder=5)
+    # Inversion-active grid extent rectangle (dashed yellow). Useful
+    # for confirming that picked OBN + used shots fall inside the
+    # crop / origin-padded model grid the solver actually uses.
+    if inversion_extent_xy_m is not None:
+        x0, x1, y0, y1 = (float(v) / 1000.0 for v in inversion_extent_xy_m)
+        ax_map.plot(
+            [x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0],
+            color="#E5B400", lw=1.4, ls="--", alpha=0.95,
+            label=(f"inversion grid "
+                   f"({(x1 - x0):.1f}×{(y1 - y0):.1f} km)"),
+            zorder=6,
+        )
+    ax_map.set_xlabel(f"x ({frame_label}, km)")
+    ax_map.set_ylabel(f"y ({frame_label}, km)")
+    ax_map.set_aspect("equal", adjustable="datalim")
+    ax_map.set_title(
+        f"Acquisition footprint for this iter ({frame_label} frame)",
+        fontsize=10,
+    )
+    ax_map.legend(fontsize=7, loc="best")
+    ax_map.grid(True, alpha=0.3)
+
+    # ---- Spectrum (receiver-averaged) ----
+    ax_spec = fig.add_subplot(gs[1, 1])
+    freqs = np.fft.rfftfreq(nt, d=float(dt))
+    obs_amp = np.abs(np.fft.rfft(obs2, axis=0)).mean(axis=-1)
+    syn_amp = np.abs(np.fft.rfft(syn2, axis=0)).mean(axis=-1)
+    obs_amp_n = obs_amp / (obs_amp.max() + 1e-30)
+    syn_amp_n = syn_amp / (syn_amp.max() + 1e-30)
+    ax_spec.plot(freqs, obs_amp_n, color="#1F4E79", lw=1.2, label="obs")
+    ax_spec.plot(freqs, syn_amp_n, color="#C0392B", lw=1.2, ls="--",
+                 label="syn")
+    if f_hi_hz is not None and f_hi_hz > 0:
+        ax_spec.axvline(float(f_hi_hz), color="#888888", lw=0.6, ls=":")
+        ax_spec.text(float(f_hi_hz), 1.02, f"f_hi={f_hi_hz:.2f} Hz",
+                     fontsize=7, color="#666666", ha="center", va="bottom",
+                     transform=ax_spec.get_xaxis_transform())
+    f_nyq = 0.5 / float(dt)
+    ax_spec.set_xlim(0.0, min(2.5 * float(f_hi_hz) if (f_hi_hz and f_hi_hz > 0)
+                               else 30.0, f_nyq))
+    ax_spec.set_xlabel("frequency (Hz)")
+    ax_spec.set_ylabel("|FFT| (normalised, recv-averaged)")
+    ax_spec.set_title("Amplitude spectrum — obs vs syn", fontsize=10)
+    ax_spec.grid(True, alpha=0.3)
+    ax_spec.legend(fontsize=8, loc="best")
+
+    fig.suptitle(
+        f"multisource supershot QC — epoch {epoch}", fontsize=11,
+    )
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def save_vp_well_logs_png(
+    vp_current,
+    vp_initial,
+    *,
+    well_grid_idx: np.ndarray,
+    well_labels: list[str],
+    dz_m: float,
+    out_path: Path,
+    epoch: int,
+    nrows: int = 2,
+    ncols: int = 3,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    z_top_m: float = 0.0,
+    water_vp: float | None = 1500.0,
+) -> Path:
+    """Plot ``vp(z)`` 1-D profiles at a set of "pseudo-wells".
+
+    The supershot gather + survey map tell you WHERE you have data;
+    well logs tell you WHAT the model looks like at points of interest
+    — especially the shallow water column (`should` be ~1500 m/s) and
+    the seabed-to-1st-reflector transition. A flat line at 1500 m/s
+    across the water depth is a strong sanity signal; SIREN init noise
+    or freeze-water-layer mis-config show up here immediately.
+
+    Parameters
+    ----------
+    vp_current
+        Current vp tensor / ndarray of shape ``(nz, ny, nx)`` (m/s).
+    vp_initial
+        Reference (init) vp of the same shape — plotted as a dashed
+        background curve in every well subplot.
+    well_grid_idx
+        ``(n_wells, 2)`` ``int`` array of ``(iy, ix)`` grid indices per
+        well. The runner converts (model_x, model_y) in meters to these
+        indices via ``round((x - origin_x) / dx_m)``.
+    well_labels
+        ``n_wells`` strings shown as subplot titles
+        (e.g. ``"x=14.0 y=6.0 km"``).
+    dz_m
+        Vertical cell size in meters — sets the depth axis.
+    out_path
+        Where to write the PNG.
+    epoch
+        For the figure suptitle.
+    nrows, ncols
+        Subplot grid — must satisfy ``nrows * ncols >= n_wells``.
+    vmin, vmax
+        Optional fixed x-axis limits (m/s) for every subplot. Default:
+        per-figure min/max across all displayed wells (current + init).
+    z_top_m
+        Depth coordinate of grid row ``iz=0`` (usually 0 = sea surface).
+    water_vp
+        Optional reference line drawn vertically on every subplot
+        (default 1500). Pass ``None`` to disable.
+    """
+    vc = _to_np(vp_current).astype(np.float32, copy=False)
+    vi = _to_np(vp_initial).astype(np.float32, copy=False)
+    if vc.shape != vi.shape:
+        raise ValueError(
+            f"save_vp_well_logs_png: vp_current.shape {vc.shape} != "
+            f"vp_initial.shape {vi.shape}"
+        )
+    if vc.ndim != 3:
+        raise ValueError(
+            f"save_vp_well_logs_png: expected 3-D vp (nz, ny, nx); "
+            f"got shape {vc.shape}"
+        )
+    nz, ny, nx = vc.shape
+
+    well_idx = np.asarray(well_grid_idx, dtype=np.int64).reshape(-1, 2)
+    n_wells = int(well_idx.shape[0])
+    if len(well_labels) != n_wells:
+        raise ValueError(
+            f"save_vp_well_logs_png: well_labels length {len(well_labels)} "
+            f"!= n_wells {n_wells}"
+        )
+    if nrows * ncols < n_wells:
+        raise ValueError(
+            f"save_vp_well_logs_png: nrows*ncols ({nrows*ncols}) < "
+            f"n_wells ({n_wells})"
+        )
+
+    # Extract each well's z-profile; clip indices into the grid to avoid
+    # IndexError on rounding boundaries. Bad-index wells get NaN'd out.
+    iy_all = np.clip(well_idx[:, 0], 0, ny - 1)
+    ix_all = np.clip(well_idx[:, 1], 0, nx - 1)
+    inside = (
+        (well_idx[:, 0] >= 0) & (well_idx[:, 0] < ny)
+        & (well_idx[:, 1] >= 0) & (well_idx[:, 1] < nx)
+    )
+
+    depths = z_top_m + np.arange(nz, dtype=np.float32) * float(dz_m)
+
+    if vmin is None or vmax is None:
+        all_vals = []
+        for i in range(n_wells):
+            if inside[i]:
+                all_vals.append(vc[:, iy_all[i], ix_all[i]])
+                all_vals.append(vi[:, iy_all[i], ix_all[i]])
+        if all_vals:
+            stack = np.concatenate(all_vals)
+            if vmin is None:
+                vmin = float(stack.min() - 50)
+            if vmax is None:
+                vmax = float(stack.max() + 50)
+        else:
+            vmin = vmin if vmin is not None else 1400.0
+            vmax = vmax if vmax is not None else 5500.0
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(2.8 * ncols + 0.8, 3.5 * nrows + 0.7),
+        dpi=120, constrained_layout=True, sharey=True,
+    )
+    axes = np.atleast_2d(axes)
+    for i in range(nrows * ncols):
+        r, c = divmod(i, ncols)
+        ax = axes[r, c]
+        if i >= n_wells:
+            ax.set_axis_off()
+            continue
+        label = well_labels[i]
+        if not inside[i]:
+            ax.text(0.5, 0.5, f"{label}\nOUT OF GRID",
+                    ha="center", va="center", transform=ax.transAxes,
+                    color="#C0392B", fontsize=9)
+            ax.set_axis_off()
+            continue
+        iy, ix = int(iy_all[i]), int(ix_all[i])
+        cur = vc[:, iy, ix]
+        ini = vi[:, iy, ix]
+        ax.plot(ini, depths, color="#888888", lw=1.0, ls="--",
+                label="init", alpha=0.85)
+        ax.plot(cur, depths, color="#1F77B4", lw=1.3,
+                label=f"epoch {epoch}", alpha=0.95)
+        if water_vp is not None:
+            ax.axvline(float(water_vp), color="#3CB371", lw=0.5,
+                       ls=":", alpha=0.7)
+        ax.set_xlim(float(vmin), float(vmax))
+        ax.set_ylim(depths[-1], depths[0])  # invert: depth grows down
+        ax.set_title(label, fontsize=9)
+        if c == 0:
+            ax.set_ylabel("depth (m)")
+        if r == nrows - 1:
+            ax.set_xlabel("vp (m/s)")
+        ax.grid(True, alpha=0.3)
+        if i == 0:
+            ax.legend(fontsize=7, loc="lower right")
+    fig.suptitle(
+        f"vp well logs — epoch {epoch}   "
+        f"({n_wells} pseudo-wells, water_vp_ref={water_vp})",
+        fontsize=11,
+    )
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+# ----------------------------------------------------------------------
 # Runner orchestrator
 # ----------------------------------------------------------------------
 
@@ -504,29 +1112,76 @@ def run_epoch_qc(
     vmin = bounds.min if bounds is not None and bounds.min is not None else None
     vmax = bounds.max if bounds is not None and bounds.max is not None else None
 
+    # 3-D path: emit three orthogonal slices (XY @ mid-depth, XZ @ mid-y,
+    # YZ @ mid-x) for vp, Δvp, and the gradient. The 2-D helpers retain
+    # the simple single-panel layout.
+    if vp.ndim == 3:
+        init_3d = state.get("qc_initial_vp")
+        grad_3d = getattr(vp, "grad", None)
+        # Per-axis dh: the runner state may carry a 3-tuple under "dh_xyz"
+        # when a non-cubic grid is in use; fall back to the scalar.
+        dh_xyz = state.get("dh_xyz", (dh, dh, dh))
+        if qc_spec.vp_png:
+            written.append(save_ortho_slices_png(
+                vp, dh=dh_xyz, out_path=qc_dir / "vp" / iter_tag,
+                epoch=epoch, vmin=vmin, vmax=vmax,
+                title_prefix="vp", cbar_label="vp (m/s)",
+            ))
+        if qc_spec.vp_diff_png and init_3d is not None:
+            init_np = _to_np(init_3d)
+            if init_np.ndim == 3 and init_np.shape == vp.shape:
+                diff = _to_np(vp) - init_np
+                s = float(np.percentile(np.abs(diff), 99.0)) or 1.0
+                from sweep_viz.colormaps import IMAGE_CMAP
+                written.append(save_ortho_slices_png(
+                    diff, dh=dh_xyz, out_path=qc_dir / "vp_diff" / iter_tag,
+                    epoch=epoch, vmin=-s, vmax=s,
+                    title_prefix="Δvp", cbar_label="Δvp (m/s)",
+                    cmap=IMAGE_CMAP,
+                ))
+        if qc_spec.gradient_png and grad_3d is not None:
+            grad_np = _to_np(grad_3d)
+            s = float(np.percentile(np.abs(grad_np), 99.0)) or 1.0
+            from sweep_viz.colormaps import IMAGE_CMAP
+            written.append(save_ortho_slices_png(
+                grad_np, dh=dh_xyz, out_path=qc_dir / "gradient" / iter_tag,
+                epoch=epoch, vmin=-s, vmax=s,
+                title_prefix="∂loss/∂vp", cbar_label="gradient",
+                cmap=IMAGE_CMAP,
+            ))
+        # Shot-gather + reparam-precond plots remain 2-D-only for now;
+        # the per-shot OBN QC layout is §3.6 polish work tracked separately.
+        return written
+
     if qc_spec.vp_png:
         written.append(save_vp_png(
             vp, dh=dh, out_path=qc_dir / "vp" / iter_tag, epoch=epoch,
             vmin=vmin, vmax=vmax,
         ))
 
-    if qc_spec.vp_diff_png and state.get("qc_initial_vp") is not None:
+    init_for_plot = state.get("qc_initial_vp")
+    if qc_spec.vp_diff_png and init_for_plot is not None:
         written.append(save_vp_diff_png(
-            vp, state["qc_initial_vp"],
+            vp, init_for_plot,
             dh=dh, out_path=qc_dir / "vp_diff" / iter_tag, epoch=epoch,
         ))
 
+    grad_for_plot = getattr(vp, "grad", None)
     if qc_spec.gradient_png:
         # Grid mode: vp leaf has .grad. Reparam mode: vp is non-leaf
         # (rendered) so .grad is None — skip silently.
-        grad = getattr(vp, "grad", None)
-        if grad is not None:
+        if grad_for_plot is not None:
             written.append(save_gradient_png(
-                grad, dh=dh, out_path=qc_dir / "gradient" / iter_tag,
+                grad_for_plot, dh=dh, out_path=qc_dir / "gradient" / iter_tag,
                 epoch=epoch,
             ))
 
     if qc_spec.shot_gather and extract_obs_syn_panels is not None:
+        if vp.ndim == 3:
+            # Rich shot-gather payload expects 2-D src/rec xy arrays; the
+            # 3-D acq layout is handled by the orthogonal-slice QC (§3.6),
+            # not this 2-D-only helper. Skip silently for now.
+            return written
         try:
             result = extract_obs_syn_panels()
             # Back-compat: support both old 3-tuple and new payload dict.
@@ -579,7 +1234,11 @@ __all__ = [
     "save_vp_png",
     "save_vp_diff_png",
     "save_gradient_png",
+    "save_gradient_ortho_slices_png",
+    "save_ortho_slices_png",
     "save_shot_gather_png",
+    "save_supershot_qc_panel",
+    "save_vp_well_logs_png",
     "save_loss_curve_with_stages",
     "run_epoch_qc",
     "save_final_qc",
