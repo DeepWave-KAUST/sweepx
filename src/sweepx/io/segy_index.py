@@ -233,6 +233,24 @@ class SEGYIndex:
             meta={**self.meta, "source": "SEGYIndex"},
         )
 
+    # ------------------------------------------------------ plan hop
+    def to_seismic_plan(self, **kwargs):
+        """Convenience: build a :class:`sweep_io.seismic_plan.SeismicPlan`.
+
+        All kwargs forward to :func:`sweep_io.seismic_plan.build_seismic_plan`.
+        Use ``grouping='csg'`` (default) for shot-gather organisation
+        (typical 2-D / 3-D streamer) or ``grouping='crg'`` (plus
+        ``receiver_quantize_m``) for common-receiver gathers (OBN).
+
+        Examples
+        --------
+        >>> idx = build_segy_index(["viking.sgy"])
+        >>> plan_csg = idx.to_seismic_plan(grouping="csg")
+        >>> plan_csg.save("viking_csg_plan.npz")
+        """
+        from .seismic_plan import build_seismic_plan
+        return build_seismic_plan(self, **kwargs)
+
 
 # ============================================================================
 # Index builder
@@ -346,7 +364,7 @@ def build_segy_index(
     byte_map
         Trace-header byte-offset overrides. Defaults to SEG-Y rev1 standard
         (:data:`SEGY_REV1_BYTES`). Override per-key, e.g.
-        ``{"source_depth": 44}`` for OBN-3D's airgun depth.
+        ``{"source_depth": 44}`` for an OBN airgun depth.
     source_depth_m_override, receiver_depth_m_override
         If the SEG-Y file's depth bytes are zero (or unreliable), use these
         instead. Common case for marine streamers.

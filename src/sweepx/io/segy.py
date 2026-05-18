@@ -281,16 +281,38 @@ class SEGYReader:
                 ends.append(s + size)
                 owners.append([i])
 
-        # Read each run.
-        out_sorted = np.empty((n, self.n_samples), dtype=np.float32)
+        # Read each run, gathering bytes into a single stacked buffer so
+        # we can decode once at the end. Per-trace _decode() in a Python
+        # loop is dominated by numpy/Python dispatch overhead (~70 us per
+        # trace × tens of thousands of traces = several seconds in the
+        # shared-shot OBN supershot path). Batched decode amortises that.
+        stacked = np.empty((n, size), dtype=np.uint8)
+        _arange_size = np.arange(size, dtype=np.int64)
         for run_start, run_end, run_owners in zip(starts, ends, owners):
             buf = self._pread(run_start, run_end - run_start)
             raw = np.frombuffer(buf, dtype=np.uint8)
-            # Each owner's data starts at (data_offs[owner] - run_start)
-            for owner_idx in run_owners:
-                rel = int(data_offs[owner_idx] - run_start)
-                slc = raw[rel : rel + size]
-                out_sorted[owner_idx : owner_idx + 1] = self._decode(slc)
+            owners_arr = np.asarray(run_owners, dtype=np.int64)
+            rels = data_offs[owners_arr] - run_start
+            K = int(owners_arr.size)
+            if K == 1:
+                # Single-trace run (common when sampler picks scattered traces).
+                stacked[int(owners_arr[0])] = raw[int(rels[0]):int(rels[0]) + size]
+            else:
+                # Multi-trace run. Densely-packed (coalesce_gap=0) gives
+                # rels = [0, size, 2*size, ...], so we can reshape without
+                # building an index. Otherwise gather via add.outer; the
+                # index buffer is K*size int64 (~K*16 KB for nt=4001) and
+                # K is small per run for shared-shot sampling (≤ a few).
+                if rels[0] == 0 and K * size == (run_end - run_start) and \
+                        np.array_equal(rels, _arange_size[:K] * size):
+                    stacked[owners_arr] = raw[:K * size].reshape(K, size)
+                else:
+                    col_idx = rels[:, None] + _arange_size[None, :]
+                    stacked[owners_arr] = raw[col_idx]
+
+        # ONE batched decode across all n traces — turns 24k × ~70 us
+        # dispatch overhead into one big numpy view+astype.
+        out_sorted = self._decode(stacked.reshape(-1)).reshape(n, self.n_samples)
 
         # Undo the sort.
         out = np.empty_like(out_sorted)

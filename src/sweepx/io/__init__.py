@@ -19,9 +19,23 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
-from . import geometry, models, plan, prefetch, segy, segy_index
+from . import (
+    crg_build,
+    crg_plan,
+    geometry,
+    models,
+    plan,
+    prefetch,
+    segy,
+    segy_index,
+    seismic_plan,
+    wavelet,
+)
 
-__all__ = ["models", "geometry", "plan", "prefetch", "segy", "segy_index", "__version__"]
+__all__ = [
+    "crg_build", "crg_plan", "models", "geometry", "plan", "prefetch",
+    "segy", "segy_index", "seismic_plan", "wavelet", "__version__",
+]
 
 
 def __getattr__(name: str):
@@ -30,5 +44,10 @@ def __getattr__(name: str):
         return _m
     if name == "cuda_prefetch":
         from . import cuda_prefetch as _m
+        return _m
+    if name == "crg_dataset":
+        # Lazy because it imports torch.utils.data; sweep-io's base install
+        # is torch-free until the user asks for the torch dataset wrappers.
+        from . import crg_dataset as _m
         return _m
     raise AttributeError(f"module 'sweep_io' has no attribute {name!r}")
