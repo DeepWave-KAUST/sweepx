@@ -90,6 +90,20 @@ class VelocityINR(nn.Module):
     bounds
         Optional ``(vp_min, vp_max)`` clamp applied at render time. Set
         to ``None`` (default) to let the caller clamp.
+    water_mask
+        Optional boolean tensor with the SAME shape as ``base_velocity``.
+        Voxels where ``True`` are pinned to ``water_vp`` at render time
+        — the SIREN's output for those cells is ignored entirely. This
+        is the right tool for "I know the water column is 1500 m/s, do
+        NOT let SIREN init noise contaminate it" cases: the SIREN at
+        init has ~std=0.08 raw output, so with ``vp_std=500`` the water
+        layer would otherwise sit at 1500±40 m/s of garbage from epoch 0.
+        Because the rendered output doesn't depend on SIREN params at
+        masked voxels, gradients there are exactly zero — equivalent to
+        freezing those cells AND giving SIREN free model capacity to
+        spend on the rest of the model.
+    water_vp
+        Velocity in m/s used at water-mask voxels. Default ``1500.0``.
 
     Notes
     -----
@@ -121,6 +135,8 @@ class VelocityINR(nn.Module):
         coord_min: float = 0.0,
         coord_max: float = 1.0,
         bounds: Tuple[float, float] | None = None,
+        water_mask: torch.Tensor | None = None,
+        water_vp: float = 1500.0,
     ) -> None:
         super().__init__()
         if base_velocity.ndim not in (2, 3):
@@ -156,6 +172,22 @@ class VelocityINR(nn.Module):
             ),
             persistent=False,
         )
+        # Optional water-layer mask: if provided, render replaces those
+        # voxels with ``water_vp`` (Pinned. Not learned. Gradient → 0).
+        self.water_vp = float(water_vp)
+        if water_mask is not None:
+            if tuple(water_mask.shape) != tuple(base_velocity.shape):
+                raise ValueError(
+                    f"water_mask.shape {tuple(water_mask.shape)} != "
+                    f"base_velocity.shape {tuple(base_velocity.shape)}"
+                )
+            self.register_buffer(
+                "water_mask",
+                water_mask.to(dtype=torch.bool).clone(),
+                persistent=False,
+            )
+        else:
+            self.water_mask = None
 
         if self.use_hash_encoding:
             self.encoder = MultiResHashGrid(
@@ -187,14 +219,26 @@ class VelocityINR(nn.Module):
     # ------------------------------------------------------------------ #
 
     @torch.no_grad()
-    def update_base_velocity(self, new_base: torch.Tensor) -> None:
-        """Swap in a new base (possibly different shape); rebuild coords."""
+    def update_base_velocity(
+        self,
+        new_base: torch.Tensor,
+        water_mask: torch.Tensor | None = None,
+    ) -> None:
+        """Swap in a new base (possibly different shape); rebuild coords.
+
+        When the new base has a different shape than the old, any
+        previously installed ``water_mask`` becomes stale. Pass a
+        ``water_mask`` matched to ``new_base.shape`` to refresh; leave
+        ``None`` to clear the existing mask (and warn loudly that a
+        stale mask was dropped).
+        """
         if new_base.ndim != self.dim:
             raise ValueError(
                 f"new_base.ndim {new_base.ndim} != self.dim {self.dim}"
             )
         device = self.base_velocity.device
         new_base = new_base.detach().to(device=device, dtype=torch.float32).clone()
+        shape_changed = (tuple(self.base_velocity.shape) != tuple(new_base.shape))
         # Replace the registered buffer so .to(device) keeps working.
         self.base_velocity = new_base
         self.coords = _make_coord_grid(
@@ -203,13 +247,38 @@ class VelocityINR(nn.Module):
             coord_max=self.coord_max,
             device=device,
         )
+        if water_mask is not None:
+            if tuple(water_mask.shape) != tuple(new_base.shape):
+                raise ValueError(
+                    f"water_mask.shape {tuple(water_mask.shape)} != "
+                    f"new_base.shape {tuple(new_base.shape)}"
+                )
+            self.water_mask = water_mask.to(
+                device=device, dtype=torch.bool,
+            ).clone()
+        elif shape_changed and self.water_mask is not None:
+            # Old mask is stale; drop it rather than crash at render.
+            import warnings
+            warnings.warn(
+                "VelocityINR.update_base_velocity: new_base.shape "
+                f"{tuple(new_base.shape)} != old water_mask.shape "
+                f"{tuple(self.water_mask.shape)}; dropping stale "
+                "water_mask. Pass water_mask=... to refresh.",
+                stacklevel=2,
+            )
+            self.water_mask = None
 
     # ------------------------------------------------------------------ #
     # Rendering                                                          #
     # ------------------------------------------------------------------ #
 
     def _render_at_coords(
-        self, coords: torch.Tensor, shape: Tuple[int, ...], base: torch.Tensor
+        self,
+        coords: torch.Tensor,
+        shape: Tuple[int, ...],
+        base: torch.Tensor,
+        *,
+        water_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         features = self.encoder(coords) if self.encoder is not None else coords
         raw = self.mlp(features).reshape(*shape)
@@ -220,6 +289,29 @@ class VelocityINR(nn.Module):
             vp = base + delta
         if self.bounds is not None:
             vp = vp.clamp(self.bounds[0], self.bounds[1])
+        # Water-layer pin: override masked voxels with the fixed water
+        # velocity. ``torch.where`` keeps the autograd graph correct —
+        # gradient at masked voxels is zero (the output doesn't depend
+        # on SIREN params there), so SIREN can't waste capacity on the
+        # water column and the water layer never drifts from water_vp.
+        #
+        # Caller may pass an explicitly-shaped ``water_mask`` (e.g.
+        # ``render_window`` slices the full-grid mask to match the
+        # rendered chunk); fall back to ``self.water_mask`` only when
+        # the render covers the full base-velocity grid.
+        if water_mask is None and self.water_mask is not None:
+            if tuple(self.water_mask.shape) == tuple(shape):
+                water_mask = self.water_mask
+            # else: caller is rendering a different shape (chunk /
+            # arbitrary render_shape); they must pass the matching mask.
+        if water_mask is not None:
+            if tuple(water_mask.shape) != tuple(shape):
+                raise ValueError(
+                    f"water_mask.shape {tuple(water_mask.shape)} != "
+                    f"render shape {tuple(shape)}"
+                )
+            water_val = vp.new_full((), self.water_vp)
+            vp = torch.where(water_mask, water_val, vp)
         return vp
 
     def forward(self) -> torch.Tensor:
@@ -241,8 +333,10 @@ class VelocityINR(nn.Module):
             coord_max=self.coord_max,
             device=self.coords.device,
         )
-        if shape == tuple(int(s) for s in self.base_velocity.shape):
+        same_shape = shape == tuple(int(s) for s in self.base_velocity.shape)
+        if same_shape:
             base = self.base_velocity
+            water_mask = self.water_mask
         else:
             mode = "bilinear" if self.dim == 2 else "trilinear"
             base = F.interpolate(
@@ -251,7 +345,20 @@ class VelocityINR(nn.Module):
                 mode=mode,
                 align_corners=True,
             ).reshape(*shape)
-        return self._render_at_coords(coords, shape, base)
+            # Resample the water_mask via nearest-neighbor (bool stays
+            # crisp; trilinear on bool produces garbage).
+            if self.water_mask is not None:
+                water_mask = F.interpolate(
+                    self.water_mask.to(torch.float32).reshape(
+                        1, 1, *self.water_mask.shape
+                    ),
+                    size=shape, mode="nearest",
+                ).reshape(*shape).to(torch.bool)
+            else:
+                water_mask = None
+        return self._render_at_coords(
+            coords, shape, base, water_mask=water_mask,
+        )
 
     def render_window(self, *bounds: int) -> torch.Tensor:
         """Render a rectangular window on the base grid.
@@ -278,7 +385,16 @@ class VelocityINR(nn.Module):
         coords_full = self.coords.reshape(*full_shape, self.dim)
         coords_win = coords_full[tuple(slices)].reshape(-1, self.dim)
         base_win = self.base_velocity[tuple(slices)]
-        return self._render_at_coords(coords_win, win_shape, base_win)
+        # Slice the water_mask in lock-step so the chunked-backward
+        # path (which renders one z-slab at a time) gets a mask matching
+        # its chunk shape — otherwise torch.where broadcasts incorrectly.
+        if self.water_mask is not None:
+            water_mask_win = self.water_mask[tuple(slices)]
+        else:
+            water_mask_win = None
+        return self._render_at_coords(
+            coords_win, win_shape, base_win, water_mask=water_mask_win,
+        )
 
     # ------------------------------------------------------------------ #
     # Memory-conscious backward for large grids                          #

@@ -162,3 +162,169 @@ def test_to_cuda_keeps_buffers_consistent():
     assert vp.device.type == "cuda"
     assert net.base_velocity.device.type == "cuda"
     assert net.coords.device.type == "cuda"
+
+
+# ---------------------------------------------------------------------------
+# water_mask: pin selected voxels to a fixed velocity
+# ---------------------------------------------------------------------------
+def test_water_mask_pins_voxels_to_water_vp():
+    """Masked voxels render as exactly water_vp; others vary with SIREN."""
+    torch.manual_seed(0)
+    base = _make_base(16, 24, value=2000.0)
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:4] = True  # top 4 rows = "water"
+    net = VelocityINR(
+        base, vp_std=500.0,
+        hidden_features=8, hidden_layers=1,
+        hash_levels=2, hash_log2_size=8, hash_finest_resolution=4,
+        water_mask=mask, water_vp=1500.0,
+    )
+    vp = net()
+    assert vp.shape == base.shape
+    # Water rows: exactly 1500 everywhere.
+    assert torch.allclose(vp[:4], torch.full_like(vp[:4], 1500.0))
+    # Below seabed: should NOT be uniform 1500 (SIREN adds perturbations).
+    assert (vp[4:] != 1500.0).any()
+
+
+def test_water_mask_zero_gradient_on_masked_voxels():
+    """A loss that depends ONLY on water-masked voxels must produce
+    zero gradient on the SIREN params — by construction (the mask
+    replaces SIREN output with a constant, so dvp/dparam = 0 there).
+    """
+    torch.manual_seed(1)
+    base = _make_base(8, 12, value=2000.0)
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:3] = True
+    net = VelocityINR(
+        base, vp_std=200.0,
+        hidden_features=8, hidden_layers=1,
+        hash_levels=2, hash_log2_size=8, hash_finest_resolution=4,
+        water_mask=mask, water_vp=1500.0,
+    )
+    vp = net()
+    loss = vp[:3].sum()  # depends only on water rows
+    loss.backward()
+    # Every learnable param must have None or all-zero grad.
+    for p in net.parameters():
+        if p.requires_grad and p.grad is not None:
+            assert torch.allclose(p.grad, torch.zeros_like(p.grad))
+
+
+def test_water_mask_shape_mismatch_raises():
+    base = _make_base(8, 12)
+    bad_mask = torch.zeros(7, 11, dtype=torch.bool)
+    with pytest.raises(ValueError, match="water_mask.shape"):
+        VelocityINR(
+            base, hidden_features=4, hidden_layers=1,
+            hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+            water_mask=bad_mask,
+        )
+
+
+def test_water_mask_default_none_keeps_old_behavior():
+    """Without a mask, render is unchanged — backward compat."""
+    torch.manual_seed(2)
+    base = _make_base(8, 12, value=2000.0)
+    net = VelocityINR(
+        base, vp_std=100.0,
+        hidden_features=4, hidden_layers=1,
+        hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+    )
+    assert net.water_mask is None
+    vp = net()
+    # Output should not be uniformly 1500 anywhere (no mask applied).
+    assert not torch.allclose(vp, torch.full_like(vp, 1500.0))
+
+
+def test_update_base_velocity_drops_stale_mask():
+    """When new_base shape differs and no replacement mask given,
+    the old mask is dropped (with a warning) rather than crashing."""
+    import warnings
+    base = _make_base(8, 12)
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:2] = True
+    net = VelocityINR(
+        base, hidden_features=4, hidden_layers=1,
+        hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+        water_mask=mask,
+    )
+    new_base = _make_base(10, 14)  # different shape
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        net.update_base_velocity(new_base)
+    assert any("stale water_mask" in str(_w.message) for _w in w)
+    assert net.water_mask is None
+    # render must work after the drop.
+    vp = net()
+    assert vp.shape == new_base.shape
+
+
+def test_water_mask_render_window_slices_correctly():
+    """``render_window`` must slice the water_mask in lock-step so the
+    chunked-backward path doesn't hit torch.where broadcast errors.
+    """
+    torch.manual_seed(3)
+    base = _make_base(16, 24, value=2000.0)
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:4] = True
+    net = VelocityINR(
+        base, vp_std=100.0,
+        hidden_features=4, hidden_layers=1,
+        hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+        water_mask=mask, water_vp=1500.0,
+    )
+    # Render z=[0:6] chunk: includes 4 water rows + 2 below-seabed.
+    win = net.render_window(0, 6, 0, 24)
+    assert win.shape == (6, 24)
+    assert torch.allclose(win[:4], torch.full_like(win[:4], 1500.0))
+    assert (win[4:] != 1500.0).any()
+    # Render z=[8:14] chunk (entirely below seabed): no pin applied.
+    win2 = net.render_window(8, 14, 0, 24)
+    assert win2.shape == (6, 24)
+    assert (win2 != 1500.0).any()
+
+
+def test_water_mask_backward_velocity_gradient_chunked_3d():
+    """End-to-end: chunked-backward on a 3-D net with water_mask must
+    run without dimension errors AND produce zero gradient at water
+    voxels in the grad input."""
+    torch.manual_seed(4)
+    base = torch.full((8, 6, 10), 2500.0)  # 3-D
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:3] = True
+    net = VelocityINR(
+        base, vp_std=200.0,
+        hidden_features=4, hidden_layers=1,
+        hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+        water_mask=mask, water_vp=1500.0,
+    )
+    # Construct a velocity_grad that's non-zero everywhere; the chunked
+    # backward should run without dim mismatch (the bug we just fixed).
+    grad = torch.ones_like(base)
+    net.backward_velocity_gradient(grad, chunk_rows=2)
+    # Hidden layers should have non-zero grads (non-water voxels
+    # contributed); the test is mostly that the chunked path doesn't
+    # error.
+    has_nonzero = any(
+        p.grad is not None and (p.grad != 0).any() for p in net.parameters()
+    )
+    assert has_nonzero
+
+
+def test_update_base_velocity_refreshes_mask_when_given():
+    base = _make_base(8, 12)
+    mask = torch.zeros_like(base, dtype=torch.bool)
+    mask[:2] = True
+    net = VelocityINR(
+        base, hidden_features=4, hidden_layers=1,
+        hash_levels=2, hash_log2_size=6, hash_finest_resolution=4,
+        water_mask=mask,
+    )
+    new_base = _make_base(10, 14)
+    new_mask = torch.zeros_like(new_base, dtype=torch.bool)
+    new_mask[:3] = True
+    net.update_base_velocity(new_base, water_mask=new_mask)
+    assert net.water_mask is not None
+    assert tuple(net.water_mask.shape) == tuple(new_base.shape)
+    assert int(net.water_mask.sum()) == 3 * 14

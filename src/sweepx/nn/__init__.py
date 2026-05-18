@@ -7,7 +7,7 @@ __version__ = "0.1.0"
 from .reparam import Reparameterizer
 from .siren import SIREN, SirenMLP, SineLayer
 from .dip import DIPReparam
-from .priors import LearnedPrior
+from .priors import LearnedPrior, SeabedFreezeMask, TVPrior
 from .hash_encoding import MultiResHashGrid
 from .velocity_inr import VelocityINR
 from .wavelet import SirenWavelet
@@ -20,6 +20,8 @@ __all__ = [
     "DIPReparam",
     "LearnedPrior",
     "MultiResHashGrid",
+    "SeabedFreezeMask",
+    "TVPrior",
     "VelocityINR",
     "SirenWavelet",
     "__version__",
