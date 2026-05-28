@@ -92,12 +92,29 @@ class SoftDTWLoss(BaseFWILoss):
         If True (default), divide the per-trace cost by ``nt`` so the
         loss does not scale with trace length.  Cuturi & Blondel define
         Soft-DTW without this normalisation.
+    divergence
+        If True (default), return the **soft-DTW divergence** of
+        Blondel-Mensch-Vert (2020),
+
+        .. math::
+
+            D_\\gamma(x, y) = \\mathrm{sDTW}_\\gamma(x, y)
+                - \\tfrac{1}{2}\\bigl[\\mathrm{sDTW}_\\gamma(x, x)
+                + \\mathrm{sDTW}_\\gamma(y, y)\\bigr].
+
+        This is non-negative and zero iff :math:`x=y`, which is the
+        property an FWI misfit must have.  Setting ``divergence=False``
+        returns the raw soft-DTW (Cuturi-Blondel 2017), which can be
+        negative for ``gamma > 0`` (because the soft-min mixes
+        exponentially many alignment paths, so the log-partition can
+        exceed zero).  Default ``True``.
     """
 
     def __init__(
         self,
         gamma: float = 1.0,
         normalize_by_length: bool = True,
+        divergence: bool = True,
         reduction: str = "mean",
         mask: "torch.Tensor | None" = None,
     ) -> None:
@@ -106,6 +123,7 @@ class SoftDTWLoss(BaseFWILoss):
             raise ValueError(f"gamma must be > 0, got {gamma}")
         self.gamma = float(gamma)
         self.normalize_by_length = bool(normalize_by_length)
+        self.divergence = bool(divergence)
 
     def forward(self, syn: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         syn_c, _ = to_canonical(syn)
@@ -119,9 +137,16 @@ class SoftDTWLoss(BaseFWILoss):
         N, nt = s.shape
 
         # Pointwise cost matrix Delta[i, j] = (s[i] - o[j])^2 per trace.
-        D = (s.unsqueeze(-1) - o.unsqueeze(-2)) ** 2
+        D_so = (s.unsqueeze(-1) - o.unsqueeze(-2)) ** 2
 
-        per_trace = _soft_dtw_forward(D, self.gamma)
+        per_trace = _soft_dtw_forward(D_so, self.gamma)
+        if self.divergence:
+            D_ss = (s.unsqueeze(-1) - s.unsqueeze(-2)) ** 2
+            D_oo = (o.unsqueeze(-1) - o.unsqueeze(-2)) ** 2
+            per_trace = per_trace - 0.5 * (
+                _soft_dtw_forward(D_ss, self.gamma)
+                + _soft_dtw_forward(D_oo, self.gamma)
+            )
         if self.normalize_by_length:
             per_trace = per_trace / nt
 
@@ -137,11 +162,13 @@ def soft_dtw_loss(
     obs,
     gamma: float = 1.0,
     normalize_by_length: bool = True,
+    divergence: bool = True,
     reduction: str = "mean",
 ) -> torch.Tensor:
     return SoftDTWLoss(
         gamma=gamma,
         normalize_by_length=normalize_by_length,
+        divergence=divergence,
         reduction=reduction,
     )(syn, obs)
 
