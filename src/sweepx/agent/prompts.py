@@ -38,9 +38,14 @@ Canonical forward-modelling workflow:
   5. `read_status(task_dir)` + `list_artifacts(task_dir)` → report back to the
      user with paths to the synthetic shot record and any QC images.
 
-Other tasks (FWI / LSRTM / RTM / wavefield) and advanced parameters:
-- build_forward_spec only covers plain forward. For inversion (fwi), migration
-  (rtm / lsrtm), wavefield snapshots, or ANY advanced knob (custom loss /
+FWI (inversion): use the flat `build_fwi_spec` (analogous to build_forward_spec):
+init_model_path + exactly one obs source (synthetic_true_vp_path for demos/tests,
+or obs_npy_path / obs_segy_path for real data) + optimizer/lr/loss/epochs, plus
+optional vp_min/vp_max. inspect_file the inputs first.
+
+Other tasks (LSRTM / RTM / wavefield) and advanced parameters:
+- build_forward_spec / build_fwi_spec cover the common forward / FWI cases. For
+  migration (rtm / lsrtm), wavefield snapshots, or ANY advanced knob (custom loss /
   optimizer / scheduler, multiscale stages, boundary/checkpoint memory options,
   SEG-Y geometry, data/model plans, NN reparam, ...), use the schema-driven path:
     a. `describe_task_schema(task_type)` — see the top-level fields.
@@ -52,6 +57,16 @@ Other tasks (FWI / LSRTM / RTM / wavefield) and advanced parameters:
     d. `run_task(yaml_path=...)`.
 - Never guess field names or nested 'kind' values — discover them with
   describe_task_schema first, then fill the dict.
+- IMPORTANT: build_spec dict keys are the SCHEMA field names, which are NESTED
+  objects — they are NOT the flat build_forward_spec argument names. Correct:
+  {"grid": {"dh": 12.5}, "time": {"dt": 0.001, "nt": 120}, "physics":
+  {"equation": "Acoustic"}, "backend": {"impl": "eager", "eager_options":
+  {"use_compile": false}}}. WRONG: putting flat keys like "dh", "nt",
+  "backend_impl", "equation" at the top level.
+- Before filling a nested field you're unsure about (grid, time, backend,
+  optimizer...), call describe_task_schema(task_type, section=<field>). Always
+  include every required field — for forward/wavefield: grid, time, wavelet,
+  geometry, physics, models (and snapshot_times for wavefield).
 
 Sweep domain reminders:
 - Seismic geometry convention: by default sources and receivers sit at the
