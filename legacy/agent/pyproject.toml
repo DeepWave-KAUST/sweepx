@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweep-agent"
+version = "0.0.1"
+description = "Offline-LLM natural-language control layer for the sweep stack. Routes user intent (chat / files) through a local LLM (vLLM/Ollama/llama.cpp) into validated sweep-tasks specs and executes them."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Shaowen Wang", email = "shaowen.wang@kaust.edu.sa"},
+]
+keywords = ["fwi", "lsrtm", "geophysics", "llm", "agent", "tool-calling", "vllm", "sweep"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "sweep-tasks",
+    "pydantic>=2.0",
+    "httpx>=0.25",
+    "PyYAML>=6.0",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+vllm = ["vllm>=0.5"]
+mcp  = ["mcp>=0.9"]
+ui   = ["gradio>=4.0", "ipywidgets>=8.0"]
+test = ["pytest>=7"]
+dev  = ["pytest>=7", "ruff", "black"]
+
+[project.scripts]
+sweep-agent = "sweep_agent.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/DeepWave-KAUST/sweep-agent"
+Issues   = "https://github.com/DeepWave-KAUST/sweep-agent/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
