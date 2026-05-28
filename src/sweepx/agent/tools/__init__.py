@@ -102,6 +102,7 @@ def register(
 # We use absolute `import` (not `from . import`) so the stdlib `inspect` module
 # at the top of this file does not shadow the sweep_agent.tools.inspect submodule.
 import sweep_agent.tools.inspect          # noqa: E402,F401
+import sweep_agent.tools.introspect       # noqa: E402,F401
 import sweep_agent.tools.build_forward    # noqa: E402,F401
 import sweep_agent.tools.execute          # noqa: E402,F401
 import sweep_agent.tools.status           # noqa: E402,F401

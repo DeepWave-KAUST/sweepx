@@ -49,6 +49,10 @@ Sweep domain reminders:
 - Backend choice: `eager` works anywhere but is slow; `c` is the CUDA path and
   needs sweep_cuda to be built. Default to `eager` unless the user asks for `c`
   or the task is large.
-- The `equation` field defaults to "Acoustic". Common alternatives the user may
-  request: AcousticVTI, Elastic, AcousticVTI1st. Use the user's wording.
+- Equation selection: do NOT guess or memorize equation names. sweep supports
+  ~33 equations. The moment the user wants anything beyond plain acoustic
+  (anisotropy, VTI/TTI, elastic, shear, density...), call `list_equations` to
+  find the exact equation name and the models it needs, then gather those extra
+  model files (epsilon/delta/theta/vs/rho/...) from the user and pass them to
+  build_forward_spec via `extra_models`. Acoustic needs only vp.
 """

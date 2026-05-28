@@ -78,6 +78,18 @@ class BuildForwardParams(BaseModel):
         ),
     )
 
+    # --- Multi-model (anisotropic / elastic equations) --------------------
+    extra_models: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Extra model files beyond vp, required by multi-parameter equations. Map each model "
+            "name to a file path, e.g. {'epsilon': '/p/eps.npy', 'delta': '/p/del.npy'} for "
+            "AcousticVTI, or {'vs': '/p/vs.npy', 'rho': '/p/rho.npy'} for Elastic. Call "
+            "`list_equations` first to see exactly which models the chosen equation needs. "
+            "Leave None for Acoustic (vp only)."
+        ),
+    )
+
     # --- Identity / IO ----------------------------------------------------
     output_dir: str = Field("./sweep_runs", description="Parent directory for the run; <output_dir>/<task_id>/ holds artifacts + status.json.")
     task_id: str | None = Field(None, description="Subdirectory name; auto-generated from timestamp when omitted.")
@@ -98,7 +110,70 @@ class BuildForwardParams(BaseModel):
     )
 
 
-def _construct_spec_dict(p: BuildForwardParams) -> dict[str, Any]:
+def _resolve_models(p: BuildForwardParams) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Validate the equation + assemble its ordered models list.
+
+    Returns ``(models, None)`` on success, or ``([], error_dict)`` when the
+    equation name is unknown or the supplied models don't match what the
+    equation needs. Errors are returned as data so the agent loop can feed them
+    back to the LLM for a retry. If sweep isn't importable we skip validation
+    and trust the caller's inputs.
+    """
+    extra = p.extra_models or {}
+    try:
+        from sweep_agent.tools.introspect import all_equations
+        eqs = all_equations()
+    except Exception:
+        eqs = None
+
+    if eqs is None:
+        models = [{"name": "vp", "path": p.vp_path}]
+        models += [{"name": k, "path": v} for k, v in extra.items()]
+        return models, None
+
+    if p.equation not in eqs:
+        import difflib
+        ql = p.equation.lower()
+        # Substring hits first (e.g. "VTI" → all *VTI* equations), then fuzzy
+        # matches with a lenient cutoff (difflib ratio is low for short queries
+        # against long names like AcousticVTI).
+        substr = [e for e in eqs if ql in e.lower()]
+        fuzzy = difflib.get_close_matches(p.equation, list(eqs), n=5, cutoff=0.4)
+        suggestions = list(dict.fromkeys(substr + fuzzy))[:6]
+        return [], {
+            "error": (
+                f"unknown equation '{p.equation}'. "
+                + (f"closest matches: {suggestions}. " if suggestions else "")
+                + "Call list_equations for the full list of supported equations."
+            )
+        }
+
+    required = eqs[p.equation]  # ordered, e.g. ['vp','epsilon','delta']
+    provided = {"vp", *extra.keys()}
+    missing = [m for m in required if m not in provided]
+    unneeded = [m for m in extra if m not in required]
+    if missing:
+        return [], {
+            "error": (
+                f"equation '{p.equation}' requires models {required}; missing {missing}. "
+                f"Ask the user for those files and pass them via extra_models, "
+                f"e.g. extra_models={{'{missing[0]}': '/path/to/{missing[0]}.npy'}}."
+            )
+        }
+    if unneeded:
+        return [], {
+            "error": (
+                f"equation '{p.equation}' only needs {required}; got unexpected "
+                f"extra_models {unneeded}. Remove them."
+            )
+        }
+
+    sources = {"vp": p.vp_path, **extra}
+    models = [{"name": m, "path": sources[m]} for m in required]
+    return models, None
+
+
+def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]]) -> dict[str, Any]:
     delay = p.wavelet_delay if p.wavelet_delay is not None else 1.0 / p.fm
     spec: dict[str, Any] = {
         "task_type": "forward",
@@ -125,7 +200,7 @@ def _construct_spec_dict(p: BuildForwardParams) -> dict[str, Any]:
             "free_surface": p.free_surface,
         },
         "backend": {"impl": p.backend_impl},
-        "models": [{"name": "vp", "path": p.vp_path}],
+        "models": models,
     }
     # Wire use_compile through eager_options only when the eager backend is in
     # play; the schema rejects eager_options on impl='c'.
@@ -146,7 +221,10 @@ def _construct_spec_dict(p: BuildForwardParams) -> dict[str, Any]:
         "ALWAYS call `inspect_file` on the velocity model first to learn its shape/dtype, then "
         "pick dh/dt/nt/fm consistent with CFL and pts-per-wavelength constraints. The default "
         "geometry is line sources/receivers at small depths (surface acquisition); override "
-        "source_depth/receiver_depth for cross-well or interior shots."
+        "source_depth/receiver_depth for cross-well or interior shots. For any non-Acoustic "
+        "equation (VTI/TTI/Elastic/...), call list_equations first to learn the required models, "
+        "then pass the extra ones (epsilon/delta/vs/rho/...) via extra_models — the tool validates "
+        "that the models match the equation and tells you what's missing."
     ),
     params_model=BuildForwardParams,
 )
@@ -158,7 +236,11 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
 
-    spec_dict = _construct_spec_dict(args)
+    models, err = _resolve_models(args)
+    if err is not None:
+        return err
+
+    spec_dict = _construct_spec_dict(args, models)
     try:
         spec = ForwardSpec.model_validate(spec_dict)
     except Exception as exc:
