@@ -38,6 +38,21 @@ Canonical forward-modelling workflow:
   5. `read_status(task_dir)` + `list_artifacts(task_dir)` → report back to the
      user with paths to the synthetic shot record and any QC images.
 
+Other tasks (FWI / LSRTM / RTM / wavefield) and advanced parameters:
+- build_forward_spec only covers plain forward. For inversion (fwi), migration
+  (rtm / lsrtm), wavefield snapshots, or ANY advanced knob (custom loss /
+  optimizer / scheduler, multiscale stages, boundary/checkpoint memory options,
+  SEG-Y geometry, data/model plans, NN reparam, ...), use the schema-driven path:
+    a. `describe_task_schema(task_type)` — see the top-level fields.
+    b. `describe_task_schema(task_type, section=...)` — expand a nested field
+       (e.g. section='optimizer' → adam/sgd/lbfgs variants; section='geometry'
+       → line/explicit/from_segy_headers/... variants).
+    c. `build_spec(task_type, spec={...})` — pass the full dict; it validates
+       against the real schema and returns a YAML path (errors come back as data).
+    d. `run_task(yaml_path=...)`.
+- Never guess field names or nested 'kind' values — discover them with
+  describe_task_schema first, then fill the dict.
+
 Sweep domain reminders:
 - Seismic geometry convention: by default sources and receivers sit at the
   model surface (small z), not the centre. The build_forward_spec defaults
