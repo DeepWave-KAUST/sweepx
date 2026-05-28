@@ -35,6 +35,22 @@ $w(\tau) = \exp(-\tau^2/2\sigma^2)$ (``sigma``) optionally gates the
 allowed lag range.  The cross-correlation itself is computed via FFTs in
 $O(n_t \log n_t)$.
 
+A closely related variant (85th EAGE 2024, *Differentiable Traveltime
+Misfit for Wave-Equation Tomography*) replaces the
+"non-negative power" weighting by a **softmax**:
+
+$$
+\mathrm{prob}(\tau) = \frac{\exp\!\bigl(c(\tau)\bigr)}{\sum_{\tau'} \exp\!\bigl(c(\tau')\bigr)},
+\qquad
+\tau^\star \;\approx\; \sum_\tau \tau\,\mathrm{prob}(\tau).
+$$
+
+Both belong to the same family of smooth-argmax surrogates (power-of-cc
+vs. softmax-of-cc).  In the limit $p\to\infty$ our ``power``-weighted
+centroid collapses to the argmax just like the temperature-0 softmax
+does, so both estimators agree on $\tau^\star$ for well-isolated
+correlation peaks.
+
 ## When to use
 
 * Severely cycle-skipped data: the kinematic information is in the
@@ -74,3 +90,9 @@ loss = CrossCorrelationTraveltimeLoss(
   criterion for wave-equation traveltime tomography.*
   **Geophys. J. Int.** 182 (3), 1383-1394.
   doi:[10.1111/j.1365-246X.2010.04681.x](https://doi.org/10.1111/j.1365-246X.2010.04681.x)
+* \[authors\] (2024). *Differentiable Traveltime Misfit for
+  Wave-Equation Tomography.*  85th EAGE Annual Conference & Exhibition,
+  Oslo, Norway, Expanded Abstracts.
+  doi:`10.3997/2214-4609.2024-TBD`
+  (softmax-of-cross-correlation variant — same family as the
+  ``power``-weighted centroid implemented here.)

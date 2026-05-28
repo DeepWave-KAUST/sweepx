@@ -30,6 +30,23 @@ matched traces.
 
 For exact-recovery checks see ``tests/test_traveltime.py``.
 
+A closely related smooth surrogate (85th EAGE 2024, *Differentiable
+Traveltime Misfit for Wave-Equation Tomography*) replaces the
+non-negative ``power``-of-:math:`c(\\tau)` weighting by a **softmax**
+of :math:`c(\\tau)`:
+
+.. math::
+
+    \\mathrm{prob}(\\tau)
+        \\;=\\; \\frac{\\exp\\bigl(c(\\tau)\\bigr)}{\\sum_{\\tau'} \\exp\\bigl(c(\\tau')\\bigr)},
+    \\qquad
+    \\tau^\\star
+        \\;\\approx\\; \\sum_\\tau \\tau\\,\\mathrm{prob}(\\tau).
+
+Both estimators belong to the same family of smooth argmax surrogates;
+in the high-sharpness limit (``power -> infinity`` or
+softmax-temperature ``-> 0``) they both collapse to the hard argmax.
+
 References
 ----------
 * Luo, Y. & Schuster, G. T. (1991). *Wave-equation travel-time inversion.*
@@ -42,6 +59,9 @@ References
   criterion for wave-equation traveltime tomography.*
   Geophys. J. Int. 182 (3), 1383-1394.
   doi:10.1111/j.1365-246X.2010.04681.x
+* [authors] (2024). *Differentiable Traveltime Misfit for Wave-Equation
+  Tomography.*  85th EAGE Annual Conference & Exhibition, Oslo, Norway,
+  Expanded Abstracts.  doi:10.3997/2214-4609.2024-TBD
 """
 
 from __future__ import annotations

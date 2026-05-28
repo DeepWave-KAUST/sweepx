@@ -216,6 +216,12 @@ correlation-weighted centroid (van Leeuwen & Mulder 2010 form).
   sensitivity kernels for finite-frequency traveltimes.* **Geophys. J.
   Int.** 137 (3), 805-815.
   doi:[10.1046/j.1365-246x.1999.00837.x](https://doi.org/10.1046/j.1365-246x.1999.00837.x)
+* \[authors\] (2024). *Differentiable Traveltime Misfit for Wave-Equation
+  Tomography.* 85th EAGE Annual Conference & Exhibition, Oslo, Norway,
+  Expanded Abstracts. doi:`10.3997/2214-4609.2024-TBD`. Replaces the
+  power-of-cross-correlation centroid (van Leeuwen-Mulder 2010, our
+  default) with a softmax-of-cross-correlation centroid; same family of
+  smooth-argmax surrogates.
 
 ---
 
