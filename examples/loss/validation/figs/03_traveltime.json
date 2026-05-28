@@ -1,0 +1,7 @@
+{
+  "fig": "03_traveltime.png",
+  "cc_peak_at_ms_theory": 20.0,
+  "cc_peak_at_ms_measured": 20.0,
+  "loss_at_tau_eq_tau0_s2": 0.0002,
+  "loss_theory_at_tau_s2": 0.0002
+}

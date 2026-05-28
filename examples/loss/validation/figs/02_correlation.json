@@ -1,0 +1,9 @@
+{
+  "fig": "02_correlation.png",
+  "alpha_invariance_max_rel_err": {
+    "L2 (baseline)": 48.62762294508823,
+    "GlobalCorrelation (NCC)": 0.0,
+    "TraceNormalizedL2": 4.345234509116158e-16
+  },
+  "equivalence_max_abs_diff": 4.440892098500626e-16
+}

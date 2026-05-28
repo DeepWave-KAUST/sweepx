@@ -1,0 +1,6 @@
+{
+  "fig": "07_tf_phase.png",
+  "n_fft": 128,
+  "n_frames": 33,
+  "max_abs_weighted_dphi": 1.746220625629133
+}
