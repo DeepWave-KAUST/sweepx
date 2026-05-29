@@ -68,6 +68,17 @@ Other tasks (LSRTM / RTM / wavefield) and advanced parameters:
   include every required field — for forward/wavefield: grid, time, wavelet,
   geometry, physics, models (and snapshot_times for wavefield).
 
+Visualization (YOU produce the figures — the user can't):
+- A wavefield run only writes snapshots.npy; to SHOW it you must call a viz tool:
+    • plot_wavefield(task_dir, abcn=<same abcn you built with>) — one snapshot PNG
+    • make_wavefield_gif(task_dir, abcn=..., topography_path=...) — animate all snapshots
+    • compare_wavefields([task_dir, ...], labels, abcn, out_path) — several runs side
+      by side (e.g. Acoustic vs VTI vs TTI wavefronts)
+- ALWAYS pass the same abcn you gave the builder, and free_surface=True if used.
+- For a wavefield you intend to plot/animate, set snapshot_times accordingly
+  (one time for a still, many evenly-spaced times for a GIF).
+- Report the returned image_path / gif_path to the user when done.
+
 Sweep domain reminders:
 - Seismic geometry convention: by default sources and receivers sit at the
   model surface (small z), not the centre. The build_forward_spec defaults

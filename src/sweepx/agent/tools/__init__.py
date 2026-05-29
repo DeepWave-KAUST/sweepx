@@ -109,5 +109,6 @@ import sweep_agent.tools.build_wavefield  # noqa: E402,F401
 import sweep_agent.tools.build_spec       # noqa: E402,F401
 import sweep_agent.tools.execute          # noqa: E402,F401
 import sweep_agent.tools.status           # noqa: E402,F401
+import sweep_agent.tools.visualize        # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]
