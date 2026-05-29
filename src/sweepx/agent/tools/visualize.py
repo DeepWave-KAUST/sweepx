@@ -1,12 +1,9 @@
-"""Visualization tools — let the LLM turn a finished task_dir into figures / GIFs.
+"""Visualization tools — thin LLM-callable wrappers over ``sweep_viz.wavefield``.
 
-Without these, the LLM can only build+run a wavefield (producing snapshots.npy);
-it cannot *show* anything. These tools read a task's snapshots and render PNGs /
-GIFs, so a natural-language request like "run a VTI wavefield and plot it" can be
-completed end-to-end by the model.
-
-All tools take `abcn` (the PML thickness used in the run) so they can crop the
-absorbing border — pass the same value you gave the builder.
+The actual plotting lives in sweep-viz (plot_snapshot / animate_snapshots /
+compare_snapshots). These tools only handle the agent-side concerns — locating a
+task's snapshots.npy and cropping the PML — then delegate the drawing. Pass
+``abcn`` (the PML thickness used in the run) so the absorbing border is cropped.
 """
 
 from __future__ import annotations
@@ -41,7 +38,7 @@ def resolve_task_dir(task_dir: str) -> Path:
     if cands:
         latest = max(cands, key=lambda f: f.stat().st_mtime)
         return latest.parent.parent
-    return p  # unchanged; caller raises a clear error
+    return p
 
 
 def _load_snaps(task_dir: str, abcn: int, free_surface: bool, shot: int, field: int,
@@ -50,7 +47,7 @@ def _load_snaps(task_dir: str, abcn: int, free_surface: bool, shot: int, field: 
 
     allow_fallback=True (single-task plot/gif) tolerates a mis-passed task_dir by
     locating the most recent run. Set False for compare — each panel must be a
-    distinct, exact task, so a wrong / forward task_dir must error rather than
+    distinct exact task, so a wrong / forward task_dir must error rather than
     silently resolve to another run (which would make all panels identical)."""
     rd = resolve_task_dir(task_dir) if allow_fallback else Path(task_dir)
     path = rd / "output" / "snapshots.npy"
@@ -66,9 +63,13 @@ def _load_snaps(task_dir: str, abcn: int, free_surface: bool, shot: int, field: 
     return arr[:, top:nzp - abcn, abcn:nxp - abcn]
 
 
+# ---------------------------------------------------------------------------
+# plot_wavefield
+# ---------------------------------------------------------------------------
+
 class PlotWavefieldParams(BaseModel):
     task_dir: str = Field(..., description="Task directory from run_task (a wavefield task).")
-    abcn: int = Field(..., description="PML thickness used in the run (to crop the absorbing border) — the same value passed to the builder.")
+    abcn: int = Field(..., description="PML thickness used in the run — the same value passed to the builder.")
     free_surface: bool = Field(False, description="Whether the run used a free surface (top row not cropped).")
     snapshot_index: int = Field(-1, description="Which snapshot to plot (index into snapshot_times; -1 = last).")
     shot: int = Field(0, description="Which shot's wavefield (default 0).")
@@ -80,35 +81,35 @@ class PlotWavefieldParams(BaseModel):
 @register(
     name="plot_wavefield",
     description=(
-        "Render one wavefield snapshot from a finished wavefield task to a PNG (seismic colormap, "
-        "signed 2-98 percentile clip). Crops the PML border using `abcn`. Returns the saved image "
-        "path so you can report it to the user. Use after run_task on a wavefield spec."
+        "Render one wavefield snapshot from a finished wavefield task to a PNG (via sweep-viz). "
+        "Crops the PML border using `abcn`. Returns the saved image path. Use after run_task on a "
+        "wavefield spec."
     ),
     params_model=PlotWavefieldParams,
 )
 def plot_wavefield(args: PlotWavefieldParams) -> dict[str, Any]:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     try:
         wf = _load_snaps(args.task_dir, args.abcn, args.free_surface, args.shot, args.field)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_viz import wavefield as viz
+
     frame = wf[args.snapshot_index]
-    vmin, vmax = np.percentile(frame, [2, 98])
     rd = resolve_task_dir(args.task_dir)
     out = rd / "output" / args.out_name
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
-    im = ax.imshow(frame, cmap="seismic", vmin=float(vmin), vmax=float(vmax), aspect="equal")
-    ax.set_title(args.title or "wavefield snapshot")
-    ax.set_xlabel("x (cells)")
-    ax.set_ylabel("z (cells)")
-    fig.colorbar(im, ax=ax, shrink=0.8)
+    viz.plot_snapshot(frame, ax=ax, title=args.title or "wavefield snapshot")
     fig.savefig(out, dpi=130)
     plt.close(fig)
-    return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(frame.shape), "clip": [float(vmin), float(vmax)]}
+    return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(frame.shape)}
 
+
+# ---------------------------------------------------------------------------
+# compare_wavefields
+# ---------------------------------------------------------------------------
 
 class CompareWavefieldsParams(BaseModel):
     task_dirs: list[str] = Field(..., min_length=1, description="Wavefield task directories to compare side by side.")
@@ -125,16 +126,13 @@ class CompareWavefieldsParams(BaseModel):
 @register(
     name="compare_wavefields",
     description=(
-        "Plot one snapshot from several wavefield tasks side by side (shared color scale) — e.g. to "
-        "compare Acoustic vs VTI vs TTI wavefronts. Returns the saved comparison image path."
+        "Plot one snapshot from several wavefield tasks side by side with a shared color scale (via "
+        "sweep-viz) — e.g. Acoustic vs VTI vs TTI wavefronts. task_dirs must be distinct, real "
+        "wavefield runs (no path fallback — a wrong/forward dir errors). Returns the image path."
     ),
     params_model=CompareWavefieldsParams,
 )
 def compare_wavefields(args: CompareWavefieldsParams) -> dict[str, Any]:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     if len(args.labels) != len(args.task_dirs):
         return {"error": f"labels ({len(args.labels)}) must match task_dirs ({len(args.task_dirs)})."}
     if len(set(args.task_dirs)) != len(args.task_dirs):
@@ -146,25 +144,18 @@ def compare_wavefields(args: CompareWavefieldsParams) -> dict[str, Any]:
         except Exception as exc:
             return {"error": f"{td}: {type(exc).__name__}: {exc}"}
         frames.append(wf[args.snapshot_index])
-    allv = np.concatenate([f.ravel() for f in frames])
-    vmin, vmax = np.percentile(allv, [2, 98])
-    n = len(frames)
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5), constrained_layout=True)
-    if n == 1:
-        axes = [axes]
-    for ax, frame, label in zip(axes, frames, args.labels):
-        ax.imshow(frame, cmap="seismic", vmin=float(vmin), vmax=float(vmax), aspect="equal")
-        ax.set_title(label)
-        ax.set_xlabel("x (cells)")
-        ax.set_ylabel("z (cells)")
-    if args.suptitle:
-        fig.suptitle(args.suptitle)
-    out = Path(args.out_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=130)
-    plt.close(fig)
-    return {"image_path": str(out), "n_panels": n, "clip": [float(vmin), float(vmax)]}
+    from sweep_viz import wavefield as viz
 
+    try:
+        viz.compare_snapshots(frames, list(args.labels), args.out_path, suptitle=args.suptitle)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {"image_path": args.out_path, "n_panels": len(frames)}
+
+
+# ---------------------------------------------------------------------------
+# make_wavefield_gif
+# ---------------------------------------------------------------------------
 
 class MakeGifParams(BaseModel):
     task_dir: str = Field(..., description="Wavefield task directory from run_task.")
@@ -172,56 +163,33 @@ class MakeGifParams(BaseModel):
     free_surface: bool = Field(False, description="Whether the run used a free surface.")
     shot: int = Field(0)
     field: int = Field(0)
-    out_name: str = Field("wavefield.gif", description="Output GIF filename, saved under <task_dir>/output/.")
+    out_name: str = Field("wavefield.gif", description="Output GIF (or .mp4) filename, saved under <task_dir>/output/.")
     fps: int = Field(8, ge=1, le=30, description="Frames per second.")
-    topography_path: str | None = Field(None, description="Optional path to the topo .npy; overlays the surface line on each frame.")
+    topography_path: str | None = Field(None, description="Reserved (topography overlay not yet supported by sweep-viz).")
 
 
 @register(
     name="make_wavefield_gif",
     description=(
-        "Animate all snapshots of a wavefield task into a GIF (seismic colormap, shared color "
-        "scale). Optionally overlays a topography line. Returns the saved GIF path. Use after a "
-        "wavefield run with several snapshot_times — e.g. to show propagation under topography."
+        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweep-viz animate_snapshots). "
+        "Returns the saved path. Use after a wavefield run with several snapshot_times — e.g. to show "
+        "propagation under topography."
     ),
     params_model=MakeGifParams,
 )
 def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.animation import FuncAnimation, PillowWriter
-
     try:
         wf = _load_snaps(args.task_dir, args.abcn, args.free_surface, args.shot, args.field)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if wf.shape[0] < 2:
         return {"error": "need >= 2 snapshots for a GIF; re-run with more snapshot_times."}
-    vmin, vmax = np.percentile(wf, [1, 99])
-    topo = None
-    if args.topography_path:
-        try:
-            topo = np.load(args.topography_path)
-        except Exception:
-            topo = None
+    from sweep_viz import wavefield as viz
 
     rd = resolve_task_dir(args.task_dir)
     out = rd / "output" / args.out_name
-    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-    im = ax.imshow(wf[0], cmap="seismic", vmin=float(vmin), vmax=float(vmax), aspect="auto")
-    fig.colorbar(im, ax=ax, shrink=0.8, label="amplitude")
-    if topo is not None and not args.free_surface:
-        ax.plot(np.arange(len(topo)), topo - args.abcn, "k-", lw=1.0)
-    ax.set_xlabel("x (cells)")
-    ax.set_ylabel("z (cells)")
-
-    def update(i):
-        im.set_data(wf[i])
-        ax.set_title(f"wavefield snapshot {i + 1}/{wf.shape[0]}")
-        return [im]
-
-    anim = FuncAnimation(fig, update, frames=wf.shape[0], interval=1000 // args.fps, blit=False)
-    anim.save(out, writer=PillowWriter(fps=args.fps))
-    plt.close(fig)
+    try:
+        viz.animate_snapshots(list(wf), str(out), fps=args.fps)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
     return {"gif_path": str(out), "task_dir_used": str(rd), "n_frames": int(wf.shape[0])}

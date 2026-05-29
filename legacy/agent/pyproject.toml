@@ -27,6 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "sweep-tasks",
+    "sweep-viz",
     "pydantic>=2.0",
     "httpx>=0.25",
     "PyYAML>=6.0",
