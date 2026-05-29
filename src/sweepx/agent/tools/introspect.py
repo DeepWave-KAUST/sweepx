@@ -84,6 +84,20 @@ def equation_default_pml(name: str) -> str | None:
     return v if isinstance(v, str) else None
 
 
+def equation_method(name: str) -> str:
+    """First docstring line of an equation — its numerical method / reference.
+
+    Lets the LLM distinguish anisotropic variants, e.g. AcousticVTIDuveneck
+    ('First-order ... standard staggered grid') vs AcousticVTIAlkhalifah
+    ('... Alkhalifah eta') vs AcousticVTI ('... Liang 2022')."""
+    import sweep.equations as eq_mod
+
+    cls = eq_mod._equation_classes().get(name)
+    if cls is None:
+        return ""
+    return (cls.__doc__ or "").strip().split("\n")[0][:100]
+
+
 class ListEquationsParams(BaseModel):
     filter: str | None = Field(
         None,
@@ -115,15 +129,21 @@ def list_equations(args: ListEquationsParams) -> dict[str, Any]:
     equations: dict[str, Any] = {}
     for k, models in eqs.items():
         sf, rf = equation_default_fields(k)
-        equations[k] = {"models": models, "default_source": sf, "default_receiver": rf}
+        equations[k] = {
+            "models": models,
+            "method": equation_method(k),
+            "default_source": sf,
+            "default_receiver": rf,
+        }
     return {
         "count": len(equations),
         "equations": equations,
         "note": (
-            "`models` is the ordered list of fields the equation needs (pass vp via the builder, "
-            "the rest via extra_models). `default_source`/`default_receiver` are the field types the "
-            "builder auto-selects for that equation; build_forward_spec/build_fwi_spec set them "
-            "automatically, so you normally don't specify source_type/receiver_type yourself."
+            "`method` is the equation's numerical formulation / reference — use it to choose among "
+            "anisotropic variants (e.g. VTI: Duveneck 1st-order vs Alkhalifah eta vs Liang 2022). "
+            "`models` is the ordered field list (pass vp via the builder, the rest via extra_models). "
+            "`default_source`/`default_receiver` are auto-selected by build_forward_spec/build_fwi_spec, "
+            "so you normally don't set source_type/receiver_type yourself."
         ),
     }
 
