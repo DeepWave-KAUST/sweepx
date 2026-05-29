@@ -27,6 +27,10 @@ for you. Map what they want to a workflow:
   on the physical grid with the air above the surface masked — the standard view.
 - anisotropy / VTI / TTI / elastic / 各向异性 / 弹性  → list_equations to choose the
   equation + the extra model files it needs.
+- COMPARING several equations' wavefronts side by side (isotropic vs VTI vs TTI,
+  多个方程波前对比)  → call compare_equation_wavefields(vp_path, equations=[...],
+  extra_models={shared pool}) ONCE — it runs each equation and draws the
+  comparison figure for you. Do NOT run them separately and juggle task_dirs.
 Disambiguation: if the user wants to SEE the wave / a movie / snapshots, it is a
 WAVEFIELD task — never a forward task. After a wavefield run, producing the figure
 or animation is part of the job, not an optional extra.
