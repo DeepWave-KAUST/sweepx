@@ -17,22 +17,23 @@ from pydantic import BaseModel, Field
 from sweep_agent.tools import register
 
 
-def resolve_task_dir(task_dir: str) -> Path:
-    """Return a directory that actually contains output/snapshots.npy.
+def resolve_task_dir(task_dir: str, marker: str = "snapshots.npy") -> Path:
+    """Return a directory that actually contains output/<marker>.
 
     Small LLMs frequently mis-pass the task_dir (hallucinated timestamps, wrong
-    prefix). If the given path has no snapshots, fall back to the most recently
-    modified snapshots.npy under likely roots — almost always the run the model
-    just executed."""
+    prefix). If the given path lacks the marker file, fall back to the most
+    recently modified output/<marker> under likely roots — almost always the run
+    the model just executed. ``marker`` is snapshots.npy for wavefield tools,
+    record.npy for shot-gather plotting."""
     p = Path(task_dir)
-    if (p / "output" / "snapshots.npy").is_file():
+    if (p / "output" / marker).is_file():
         return p
     roots = [p.parent, Path("sweep_runs"), Path.cwd() / "sweep_runs", p]
     cands: list[Path] = []
     for root in roots:
         try:
             if root.is_dir():
-                cands += list(root.glob("*/output/snapshots.npy"))
+                cands += list(root.glob(f"*/output/{marker}"))
         except OSError:
             pass
     if cands:
@@ -223,3 +224,60 @@ def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     return {"gif_path": str(out), "task_dir_used": str(rd), "n_frames": int(wf.shape[0])}
+
+
+# ---------------------------------------------------------------------------
+# plot_shot_gather
+# ---------------------------------------------------------------------------
+
+class PlotShotGatherParams(BaseModel):
+    task_dir: str = Field(..., description="Forward / FWI task directory from run_task — must contain output/record.npy.")
+    shot: int = Field(0, description="Which shot to display (default 0).")
+    channel: int = Field(0, description="Which channel/component (default 0).")
+    dt: float | None = Field(None, description="Time step (s) for the time axis — pass the dt used in the run.")
+    dh: float | None = Field(None, description="Receiver spacing (m) for the offset axis.")
+    wiggle: bool = Field(False, description="Wiggle display instead of image (good for < ~50 traces).")
+    out_name: str = Field("shot_gather.png", description="Output PNG filename under <task_dir>/output/.")
+    title: str | None = Field(None, description="Plot title.")
+
+
+@register(
+    name="plot_shot_gather",
+    description=(
+        "Plot a shot gather (synthetic seismic record) from a forward/FWI task's record.npy — image "
+        "display by default, or wiggle. Drawn via sweep-viz. Use after a forward run when the user "
+        "wants to SEE the record / shot gather / 炮记录. Returns the saved image path."
+    ),
+    params_model=PlotShotGatherParams,
+)
+def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
+    rd = resolve_task_dir(args.task_dir, marker="record.npy")
+    path = rd / "output" / "record.npy"
+    if not path.is_file():
+        return {"error": f"no record.npy under {args.task_dir}/output (run a forward task first)"}
+    rec = np.load(path)
+    if rec.ndim == 4:        # (nshots, nt, nrec, nchannel)
+        arr = rec[args.shot, :, :, args.channel]
+    elif rec.ndim == 3:      # (nshots, nt, nrec)
+        arr = rec[args.shot]
+    elif rec.ndim == 2:      # (nt, nrec)
+        arr = rec
+    else:
+        return {"error": f"unexpected record shape {rec.shape}"}
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_viz import seismic
+
+    out = rd / "output" / args.out_name
+    fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    if args.wiggle:
+        seismic.plot_wiggle(arr, dt=args.dt, ax=ax)
+        if args.title:
+            ax.set_title(args.title)
+    else:
+        seismic.plot_shot(arr, dt=args.dt, dh=args.dh, ax=ax, title=args.title or "shot gather")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(arr.shape)}

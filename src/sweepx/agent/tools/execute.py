@@ -64,7 +64,21 @@ def run_task(args: RunTaskParams) -> dict[str, Any]:
 
     yaml_path = Path(args.yaml_path).expanduser()
     if not yaml_path.is_file():
-        return {"error": f"YAML spec not found: {yaml_path}"}
+        # LLMs often hallucinate the yaml_path (fake timestamps, wrong prefix).
+        # Fall back to the most recent .yaml under likely roots — usually the one
+        # a build_*_spec just wrote.
+        roots = [yaml_path.parent, yaml_path.parent.parent, Path("sweep_runs"), Path.cwd() / "sweep_runs"]
+        cands: list[Path] = []
+        for root in roots:
+            try:
+                if root.is_dir():
+                    cands += list(root.glob("*.yaml"))
+            except OSError:
+                pass
+        if cands:
+            yaml_path = max(cands, key=lambda f: f.stat().st_mtime)
+    if not yaml_path.is_file():
+        return {"error": f"YAML spec not found: {args.yaml_path}"}
 
     try:
         spec = load_task(yaml_path)
