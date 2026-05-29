@@ -32,6 +32,8 @@ for you. Map what they want to a workflow:
   多个方程波前对比)  → call compare_equation_wavefields(vp_path, equations=[...],
   extra_models={shared pool}) ONCE — it runs each equation and draws the
   comparison figure for you. Do NOT run them separately and juggle task_dirs.
+  It auto-places the source at the MODEL CENTRE (the only view that shows
+  anisotropic wavefront shape — surface acquisition just clips to a corner arc).
 Disambiguation: if the user wants to SEE the wave / a movie / snapshots, it is a
 WAVEFIELD task — never a forward task. After a wavefield run, producing the figure
 or animation is part of the job, not an optional extra.

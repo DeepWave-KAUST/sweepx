@@ -45,6 +45,17 @@ class CompareEquationWavefieldsParams(BaseModel):
     free_surface: bool = Field(False)
     device: str = Field("cpu")
     output_dir: str = Field("./sweep_runs")
+    source_at_center: bool = Field(
+        True,
+        description=(
+            "Place a SINGLE source at the model centre — the canonical view for "
+            "wavefront-shape comparison (Duveneck Fig.1/2 style: full circular wavefront "
+            "for isotropic, elliptical for VTI, tilted for TTI). When True (default) this "
+            "overrides source_step/source_depth and uses an explicit one-shot geometry. "
+            "Set False only if you specifically want surface acquisition (poor view of "
+            "anisotropy)."
+        ),
+    )
 
 
 @register(
@@ -69,6 +80,35 @@ def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[s
 
     pool = {"vp": args.vp_path, **(args.extra_models or {})}
     snap_t = args.nt - 1
+
+    # Build the centred-source geometry override ONCE (same for every equation).
+    # ExplicitGeometry uses (x, z) for 2-D and (x, y, z) for 3-D — same convention
+    # as build_forward._resolve_geometry. A single source at the model centre with
+    # a sparse top-row receiver line keeps the figure focused on wavefront SHAPE.
+    extra_override: dict[str, Any] | None = None
+    if args.source_at_center:
+        import numpy as _np
+        try:
+            vp_shape = tuple(_np.load(args.vp_path, mmap_mode="r").shape)
+        except Exception as exc:
+            return {"error": f"could not read shape of vp_path '{args.vp_path}': {exc}"}
+        rstep = max(args.receiver_step, 1)
+        if len(vp_shape) == 2:
+            nz, nx = vp_shape
+            src = [nx // 2, nz // 2]
+            recs = [[x, max(args.receiver_depth, 0)] for x in range(0, nx, rstep)] or [[nx // 2, 0]]
+        elif len(vp_shape) == 3:
+            nz, ny, nx = vp_shape
+            src = [nx // 2, ny // 2, nz // 2]
+            recs = [
+                [x, y, max(args.receiver_depth, 0)]
+                for y in range(0, ny, rstep)
+                for x in range(0, nx, rstep)
+            ] or [[nx // 2, ny // 2, 0]]
+        else:
+            return {"error": f"unsupported model ndim={len(vp_shape)}; expected 2-D or 3-D."}
+        extra_override = {"geometry": {"kind": "explicit", "sources": [src], "receivers": recs}}
+
     task_dirs: list[str] = []
     for eq in args.equations:
         required = eqs_models.get(eq)
@@ -78,7 +118,7 @@ def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[s
         if missing:
             return {"error": f"equation '{eq}' needs models {required}; missing {missing} — add them to extra_models."}
         em = {m: pool[m] for m in required if m != "vp"}
-        b = registry.get("build_wavefield_spec").invoke({
+        build_args: dict[str, Any] = {
             "vp_path": args.vp_path, "equation": eq, "extra_models": em or None,
             "dh": args.dh, "dt": args.dt, "nt": args.nt, "fm": args.fm,
             "snapshot_times": [snap_t], "abcn": args.abcn, "spatial_order": args.spatial_order,
@@ -87,7 +127,10 @@ def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[s
             "free_surface": args.free_surface, "device": args.device,
             "backend_impl": "eager", "use_compile": False,
             "output_dir": args.output_dir, "task_id": f"cmpeq_{eq}",
-        })
+        }
+        if extra_override is not None:
+            build_args["extra"] = extra_override
+        b = registry.get("build_wavefield_spec").invoke(build_args)
         if not b.ok or "error" in b.value:
             return {"error": f"build {eq}: {b.value.get('error') if b.ok else b.error}"}
         r = registry.get("run_task").invoke({"yaml_path": b.value["yaml_path"], "timeout_s": 400})
