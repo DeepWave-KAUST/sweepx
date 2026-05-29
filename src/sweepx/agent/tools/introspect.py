@@ -43,6 +43,47 @@ def all_equations() -> dict[str, list[str]]:
     return {name: equation_model_names(classes[name]) for name in sorted(classes)}
 
 
+def equation_default_fields(name: str) -> tuple[list[str], list[str]]:
+    """(default_source_fields, default_receiver_fields) for an equation, statically.
+
+    Reads the property getters on an uninitialised instance — works because these
+    getters return fixed field lists (Acoustic→['h1'], Elastic→['sxx','szz'] /
+    ['vx','vz'], AcousticVTIDefault3D→['sH','sV'] / ['vz'], ...). Returns ([], [])
+    when unavailable.
+    """
+    import sweep.equations as eq_mod
+
+    cls = eq_mod._equation_classes().get(name)
+    if cls is None:
+        return [], []
+
+    def _get(attr: str) -> list[str]:
+        prop = getattr(cls, attr, None)
+        if isinstance(prop, property):
+            try:
+                return list(prop.fget(cls.__new__(cls)))
+            except Exception:
+                return []
+        if isinstance(prop, (list, tuple)):
+            return [str(x) for x in prop]
+        return []
+
+    return _get("default_source_fields"), _get("default_receiver_fields")
+
+
+def equation_default_pml(name: str) -> str | None:
+    """The equation's `default_pml_type` class attribute (Acoustic→'cpmlr',
+    Elastic→'cpmls', ...). 'cpmls' yields 8 PML profiles (staggered grid) which
+    Elastic's step needs; the schema's plain default 'cpmlr' (6) would crash it."""
+    import sweep.equations as eq_mod
+
+    cls = eq_mod._equation_classes().get(name)
+    if cls is None:
+        return None
+    v = getattr(cls, "default_pml_type", None)
+    return v if isinstance(v, str) else None
+
+
 class ListEquationsParams(BaseModel):
     filter: str | None = Field(
         None,
@@ -71,12 +112,18 @@ def list_equations(args: ListEquationsParams) -> dict[str, Any]:
         eqs = {k: v for k, v in eqs.items() if f in k.lower()}
         if not eqs:
             return {"count": 0, "equations": {}, "note": f"no equation name matches '{args.filter}'."}
+    equations: dict[str, Any] = {}
+    for k, models in eqs.items():
+        sf, rf = equation_default_fields(k)
+        equations[k] = {"models": models, "default_source": sf, "default_receiver": rf}
     return {
-        "count": len(eqs),
-        "equations": {k: {"models": v} for k, v in eqs.items()},
+        "count": len(equations),
+        "equations": equations,
         "note": (
-            "`models` is the ordered list of fields the equation needs. Pass vp via "
-            "build_forward_spec(vp_path=...) and the rest via extra_models={name: path}."
+            "`models` is the ordered list of fields the equation needs (pass vp via the builder, "
+            "the rest via extra_models). `default_source`/`default_receiver` are the field types the "
+            "builder auto-selects for that equation; build_forward_spec/build_fwi_spec set them "
+            "automatically, so you normally don't specify source_type/receiver_type yourself."
         ),
     }
 

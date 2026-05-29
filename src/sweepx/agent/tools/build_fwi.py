@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from sweep_agent.tools import register
+from sweep_agent.tools.build_forward import _physics_source_fields, _resolve_geometry
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -81,6 +82,9 @@ class BuildFwiParams(BaseModel):
     spatial_order: int = Field(8)
     abcn: int = Field(20, ge=0)
     free_surface: bool = Field(False)
+    source_type: list[str] | None = Field(None, description="Source field components; None = equation defaults (Elastic→sxx/szz, etc.).")
+    receiver_type: list[str] | None = Field(None, description="Receiver field components; None = equation defaults.")
+    pml_type: str | None = Field(None, description="PML kind; None = equation default (acoustic→cpmlr, Elastic/VTI-3D→cpmls).")
     backend_impl: Literal["eager", "c"] = Field("eager")
     use_compile: bool = Field(False, description="torch.compile the eager step (needs sweep.torch + inductor). Default off.")
 
@@ -179,6 +183,16 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
     if err is not None:
         return err
 
+    import numpy as _np
+    try:
+        init_shape = tuple(_np.load(args.init_model_path, mmap_mode="r").shape)
+    except Exception as exc:
+        return {"error": f"could not read shape of init_model_path '{args.init_model_path}': {exc}"}
+    try:
+        geometry = _resolve_geometry(args, init_shape)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
     delay = args.wavelet_delay if args.wavelet_delay is not None else 1.0 / args.fm
     opt = {
         "adam": {"kind": "adam", "lr": args.lr},
@@ -194,16 +208,13 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
         "grid": {"dh": args.dh},
         "time": {"dt": args.dt, "nt": args.nt},
         "wavelet": {"kind": "ricker", "fm": args.fm, "delay": delay},
-        "geometry": {
-            "kind": "line",
-            "sources": {"step": args.source_step, "depth": args.source_depth},
-            "receivers": {"step": args.receiver_step, "depth": args.receiver_depth},
-        },
+        "geometry": geometry,
         "physics": {
             "equation": args.equation,
             "spatial_order": args.spatial_order,
             "abcn": args.abcn,
             "free_surface": args.free_surface,
+            **_physics_source_fields(args.equation, args.source_type, args.receiver_type, args.pml_type),
         },
         "backend": {"impl": args.backend_impl},
         "obs": obs,

@@ -68,6 +68,22 @@ class BuildForwardParams(BaseModel):
     spatial_order: int = Field(8, description="Finite-difference spatial order (2/4/6/8). Higher = more accurate, more memory.")
     abcn: int = Field(20, ge=0, description="PML thickness in grid cells. Typical 20-40.")
     free_surface: bool = Field(False, description="Free-surface BC at z=0 (sea surface). False = no free surface.")
+    source_type: list[str] | None = Field(
+        None,
+        description=(
+            "Source field components, e.g. ['vz'] or ['sxx','szz']. Leave None to auto-pick the "
+            "equation's defaults (Acoustic→['h1'], Elastic→['sxx','szz'], AcousticVTIDefault3D→"
+            "['sH','sV'], ...). Only set this to override; see list_equations for each equation's defaults."
+        ),
+    )
+    receiver_type: list[str] | None = Field(
+        None,
+        description="Receiver field components. None = equation defaults (e.g. Elastic→['vx','vz']).",
+    )
+    pml_type: str | None = Field(
+        None,
+        description="PML kind. None = the equation's own default (acoustic→'cpmlr', Elastic/VTI-3D→'cpmls'). Override only if you know the equation supports it.",
+    )
     backend_impl: Literal["eager", "c"] = Field("eager", description="`eager` = pure-torch (slow, universal); `c` = sweep CUDA kernels (fast, requires CUDA build).")
     use_compile: bool = Field(
         False,
@@ -173,7 +189,65 @@ def _resolve_models(p: BuildForwardParams) -> tuple[list[dict[str, Any]], dict[s
     return models, None
 
 
-def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]]) -> dict[str, Any]:
+def _physics_source_fields(equation: str, source_type: Any, receiver_type: Any, pml_type: Any = None) -> dict[str, Any]:
+    """Resolve source_type / receiver_type / pml_type: user value if given, else
+    the equation's own defaults (Elastic→sxx/szz + cpmls, VTI3D→sH/sV + cpmls,
+    acoustic→h1 + cpmlr). Returns a dict to merge into the physics block. These
+    per-equation defaults are what makes elastic / 3-D anisotropic equations run
+    instead of crashing on the schema's plain acoustic defaults."""
+    src_t, rec_t = source_type, receiver_type
+    if src_t is None or rec_t is None:
+        try:
+            from sweep_agent.tools.introspect import equation_default_fields
+            dsf, drf = equation_default_fields(equation)
+            if src_t is None and dsf:
+                src_t = dsf
+            if rec_t is None and drf:
+                rec_t = drf
+        except Exception:
+            pass
+    pml = pml_type
+    if pml is None:
+        try:
+            from sweep_agent.tools.introspect import equation_default_pml
+            pml = equation_default_pml(equation)
+        except Exception:
+            pass
+    out: dict[str, Any] = {}
+    if src_t is not None:
+        out["source_type"] = src_t
+    if rec_t is not None:
+        out["receiver_type"] = rec_t
+    if pml is not None:
+        out["pml_type"] = pml
+    return out
+
+
+def _resolve_geometry(p: "BuildForwardParams", vp_shape: tuple[int, ...]) -> dict[str, Any]:
+    """2-D grid → line geometry. 3-D grid → an explicit grid of sources/receivers
+    laid out in the (x, y) plane at the given depths. Coordinate order is
+    (x, y, z), extending the 2-D line convention (x, z)."""
+    ndim = len(vp_shape)
+    if ndim == 2:
+        return {
+            "kind": "line",
+            "sources": {"step": p.source_step, "depth": p.source_depth},
+            "receivers": {"step": p.receiver_step, "depth": p.receiver_depth},
+        }
+    if ndim == 3:
+        nz, ny, nx = vp_shape
+        sstep, rstep = max(p.source_step, 1), max(p.receiver_step, 1)
+        sx = list(range(sstep // 2 if sstep > 1 else nx // 2, nx, sstep))
+        sy = list(range(sstep // 2 if sstep > 1 else ny // 2, ny, sstep))
+        sources = [[x, y, p.source_depth] for y in sy for x in sx] or [[nx // 2, ny // 2, p.source_depth]]
+        rx = list(range(0, nx, rstep))
+        ry = list(range(0, ny, rstep))
+        receivers = [[x, y, p.receiver_depth] for y in ry for x in rx]
+        return {"kind": "explicit", "sources": sources, "receivers": receivers}
+    raise ValueError(f"unsupported model ndim={ndim}; expected 2-D (nz,nx) or 3-D (nz,ny,nx).")
+
+
+def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], geometry: dict[str, Any]) -> dict[str, Any]:
     delay = p.wavelet_delay if p.wavelet_delay is not None else 1.0 / p.fm
     spec: dict[str, Any] = {
         "task_type": "forward",
@@ -188,16 +262,13 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]]) ->
             "delay": delay,
             "scale": p.wavelet_scale,
         },
-        "geometry": {
-            "kind": "line",
-            "sources":   {"step": p.source_step,   "depth": p.source_depth},
-            "receivers": {"step": p.receiver_step, "depth": p.receiver_depth},
-        },
+        "geometry": geometry,
         "physics": {
             "equation": p.equation,
             "spatial_order": p.spatial_order,
             "abcn": p.abcn,
             "free_surface": p.free_surface,
+            **_physics_source_fields(p.equation, p.source_type, p.receiver_type, p.pml_type),
         },
         "backend": {"impl": p.backend_impl},
         "models": models,
@@ -240,7 +311,17 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     if err is not None:
         return err
 
-    spec_dict = _construct_spec_dict(args, models)
+    import numpy as _np
+    try:
+        vp_shape = tuple(_np.load(args.vp_path, mmap_mode="r").shape)
+    except Exception as exc:
+        return {"error": f"could not read shape of vp_path '{args.vp_path}': {exc}"}
+    try:
+        geometry = _resolve_geometry(args, vp_shape)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    spec_dict = _construct_spec_dict(args, models, geometry)
     try:
         spec = ForwardSpec.model_validate(spec_dict)
     except Exception as exc:

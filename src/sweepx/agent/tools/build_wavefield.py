@@ -17,6 +17,8 @@ from sweep_agent.tools import register
 from sweep_agent.tools.build_forward import (
     BuildForwardParams,
     _deep_merge,
+    _physics_source_fields,
+    _resolve_geometry,
     _resolve_models,
     _slug,
 )
@@ -31,7 +33,7 @@ class BuildWavefieldParams(BuildForwardParams):
     plot: bool = Field(True, description="Also render PNG images of each snapshot (set False to only save .npy snapshots).")
 
 
-def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, Any]]) -> dict[str, Any]:
+def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, Any]], geometry: dict[str, Any]) -> dict[str, Any]:
     delay = p.wavelet_delay if p.wavelet_delay is not None else 1.0 / p.fm
     spec: dict[str, Any] = {
         "task_type": "wavefield",
@@ -41,16 +43,13 @@ def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, An
         "grid": {"dh": p.dh},
         "time": {"dt": p.dt, "nt": p.nt},
         "wavelet": {"kind": "ricker", "fm": p.fm, "delay": delay, "scale": p.wavelet_scale},
-        "geometry": {
-            "kind": "line",
-            "sources": {"step": p.source_step, "depth": p.source_depth},
-            "receivers": {"step": p.receiver_step, "depth": p.receiver_depth},
-        },
+        "geometry": geometry,
         "physics": {
             "equation": p.equation,
             "spatial_order": p.spatial_order,
             "abcn": p.abcn,
             "free_surface": p.free_surface,
+            **_physics_source_fields(p.equation, p.source_type, p.receiver_type, p.pml_type),
         },
         "backend": {"impl": p.backend_impl},
         "models": models,
@@ -92,7 +91,17 @@ def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
     if err is not None:
         return err
 
-    spec_dict = _construct_wavefield_dict(args, models)
+    import numpy as _np
+    try:
+        vp_shape = tuple(_np.load(args.vp_path, mmap_mode="r").shape)
+    except Exception as exc:
+        return {"error": f"could not read shape of vp_path '{args.vp_path}': {exc}"}
+    try:
+        geometry = _resolve_geometry(args, vp_shape)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    spec_dict = _construct_wavefield_dict(args, models, geometry)
     try:
         spec = WavefieldSpec.model_validate(spec_dict)
     except Exception as exc:
