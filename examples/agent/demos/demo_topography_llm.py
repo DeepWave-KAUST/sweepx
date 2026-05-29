@@ -38,12 +38,12 @@ def main() -> None:
     np.save(vp_path, vp)
     np.save(topo_path, topo)
 
+    # Pure natural language — no tool names, no equation names, no parameters.
+    # The system prompt's intent routing makes the LLM pick wavefield +
+    # AcousticCurvilinear + topography + make_wavefield_gif on its own.
     drive(
-        f"我想看地震波在起伏地表下的传播。速度模型 {vp_path},地形 {topo_path}。"
-        f"请用曲线网格方程 AcousticCurvilinear 做波场模拟:dh=10m, dt=0.001s, nt=600, 9Hz Ricker, "
-        f"abcn=30, free_surface, 在时间步 0,60,120,180,240,300,360,420,480,540 保存快照, CPU eager, "
-        f"输出目录用 {out}。跑完用 make_wavefield_gif 把波场做成传播 gif(abcn=30, free_surface=true, "
-        f"叠加 {topo_path} 地形)。最后告诉我 gif 路径。"
+        f"我有一个起伏地表的速度模型 {vp_path}(网格间距 10 米),地形文件 {topo_path}。"
+        f"帮我看看地震波在这个起伏地表下面是怎么传播的,做成一个动画。输出放到 {out}。"
     )
 
 

@@ -197,8 +197,11 @@ class MakeGifParams(BaseModel):
     params_model=MakeGifParams,
 )
 def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
+    # Topography/curvilinear: the un-padded top row IS the free surface, so never
+    # crop it — regardless of the free_surface flag the caller passed.
+    fs = True if args.topography_path else args.free_surface
     try:
-        wf = _load_snaps(args.task_dir, args.abcn, args.free_surface, args.shot, args.field)
+        wf = _load_snaps(args.task_dir, args.abcn, fs, args.shot, args.field)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if wf.shape[0] < 2:
