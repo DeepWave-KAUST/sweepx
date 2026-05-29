@@ -35,16 +35,14 @@ def main() -> None:
     np.save(f"{d}/theta.npy", np.full((nz, nx), np.float32(np.deg2rad(30.0))))
     out = os.environ.get("DEMO_OUT", "/tmp/sweep_aniso_llm")
 
+    # Pure natural language — no tool names, no equation names, no parameters.
+    # The intent router should map "各向异性/VTI/TTI" to list_equations + wavefield
+    # runs and "并排对比" to compare_wavefields, all on its own.
     drive(
-        f"对比各向同性和各向异性介质的波前。均匀速度模型 {d}/vp_uni.npy。"
-        f"务必用 build_wavefield_spec(波场快照,有 snapshot_times),不要用 build_forward_spec。"
-        f"请分别用三个方程各做一次波场模拟,都用相同参数(dh=10m, dt=0.001s, nt=260, 12Hz Ricker, "
-        f"abcn=20, CPU eager, 在时间步 259 保存一个快照, 输出目录 {out}):"
-        f"(1) Acoustic; (2) AcousticVTI,epsilon={d}/eps.npy delta={d}/delta.npy; "
-        f"(3) AcousticTTI,epsilon={d}/eps.npy delta={d}/delta.npy theta={d}/theta.npy。"
-        f"三个都跑完后,记下每个 run_task 返回的 task_dir,用 compare_wavefields 把这三个 task_dir 的"
-        f"波场并排画成对比图(labels=['Acoustic','AcousticVTI','AcousticTTI'], abcn=20, "
-        f"out_path={out}/anisotropy_compare.png)。最后告诉我对比图路径。",
+        f"我想对比各向同性介质和各向异性介质(VTI、TTI)里地震波波前形状的差异。"
+        f"用一个均匀速度模型 {d}/vp_uni.npy。各向异性参数文件:epsilon {d}/eps.npy, "
+        f"delta {d}/delta.npy, theta {d}/theta.npy。请把这三种介质的波场快照并排画出来对比,"
+        f"输出到 {out}。",
         max_steps=32,
     )
 
