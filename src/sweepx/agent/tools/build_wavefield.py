@@ -58,6 +58,8 @@ def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, An
     }
     if p.backend_impl == "eager":
         spec["backend"]["eager_options"] = {"use_compile": p.use_compile}
+    if p.topography is not None:
+        spec["physics"]["topography"] = p.topography
     if p.task_id is not None:
         spec["task_id"] = p.task_id
     if p.extra:

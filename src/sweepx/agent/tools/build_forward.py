@@ -84,6 +84,15 @@ class BuildForwardParams(BaseModel):
         None,
         description="PML kind. None = the equation's own default (acoustic→'cpmlr', Elastic/VTI-3D→'cpmls'). Override only if you know the equation supports it.",
     )
+    topography: str | None = Field(
+        None,
+        description=(
+            "Path to a 1-D .npy of per-column surface row indices (length nx) for an IRREGULAR "
+            "free-surface (hills/valleys). Use with a curvilinear equation: equation='AcousticCurvilinear' "
+            "(or 'ElasticCurvilinear'). This is a DIFFERENT mechanism from free_surface=True (which is a flat "
+            "free surface) — topography builds a boundary-fitted curvilinear grid. None = no topo."
+        ),
+    )
     backend_impl: Literal["eager", "c"] = Field("eager", description="`eager` = pure-torch (slow, universal); `c` = sweep CUDA kernels (fast, requires CUDA build).")
     use_compile: bool = Field(
         False,
@@ -277,6 +286,8 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
     # play; the schema rejects eager_options on impl='c'.
     if p.backend_impl == "eager":
         spec["backend"]["eager_options"] = {"use_compile": p.use_compile}
+    if p.topography is not None:
+        spec["physics"]["topography"] = p.topography
     if p.task_id is not None:
         spec["task_id"] = p.task_id
     if p.extra:
