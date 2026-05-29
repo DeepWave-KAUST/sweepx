@@ -165,7 +165,26 @@ class MakeGifParams(BaseModel):
     field: int = Field(0)
     out_name: str = Field("wavefield.gif", description="Output GIF (or .mp4) filename, saved under <task_dir>/output/.")
     fps: int = Field(8, ge=1, le=30, description="Frames per second.")
-    topography_path: str | None = Field(None, description="Reserved (topography overlay not yet supported by sweep-viz).")
+    topography_path: str | None = Field(
+        None,
+        description=(
+            "Path to the 1-D topography .npy used in the run. When set, the wavefield is shown on "
+            "the PHYSICAL grid (air above the surface masked white) with the topography line + "
+            "source/receiver markers overlaid — like the curvilinear notebook figure."
+        ),
+    )
+    curvilinear: bool = Field(
+        True,
+        description="True for AcousticCurvilinear (resample computational→physical); False for image-method physical-grid fields. Only used when topography_path is set.",
+    )
+    sources: list[list[int]] | None = Field(
+        None,
+        description="Optional source markers as [[x, depth_below_surface], ...] (overlaid on the topo figure).",
+    )
+    receivers: list[list[int]] | None = Field(
+        None,
+        description="Optional receiver markers as [[x, depth_below_surface], ...].",
+    )
 
 
 @register(
@@ -189,7 +208,15 @@ def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
     rd = resolve_task_dir(args.task_dir)
     out = rd / "output" / args.out_name
     try:
-        viz.animate_snapshots(list(wf), str(out), fps=args.fps)
+        if args.topography_path:
+            topo = np.load(args.topography_path)
+            viz.animate_snapshots_topography(
+                list(wf), topo, str(out),
+                sources=args.sources, receivers=args.receivers,
+                curvilinear=args.curvilinear, fps=args.fps,
+            )
+        else:
+            viz.animate_snapshots(list(wf), str(out), fps=args.fps)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     return {"gif_path": str(out), "task_dir_used": str(rd), "n_frames": int(wf.shape[0])}
