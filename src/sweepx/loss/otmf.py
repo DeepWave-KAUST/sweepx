@@ -1,6 +1,6 @@
 """Optimal Transport of the Matching Filter (OTMF) misfit.
 
-Sun & Alkhalifah (2018, 2019) combine the matching-filter / adaptive-
+Sun & Alkhalifah (2019) combine the matching-filter / adaptive-
 waveform-inversion idea with optimal transport.  For each trace:
 
 1. Compute the **Wiener matching filter** :math:`w(\\tau)` so that
@@ -33,7 +33,7 @@ the *kinematic* shift.
 
 References
 ----------
-* Sun, B. & Alkhalifah, T. (2018). *Adaptive traveltime inversion.*
+* Sun, B. & Alkhalifah, T. (2019). *Adaptive traveltime inversion.*
   **Geophysics** 84 (4), U13-U29.  doi:10.1190/geo2018-0595.1
 * Sun, B. & Alkhalifah, T. (2019). *The application of an optimal
   transport to a preconditioned data matching function for robust
@@ -48,8 +48,8 @@ from __future__ import annotations
 
 import torch
 
-from .base import BaseFWILoss, flatten_traces, to_canonical
 from ._utils import normalize_density, positive_transform
+from .base import BaseFWILoss, flatten_traces, to_canonical
 
 
 class OTMFLoss(BaseFWILoss):

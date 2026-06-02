@@ -57,10 +57,10 @@ student_t_loss(syn, obs, nu=4.0, sigma=0.5, full_nll=False)
 
 ## References
 
-* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2012). *Robust FWI
+* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2011). *Robust FWI
   using Student-t distribution.*  SEG Technical Program Expanded Abstracts,
-  pp. 1-5.
-  doi:[10.1190/segam2012-1010.1](https://doi.org/10.1190/segam2012-1010.1)
+  pp. 2669-2673.
+  doi:[10.1190/1.3627747](https://doi.org/10.1190/1.3627747)
 * Aravkin, A., Burke, J. V. & Friedlander, M. P. (2013). *Variational
   properties of value functions.* **SIAM J. Optim.** 23 (3), 1689-1717.
   doi:[10.1137/120899157](https://doi.org/10.1137/120899157)

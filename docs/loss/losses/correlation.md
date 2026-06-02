@@ -71,4 +71,4 @@ TraceNormalizedL2Loss()(syn, obs)
 * Routh, P., Krebs, J., Lazaratos, S., et al. (2011). *Encoded simultaneous
   source full-wavefield inversion for spectrally-shaped marine streamer
   data.* SEG Tech. Progr. Expanded Abstracts, pp. 2433-2438.
-  doi:[10.1190/1.3627696](https://doi.org/10.1190/1.3627696)
+  doi:[10.1190/1.3627697](https://doi.org/10.1190/1.3627697)

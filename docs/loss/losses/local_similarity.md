@@ -16,7 +16,7 @@ implementation evaluates the three sliding sums by 1-D convolution with
 the same Gaussian kernel (replicate-padded so the result has the input
 length).
 
-The FWI misfit (Zhang, Sirgue & Zhang 2018) is
+The FWI misfit is
 
 $$
 \mathcal J_{\mathrm{LS}}(m) \;=\; \tfrac12 \sum_{\text{trace}}\sum_\tau w_\sigma^E(\tau)\,(1-\gamma_\sigma(\tau))^2,
@@ -37,8 +37,7 @@ contribute spurious (1-0)² = 1 to the misfit).
 
 ## When to use
 
-* Time-lapse FWI where you want to localise the residual in time
-  (Zhang, Sirgue & Zhang 2018).
+* Time-lapse FWI where you want to localise the residual in time.
 * As an attribute / monitoring quantity to *visualise* the misfit
   alongside the inversion.
 
@@ -66,6 +65,3 @@ local_similarity_loss(syn, obs, sigma_samples=8.0)
 * Fomel, S. (2007). *Local seismic attributes.* **Geophysics** 72 (3),
   A29-A33.
   doi:[10.1190/1.2437573](https://doi.org/10.1190/1.2437573)
-* Zhang, P., Sirgue, L. & Zhang, R. (2018). *Local-similarity-based FWI
-  for a time-lapse application.*  80th EAGE Conference & Exhibition.
-  doi:[10.3997/2214-4609.201801006](https://doi.org/10.3997/2214-4609.201801006)

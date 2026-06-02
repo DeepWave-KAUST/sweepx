@@ -18,22 +18,22 @@ This package implements the **O(nt^2)** time, **O(nt^2)** memory forward
 recursion of Cuturi & Blondel (2017, alg. 1).  Gradients are obtained
 automatically via PyTorch autograd through the soft-min recursion.
 
-Soft-DTW has been used as a kinematic FWI misfit by Wang, Sava &
-Sripanich (2023) and by Sava (2014) (classical hard DTW) and is one of
-the most powerful misfits for matching wavetrains under unknown,
-**non-stationary** time warps.
+Soft-DTW has been used as a differentiable FWI misfit by Chen, Peter &
+Ravasi (2022) and is one of the most powerful misfits for matching
+wavetrains under unknown, **non-stationary** time warps.
 
 References
 ----------
 * Cuturi, M. & Blondel, M. (2017). *Soft-DTW: a differentiable loss
   function for time-series.*  ICML 70, 894-903.  arXiv:1703.01541
-* Sava, P. (2014). *3D dynamic time warping for traveltime inversion.*
-  SEG Tech. Progr. Expanded Abstracts, pp. 4830-4834.
-  doi:10.1190/segam2014-1452.1
+* Chen, F., Peter, D. & Ravasi, M. (2022). *Cycle-skipping mitigation
+  using misfit measurements based on differentiable dynamic time
+  warping.* **Geophysics** 87 (4), R325-R335.
+  doi:10.1190/geo2021-0598.1
 * Ma, Y. & Hale, D. (2013). *Wave-equation reflection traveltime
   inversion with dynamic warping and full-waveform inversion.*
   **Geophysics** 78 (6), R223-R233.
-  doi:10.1190/geo2013-0058.1
+  doi:10.1190/geo2013-0004.1
 """
 
 from __future__ import annotations

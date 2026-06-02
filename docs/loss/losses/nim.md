@@ -2,7 +2,7 @@
 
 ## Definition
 
-NIM (Liu, Hu & Wang 2012; Donno, Chauris & Calandra 2013) maps a signed
+NIM (Donno, Chauris & Calandra 2013) maps a signed
 seismic trace $d(t)$ to a probability density and then compares
 **cumulative distributions** in L2:
 
@@ -19,7 +19,7 @@ The positive transform $\sigma$ is selectable:
 
 | `positive=` | $\sigma(d)$           | First proposed in |
 |-------------|-----------------------|-------------------|
-| `"square"`  | $d^2$                 | Liu et al. (2012) |
+| `"square"`  | $d^2$                 | NIM (default)     |
 | `"abs"`     | $\lvert d\rvert$      | Donno et al. (2013) |
 | `"linear"`  | $d + c$ ($c \ge \max\lvert d\rvert$) | Engquist & Froese (2014) |
 | `"exp"`     | $\exp(d)$             | Engquist, Froese & Yang (2016) |
@@ -53,10 +53,6 @@ nim_loss(syn, obs, positive="linear", dt=1e-3)
 
 ## References
 
-* Liu, F., Hu, X. & Wang, J. (2012). *An optimised waveform inversion
-  method based on a non-quadratic misfit function and the normalised
-  integration method.* **Geophys. Prospect.** 60 (3), 386-394.
-  doi:[10.1111/j.1365-2478.2011.00993.x](https://doi.org/10.1111/j.1365-2478.2011.00993.x)
 * Donno, D., Chauris, H. & Calandra, H. (2013). *Estimating the background
   velocity model with the normalised integration method.*  75th EAGE
   Conference & Exhibition.

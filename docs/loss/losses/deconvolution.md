@@ -52,12 +52,12 @@ DeconvolutionLoss(dt=1e-3, epsilon=1e-4, normalize=True)(syn, obs)
 * Luo, S. & Sava, P. (2011). *A deconvolution-based objective function
   for wave-equation inversion.* SEG Tech. Progr. Expanded Abstracts,
   pp. 2788-2792.
-  doi:[10.1190/1.3627766](https://doi.org/10.1190/1.3627766)
+  doi:[10.1190/1.3627773](https://doi.org/10.1190/1.3627773)
 * Choi, Y. & Alkhalifah, T. (2018). *Time-domain full-waveform inversion
   of exponentially damped wavefield using the deconvolution-based
   objective function.* **Geophysics** 83 (2), R77-R88.
   doi:[10.1190/geo2017-0057.1](https://doi.org/10.1190/geo2017-0057.1)
 * Zhu, H. & Fomel, S. (2016). *Building good starting models for FWI
-  using adaptive matching filtering misfit.* SEG Tech. Progr. Expanded
-  Abstracts, pp. 1421-1425.
-  doi:[10.1190/segam2016-13865936.1](https://doi.org/10.1190/segam2016-13865936.1)
+  using adaptive matching filtering misfit.* **Geophysics** 81 (5),
+  U61-U72.
+  doi:[10.1190/geo2015-0596.1](https://doi.org/10.1190/geo2015-0596.1)

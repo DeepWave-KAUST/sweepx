@@ -103,7 +103,7 @@ LaplaceL2Loss(s=2.0, dt=1e-3)(syn, obs)
 * Bednar, J. B., Shin, C. & Pyun, S. (2007). *Comparison of waveform
   inversion, part 2: phase approach.* **Geophys. Prospect.** 55 (4),
   465-475.
-  doi:[10.1111/j.1365-2478.2007.00622.x](https://doi.org/10.1111/j.1365-2478.2007.00622.x)
+  doi:[10.1111/j.1365-2478.2007.00618.x](https://doi.org/10.1111/j.1365-2478.2007.00618.x)
 * Shin, C. & Cha, Y. H. (2008). *Waveform inversion in the Laplace
   domain.* **Geophys. J. Int.** 173 (3), 922-931.
   doi:[10.1111/j.1365-246X.2008.03768.x](https://doi.org/10.1111/j.1365-246X.2008.03768.x)
@@ -115,5 +115,5 @@ LaplaceL2Loss(s=2.0, dt=1e-3)(syn, obs)
   1457-1473.
   doi:[10.1190/1.1443880](https://doi.org/10.1190/1.1443880)
 * Choi, Y. & Alkhalifah, T. (2013). *Frequency-domain waveform inversion
-  using the phase derivative.* **Geophys. J. Int.** 194 (1), 1-15.
-  doi:[10.1093/gji/ggt115](https://doi.org/10.1093/gji/ggt115)
+  using the phase derivative.* **Geophys. J. Int.** 195 (3), 1904-1916.
+  doi:[10.1093/gji/ggt351](https://doi.org/10.1093/gji/ggt351)

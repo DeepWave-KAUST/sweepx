@@ -2,7 +2,7 @@
 
 ## Definition
 
-Sun & Alkhalifah (2018, 2019) combine adaptive matching-filter and OT
+Sun & Alkhalifah (2019) combine adaptive matching-filter and OT
 ideas:
 
 1. Compute the Wiener filter $w(\tau)$ that maps $d_{\mathrm s}\ast w$ to
@@ -59,7 +59,7 @@ OTMFLoss(dt=1e-3, epsilon=1e-4, positive="square", order=2)(syn, obs)
 
 ## References
 
-* Sun, B. & Alkhalifah, T. (2018). *Adaptive traveltime inversion.*
+* Sun, B. & Alkhalifah, T. (2019). *Adaptive traveltime inversion.*
   **Geophysics** 84 (4), U13-U29.
   doi:[10.1190/geo2018-0595.1](https://doi.org/10.1190/geo2018-0595.1)
 * Sun, B. & Alkhalifah, T. (2019). *The application of an optimal

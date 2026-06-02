@@ -1,7 +1,7 @@
 """Normalised Integration Method (NIM) misfit.
 
-Given a real, signed signal :math:`d(t)`, NIM (Liu, Hu & Wang 2012;
-Donno, Chauris & Calandra 2013) first maps it to a non-negative density,
+Given a real, signed signal :math:`d(t)`, NIM (Donno, Chauris &
+Calandra 2013) first maps it to a non-negative density,
 normalises to total mass one and then compares the resulting
 **cumulative distribution functions** in L2:
 
@@ -16,7 +16,7 @@ normalises to total mass one and then compares the resulting
         \\bigl(F_{\\mathrm{syn}}(t) - F_{\\mathrm{obs}}(t)\\bigr)^2 \\,\\mathrm d t.
 
 The positive map :math:`\\sigma(\\cdot)` is chosen by the user via the
-``positive`` argument: ``"square"`` (default; the original Liu 2012
+``positive`` argument: ``"square"`` (the default
 choice), ``"abs"``, ``"linear"`` (signal + offset c) or ``"exp"``.
 
 The integral squared difference of the CDFs is identical to the
@@ -28,10 +28,6 @@ cheapest formulation per trace.
 
 References
 ----------
-* Liu, F., Hu, X. & Wang, J. (2012). *An optimised waveform inversion
-  method based on a non-quadratic misfit function and the normalised
-  integration method.*  Geophys. Prospect. 60 (3), 386-394.
-  doi:10.1111/j.1365-2478.2011.00993.x
 * Donno, D., Chauris, H. & Calandra, H. (2013). *Estimating the
   background velocity model with the normalised integration method.*
   75th EAGE Conference & Exhibition.  doi:10.3997/2214-4609.20130411
@@ -41,12 +37,12 @@ from __future__ import annotations
 
 import torch
 
-from .base import BaseFWILoss, flatten_traces, to_canonical
 from ._utils import normalize_density, positive_transform
+from .base import BaseFWILoss, flatten_traces, to_canonical
 
 
 class NIMLoss(BaseFWILoss):
-    """Normalised Integration Method FWI misfit (Liu 2012; Donno 2013)."""
+    """Normalised Integration Method FWI misfit (Donno, Chauris & Calandra 2013)."""
 
     def __init__(
         self,

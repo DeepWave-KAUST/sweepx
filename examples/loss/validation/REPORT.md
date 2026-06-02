@@ -99,7 +99,7 @@ eq. 9 的 J_nL2 ≡ J_NCC + const 等价性。
 * Luo & Schuster (1991). *Wave-equation travel-time inversion.* Geophysics 56 (5), 645-653. doi:10.1190/1.1443081.
 * van Leeuwen & Mulder (2010). *A correlation-based misfit criterion for wave-equation traveltime tomography.* Geophys. J. Int. 182 (3), 1383-1394. doi:10.1111/j.1365-246X.2010.04681.x — 我们当前实现的 power-weighted centroid 出处。
 * Marquering, Dahlen & Nolet (1999). *Three-dimensional sensitivity kernels for finite-frequency traveltimes.* Geophys. J. Int. 137 (3), 805-815. doi:10.1046/j.1365-246x.1999.00837.x.
-* [authors] (2024). *Differentiable Traveltime Misfit for Wave-Equation Tomography.* 85th EAGE Annual Conference & Exhibition, Oslo, Norway, Expanded Abstracts. doi:10.3997/2214-4609.2024-TBD — 同族的 softmax-of-cross-correlation 变体（eq. (4)：`prob(τ) = exp(cc)/Σ exp(cc_i)`；eq. (5)：`τ* = Σ_i prob_i · i`）；与我们 `power=2` 的差别只是把"非负幂次加权"换成"softmax 加权"。设 `CrossCorrelationTraveltimeLoss(power=...)` 极大时也会塌成 argmax，与 softmax 在 τ* 上数值接近。
+* Wang, S., Song, P., Tan, J., Xia, D., Zhao, B. & Mao, S. (2024). *Differentiable Traveltime Misfit for Wave-Equation Tomography.* 85th EAGE Annual Conference & Exhibition, Oslo, Norway, Expanded Abstracts. doi:10.3997/2214-4609.202410170 — 同族的 softmax-of-cross-correlation 变体（eq. (4)：`prob(τ) = exp(cc)/Σ exp(cc_i)`；eq. (5)：`τ* = Σ_i prob_i · i`）；与我们 `power=2` 的差别只是把"非负幂次加权"换成"softmax 加权"。设 `CrossCorrelationTraveltimeLoss(power=...)` 极大时也会塌成 argmax，与 softmax 在 τ* 上数值接近。
 
 ---
 
@@ -261,7 +261,7 @@ Sun-Alkhalifah 2018/2019; Guasch-Warner-Ravaut 2019.
 （质量分布更靠右，因 obs 时移了 +30 ms）—— CDF 行为符合 1D OT 几何。
 盆地在 ±4 半波长全程单调。
 
-参考：Liu-Hu-Wang 2012; Donno-Chauris-Calandra 2013.
+参考：Donno-Chauris-Calandra 2013.
 
 ### G.2 JensenShannonLoss
 
@@ -378,10 +378,9 @@ divergence=True (Blondel 2020) 与 divergence=False (原始 Cuturi-Blondel)；
 **验证要点**：
 * 匹配区 γ_max = **1.00**（完美相关）；失配区 γ_min = **−0.57**（明显失相关）
   —— Fomel 2007 的"local NCC ∈ [-1, 1]"性质完全成立。
-* σ 越大盆地越窄越接近 global NCC；σ 越小则局部化越强 —— 行为与 Fomel /
-  Zhang 2018 一致。
+* σ 越大盆地越窄越接近 global NCC；σ 越小则局部化越强 —— 行为与 Fomel 2007 一致。
 
-参考：Fomel 2007; Zhang-Sirgue-Zhang 2018.
+参考：Fomel 2007.
 
 ---
 

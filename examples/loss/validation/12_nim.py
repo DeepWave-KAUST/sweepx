@@ -1,4 +1,4 @@
-"""Validate NIMLoss (Liu, Hu & Wang 2012; Donno-Chauris-Calandra 2013).
+"""Validate NIMLoss (Donno-Chauris-Calandra 2013).
 
 Recipe:
 * Build a Ricker pair (syn, obs).
@@ -106,7 +106,7 @@ def run() -> dict:
     ax.legend(loc="upper center", fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    fig.suptitle("NIMLoss — Liu-Hu-Wang (2012); Donno-Chauris-Calandra (2013)", y=1.002)
+    fig.suptitle("NIMLoss — Donno-Chauris-Calandra (2013)", y=1.002)
     fig.tight_layout()
     out = fig_path(NAME)
     fig.savefig(out, bbox_inches="tight")

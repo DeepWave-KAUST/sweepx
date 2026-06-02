@@ -50,8 +50,7 @@ $$
 
 * Lailly, P. (1983). *The seismic inverse problem as a sequence of
   before-stack migrations.* In: *Conference on Inverse Scattering*,
-  SIAM, 206-220.  *(no DOI; book record:
-  [SIAM](https://epubs.siam.org/doi/book/10.1137/1.9781611970935))*
+  SIAM, 206-220.  *(no DOI)*
 * Tarantola, A. (1984). *Inversion of seismic reflection data in the
   acoustic approximation.* **Geophysics** 49 (8), 1259-1266.
   doi:[10.1190/1.1441754](https://doi.org/10.1190/1.1441754)
@@ -154,10 +153,10 @@ $$
 
 Limits: $\nu = 1$ is Cauchy; $\nu\to\infty$ is Gaussian / L2.
 
-* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2012). *Robust FWI
+* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2011). *Robust FWI
   using Student-t distribution.* SEG Tech. Progr. Expanded Abstracts,
-  pp. 1-5.
-  doi:[10.1190/segam2012-1010.1](https://doi.org/10.1190/segam2012-1010.1)
+  pp. 2669-2673.
+  doi:[10.1190/1.3627747](https://doi.org/10.1190/1.3627747)
 * Aravkin, A., Burke, J. V. & Friedlander, M. P. (2013). *Variational
   properties of value functions.* SIAM J. Optim. 23 (3), 1689-1717.
   doi:[10.1137/120899157](https://doi.org/10.1137/120899157)
@@ -180,7 +179,7 @@ $$
   doi:[10.1111/j.1365-2478.2012.01079.x](https://doi.org/10.1111/j.1365-2478.2012.01079.x)
 * Routh, P., Krebs, J., Lazaratos, S., et al. (2011). SEG Tech. Progr.
   Expanded Abstracts, 2433-2438.
-  doi:[10.1190/1.3627696](https://doi.org/10.1190/1.3627696)
+  doi:[10.1190/1.3627697](https://doi.org/10.1190/1.3627697)
 
 ### B.2 Trace-normalised L2 — `TraceNormalizedL2Loss`
 
@@ -216,9 +215,9 @@ correlation-weighted centroid (van Leeuwen & Mulder 2010 form).
   sensitivity kernels for finite-frequency traveltimes.* **Geophys. J.
   Int.** 137 (3), 805-815.
   doi:[10.1046/j.1365-246x.1999.00837.x](https://doi.org/10.1046/j.1365-246x.1999.00837.x)
-* \[authors\] (2024). *Differentiable Traveltime Misfit for Wave-Equation
+* Wang, S., Song, P., Tan, J., Xia, D., Zhao, B. & Mao, S. (2024). *Differentiable Traveltime Misfit for Wave-Equation
   Tomography.* 85th EAGE Annual Conference & Exhibition, Oslo, Norway,
-  Expanded Abstracts. doi:`10.3997/2214-4609.2024-TBD`. Replaces the
+  Expanded Abstracts. doi:[10.3997/2214-4609.202410170](https://doi.org/10.3997/2214-4609.202410170). Replaces the
   power-of-cross-correlation centroid (van Leeuwen-Mulder 2010, our
   default) with a softmax-of-cross-correlation centroid; same family of
   smooth-argmax surrogates.
@@ -243,9 +242,9 @@ signal.
 * Wu, R.-S., Luo, J. & Wu, B. (2014). *Seismic envelope inversion and
   modulation signal model.* **Geophysics** 79 (3), WA13-WA24.
   doi:[10.1190/geo2013-0294.1](https://doi.org/10.1190/geo2013-0294.1)
-* Chi, B., Dong, L. & Liu, Y. (2014). *Full-waveform inversion based on
-  envelope objective function.*  76th EAGE Expanded Abstracts.
-  doi:[10.3997/2214-4609.20141008](https://doi.org/10.3997/2214-4609.20141008)
+* Chi, B., Dong, L. & Liu, Y. (2014). *Full waveform inversion method using
+  envelope objective function without low frequency data.*  **J. Appl. Geophys.** 109, 36-46.
+  doi:[10.1016/j.jappgeo.2014.07.010](https://doi.org/10.1016/j.jappgeo.2014.07.010)
 
 ### D.2 Instantaneous-phase misfit — `InstantaneousPhaseLoss`
 
@@ -338,7 +337,7 @@ $$
 * Bednar, J. B., Shin, C. & Pyun, S. (2007). *Comparison of waveform
   inversion, part 2: phase approach.* **Geophys. Prospect.** 55 (4),
   465-475.
-  doi:[10.1111/j.1365-2478.2007.00622.x](https://doi.org/10.1111/j.1365-2478.2007.00622.x)
+  doi:[10.1111/j.1365-2478.2007.00618.x](https://doi.org/10.1111/j.1365-2478.2007.00618.x)
 
 ### E.3 Amplitude-only — `FrequencyAmplitudeLoss`
 
@@ -359,9 +358,9 @@ $$
 
 * Shin & Min (2006) — same DOI as E.3.
 * Choi, Y. & Alkhalifah, T. (2013). *Frequency-domain waveform
-  inversion using the phase derivative.* **Geophys. J. Int.** 194 (1),
-  1-15.
-  doi:[10.1093/gji/ggt115](https://doi.org/10.1093/gji/ggt115)
+  inversion using the phase derivative.* **Geophys. J. Int.** 195 (3),
+  1904-1916.
+  doi:[10.1093/gji/ggt351](https://doi.org/10.1093/gji/ggt351)
 
 ### E.5 Laplace L2 — `LaplaceL2Loss`
 
@@ -409,7 +408,7 @@ $$
 W_2^2(\hat w, \delta_0) = \int \tau^2\,\hat w(\tau)\,d\tau, \qquad W_1(\hat w, \delta_0) = \int |\tau|\,\hat w(\tau)\,d\tau.
 $$
 
-* Sun, B. & Alkhalifah, T. (2018). *Adaptive traveltime inversion.*
+* Sun, B. & Alkhalifah, T. (2019). *Adaptive traveltime inversion.*
   **Geophysics** 84 (4), U13-U29.
   doi:[10.1190/geo2018-0595.1](https://doi.org/10.1190/geo2018-0595.1)
 * Sun, B. & Alkhalifah, T. (2019). *The application of an optimal
@@ -430,7 +429,7 @@ $$
 * Luo, S. & Sava, P. (2011). *A deconvolution-based objective function
   for wave-equation inversion.* SEG Tech. Progr. Expanded Abstracts,
   2788-2792.
-  doi:[10.1190/1.3627766](https://doi.org/10.1190/1.3627766)
+  doi:[10.1190/1.3627773](https://doi.org/10.1190/1.3627773)
 * Choi, Y. & Alkhalifah, T. (2018). *Time-domain full-waveform
   inversion of exponentially damped wavefield using the
   deconvolution-based objective function.* **Geophysics** 83 (2),
@@ -447,10 +446,6 @@ $$
 f = \sigma(d),\quad F(t) = \tfrac{\int_0^t f}{\int_0^T f},\quad \mathcal J_{\mathrm{NIM}} = \tfrac12 \sum \int_0^T (F_{\mathrm s}-F_{\mathrm o})^2\, dt.
 $$
 
-* Liu, F., Hu, X. & Wang, J. (2012). *An optimised waveform inversion
-  method based on a non-quadratic misfit function and the normalised
-  integration method.* **Geophys. Prospect.** 60 (3), 386-394.
-  doi:[10.1111/j.1365-2478.2011.00993.x](https://doi.org/10.1111/j.1365-2478.2011.00993.x)
 * Donno, D., Chauris, H. & Calandra, H. (2013). 75th EAGE Conf.
   doi:[10.3997/2214-4609.20130411](https://doi.org/10.3997/2214-4609.20130411)
 
@@ -462,10 +457,10 @@ $$
 
 Symmetric, bounded by $\log 2$.
 
-* Yan, Z., Mostefai, F., Ouattara, K., et al. (2024). *Multiparameter
+* Yan, Y., Chen, X., Li, J., et al. (2024). *Multiparameter
   shallow-seismic waveform inversion based on the Jensen-Shannon
-  divergence.* **Geophys. J. Int.** 238 (1), 132-148.
-  doi:[10.1093/gji/ggae131](https://doi.org/10.1093/gji/ggae131)
+  divergence.* **Geophys. J. Int.** 238 (1), 132-155.
+  doi:[10.1093/gji/ggae143](https://doi.org/10.1093/gji/ggae143)
 * Endres, D. M. & Schindelin, J. E. (2003). *A new metric for
   probability distributions.* **IEEE T. Inf. Theory** 49 (7), 1858-1860.
   doi:[10.1109/TIT.2003.813506](https://doi.org/10.1109/TIT.2003.813506)
@@ -561,7 +556,7 @@ $$
 * Ma, Y. & Hale, D. (2013). *Wave-equation reflection traveltime
   inversion with dynamic warping and full-waveform inversion.*
   **Geophysics** 78 (6), R223-R233.
-  doi:[10.1190/geo2013-0058.1](https://doi.org/10.1190/geo2013-0058.1)
+  doi:[10.1190/geo2013-0004.1](https://doi.org/10.1190/geo2013-0004.1)
 
 ---
 
@@ -578,9 +573,6 @@ $$
 * Fomel, S. (2007). *Local seismic attributes.* **Geophysics** 72 (3),
   A29-A33.
   doi:[10.1190/1.2437573](https://doi.org/10.1190/1.2437573)
-* Zhang, P., Sirgue, L. & Zhang, R. (2018). *Local-similarity-based FWI
-  for a time-lapse application.* 80th EAGE Conf.
-  doi:[10.3997/2214-4609.201801006](https://doi.org/10.3997/2214-4609.201801006)
 
 ---
 
@@ -598,9 +590,9 @@ listed here for completeness:
   full-waveform inversion by expanding the search space.* **Geophys.
   J. Int.** 195 (1), 661-667.
   doi:[10.1093/gji/ggt258](https://doi.org/10.1093/gji/ggt258)
-* Chauris, H. & Plessix, R.-E. (2013). *Investigating the differential
-  waveform inversion.*  75th EAGE Conf.
-  doi:[10.3997/2214-4609.20130498](https://doi.org/10.3997/2214-4609.20130498)
+* Chauris, H. & Plessix, R.-E. (2012). *Investigating the differential
+  waveform inversion.*  74th EAGE Conf.
+  doi:[10.3997/2214-4609.20149790](https://doi.org/10.3997/2214-4609.20149790)
 
 These can be added later by exposing the additional inputs (extended
 gather offsets, the wavefield, the model gradient, …) as constructor

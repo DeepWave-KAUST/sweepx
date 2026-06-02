@@ -37,15 +37,15 @@ References
 * Routh, P., Krebs, J., Lazaratos, S., et al. (2011). *Encoded
   simultaneous source full-wavefield inversion for spectrally-shaped
   marine streamer data.* SEG Tech. Progr. Expanded Abstracts, 2433-2438.
-  doi:10.1190/1.3627696
+  doi:10.1190/1.3627697
 """
 
 from __future__ import annotations
 
 import torch
 
-from .base import BaseFWILoss, flatten_traces, to_canonical
 from ._utils import l2_normalize
+from .base import BaseFWILoss, flatten_traces, to_canonical
 
 
 class GlobalCorrelationLoss(BaseFWILoss):

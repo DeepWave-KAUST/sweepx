@@ -66,6 +66,6 @@ EnvelopeLoss(squared=True)(syn, obs)         # Chi 2014
 * Wu, R.-S., Luo, J. & Wu, B. (2014). *Seismic envelope inversion and
   modulation signal model.* **Geophysics** 79 (3), WA13-WA24.
   doi:[10.1190/geo2013-0294.1](https://doi.org/10.1190/geo2013-0294.1)
-* Chi, B., Dong, L. & Liu, Y. (2014). *Full-waveform inversion based on
-  envelope objective function.*  76th EAGE Conference, Expanded Abstracts.
-  doi:[10.3997/2214-4609.20141008](https://doi.org/10.3997/2214-4609.20141008)
+* Chi, B., Dong, L. & Liu, Y. (2014). *Full waveform inversion method using
+  envelope objective function without low frequency data.*  **J. Appl. Geophys.** 109, 36-46.
+  doi:[10.1016/j.jappgeo.2014.07.010](https://doi.org/10.1016/j.jappgeo.2014.07.010)

@@ -90,9 +90,10 @@ loss = CrossCorrelationTraveltimeLoss(
   criterion for wave-equation traveltime tomography.*
   **Geophys. J. Int.** 182 (3), 1383-1394.
   doi:[10.1111/j.1365-246X.2010.04681.x](https://doi.org/10.1111/j.1365-246X.2010.04681.x)
-* \[authors\] (2024). *Differentiable Traveltime Misfit for
-  Wave-Equation Tomography.*  85th EAGE Annual Conference & Exhibition,
-  Oslo, Norway, Expanded Abstracts.
-  doi:`10.3997/2214-4609.2024-TBD`
+* Wang, S., Song, P., Tan, J., Xia, D., Zhao, B. & Mao, S. (2024).
+  *Differentiable Traveltime Misfit for Wave-Equation Tomography.*
+  85th EAGE Annual Conference & Exhibition, Oslo, Norway, Expanded
+  Abstracts, 1-5.
+  doi:[10.3997/2214-4609.202410170](https://doi.org/10.3997/2214-4609.202410170)
   (softmax-of-cross-correlation variant — same family as the
   ``power``-weighted centroid implemented here.)

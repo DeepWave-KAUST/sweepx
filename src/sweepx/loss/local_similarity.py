@@ -15,7 +15,7 @@ cross-correlation that varies smoothly in time.  For two real signals
 This is a continuous, smooth analogue of the windowed Pearson
 correlation; :math:`\\gamma_\\sigma \\in [-1, 1]` everywhere.
 
-A natural FWI misfit (used e.g. by Zhang, Sirgue & Zhang 2018) is
+A natural FWI misfit is
 
 .. math::
 
@@ -29,9 +29,6 @@ References
 ----------
 * Fomel, S. (2007). *Local seismic attributes.*  **Geophysics** 72 (3),
   A29-A33.  doi:10.1190/1.2437573
-* Zhang, P., Sirgue, L. & Zhang, R. (2018). *Local-similarity-based FWI
-  for a time-lapse application.*  80th EAGE Conference & Exhibition.
-  doi:10.3997/2214-4609.201801006
 """
 
 from __future__ import annotations
@@ -62,7 +59,7 @@ def _smooth(x: torch.Tensor, kernel: torch.Tensor) -> torch.Tensor:
 
 
 class LocalSimilarityLoss(BaseFWILoss):
-    """Windowed-correlation FWI misfit (Fomel 2007; Zhang 2018).
+    """Windowed-correlation FWI misfit (Fomel 2007).
 
     Parameters
     ----------

@@ -58,7 +58,7 @@ References
   wavefield.* **Geophysics** 71 (3), R31-R42.  doi:10.1190/1.2194523
 * Bednar, J. B., Shin, C. & Pyun, S. (2007). *Comparison of waveform
   inversion, part 2: phase approach.*  Geophys. Prospect. 55 (4),
-  465-475.  doi:10.1111/j.1365-2478.2007.00622.x
+  465-475.  doi:10.1111/j.1365-2478.2007.00618.x
 * Shin, C. & Cha, Y. H. (2008). *Waveform inversion in the Laplace
   domain.*  Geophys. J. Int. 173 (3), 922-931.
   doi:10.1111/j.1365-246X.2008.03768.x

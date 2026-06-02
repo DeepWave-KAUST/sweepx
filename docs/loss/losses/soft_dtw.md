@@ -55,10 +55,11 @@ soft_dtw_loss(syn, obs, gamma=0.1, normalize_by_length=True)
 * Cuturi, M. & Blondel, M. (2017). *Soft-DTW: a differentiable loss
   function for time-series.* **ICML** 70, 894-903.
   arXiv:[1703.01541](https://arxiv.org/abs/1703.01541)
-* Sava, P. (2014). *3D dynamic time warping for traveltime inversion.*
-  SEG Tech. Progr. Expanded Abstracts, pp. 4830-4834.
-  doi:[10.1190/segam2014-1452.1](https://doi.org/10.1190/segam2014-1452.1)
+* Chen, F., Peter, D. & Ravasi, M. (2022). *Cycle-skipping mitigation
+  using misfit measurements based on differentiable dynamic time
+  warping.* **Geophysics** 87 (4), R325-R335.
+  doi:[10.1190/geo2021-0598.1](https://doi.org/10.1190/geo2021-0598.1)
 * Ma, Y. & Hale, D. (2013). *Wave-equation reflection traveltime
   inversion with dynamic warping and full-waveform inversion.*
   **Geophysics** 78 (6), R223-R233.
-  doi:[10.1190/geo2013-0058.1](https://doi.org/10.1190/geo2013-0058.1)
+  doi:[10.1190/geo2013-0004.1](https://doi.org/10.1190/geo2013-0004.1)

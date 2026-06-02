@@ -1,4 +1,4 @@
-"""Student's-t negative-log-likelihood misfit (Aravkin et al. 2012).
+"""Student's-t negative-log-likelihood misfit (Aravkin et al. 2011).
 
 For residual :math:`r = d_{\\mathrm{syn}} - d_{\\mathrm{obs}}` modelled as
 Student's-t with :math:`\\nu` degrees of freedom and scale :math:`\\sigma`,
@@ -16,9 +16,9 @@ Limits:
 
 References
 ----------
-* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2012). *Robust FWI
+* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2011). *Robust FWI
   using Student-t distribution.*  SEG Technical Program Expanded Abstracts,
-  pp. 1-5.  doi:10.1190/segam2012-1010.1
+  pp. 2669-2673.  doi:10.1190/1.3627747
 * Aravkin, A., Burke, J. V. & Friedlander, M. P. (2013). *Variational
   properties of value functions.* SIAM J. Optim. 23 (3), 1689-1717.
   doi:10.1137/120899157

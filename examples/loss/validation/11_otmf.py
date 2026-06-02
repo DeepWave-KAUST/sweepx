@@ -124,7 +124,7 @@ def run() -> dict:
     ax.legend(loc="upper center", fontsize=7)
     ax.grid(True, alpha=0.3)
 
-    fig.suptitle("OTMFLoss — Sun & Alkhalifah (2018, 2019)", y=1.002)
+    fig.suptitle("OTMFLoss — Sun & Alkhalifah (2019)", y=1.002)
     fig.tight_layout()
     out = fig_path(NAME)
     fig.savefig(out, bbox_inches="tight")

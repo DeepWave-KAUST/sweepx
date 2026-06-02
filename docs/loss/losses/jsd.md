@@ -50,10 +50,10 @@ JensenShannonLoss(positive="square")(syn, obs)
 
 ## References
 
-* Yan, Z., Mostefai, F., Ouattara, K., et al. (2024). *Multiparameter
+* Yan, Y., Chen, X., Li, J., et al. (2024). *Multiparameter
   shallow-seismic waveform inversion based on the Jensen-Shannon
-  divergence.* **Geophys. J. Int.** 238 (1), 132-148.
-  doi:[10.1093/gji/ggae131](https://doi.org/10.1093/gji/ggae131)
+  divergence.* **Geophys. J. Int.** 238 (1), 132-155.
+  doi:[10.1093/gji/ggae143](https://doi.org/10.1093/gji/ggae143)
 * Endres, D. M. & Schindelin, J. E. (2003). *A new metric for
   probability distributions.* **IEEE Trans. Inf. Theory** 49 (7),
   1858-1860.

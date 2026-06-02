@@ -7,9 +7,9 @@ author.
 
 ## A. Data-domain Lp norms and robust M-estimators
 
-* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2012). *Robust FWI
+* Aravkin, A. Y., van Leeuwen, T. & Herrmann, F. J. (2011). *Robust FWI
   using Student-t distribution.* SEG Technical Program Expanded Abstracts,
-  pp. 1-5.  doi:[10.1190/segam2012-1010.1](https://doi.org/10.1190/segam2012-1010.1)
+  pp. 2669-2673.  doi:[10.1190/1.3627747](https://doi.org/10.1190/1.3627747)
 * Beaton, A. E. & Tukey, J. W. (1974). *The fitting of power series, meaning
   polynomials, illustrated on band-spectroscopic data.*
   **Technometrics** 16, 147-185.
@@ -68,7 +68,7 @@ author.
 * Routh, P., Krebs, J., Lazaratos, S., et al. (2011). *Encoded simultaneous
   source full-wavefield inversion for spectrally-shaped marine streamer
   data.*  SEG Technical Program Expanded Abstracts, pp. 2433-2438.
-  doi:[10.1190/1.3627696](https://doi.org/10.1190/1.3627696)
+  doi:[10.1190/1.3627697](https://doi.org/10.1190/1.3627697)
 * van Leeuwen, T. & Mulder, W. A. (2010). *A correlation-based misfit
   criterion for wave-equation traveltime tomography.*  Geophys. J. Int.
   182 (3), 1383-1394.
@@ -109,7 +109,7 @@ author.
   doi:[10.1111/j.1365-246X.2009.04102.x](https://doi.org/10.1111/j.1365-246X.2009.04102.x)
 * Bednar, J. B., Shin, C. & Pyun, S. (2007). *Comparison of waveform
   inversion, part 2: phase approach.*  Geophys. Prospect. 55 (4), 465-475.
-  doi:[10.1111/j.1365-2478.2007.00622.x](https://doi.org/10.1111/j.1365-2478.2007.00622.x)
+  doi:[10.1111/j.1365-2478.2007.00618.x](https://doi.org/10.1111/j.1365-2478.2007.00618.x)
 
 ## E. Travel-time / picking (planned)
 
@@ -124,28 +124,24 @@ author.
   78 (2), S105-S115.  doi:[10.1190/geo2012-0327.1](https://doi.org/10.1190/geo2012-0327.1)
 * Ma, Y. & Hale, D. (2013). *Wave-equation reflection traveltime inversion
   with dynamic warping and full-waveform inversion.*  **Geophysics** 78 (6),
-  R223-R233.  doi:[10.1190/geo2013-0058.1](https://doi.org/10.1190/geo2013-0058.1)
+  R223-R233.  doi:[10.1190/geo2013-0004.1](https://doi.org/10.1190/geo2013-0004.1)
 
 ## F. Convolution / matching-filter (planned)
 
 * Luo, S. & Sava, P. (2011). *A deconvolution-based objective function for
   wave-equation inversion.* SEG Technical Program Expanded Abstracts,
   pp. 2788-2792.
-  doi:[10.1190/1.3627766](https://doi.org/10.1190/1.3627766)
+  doi:[10.1190/1.3627773](https://doi.org/10.1190/1.3627773)
 * Warner, M. & Guasch, L. (2016). *Adaptive waveform inversion: Theory.*
   **Geophysics** 81 (6), R429-R445.
   doi:[10.1190/geo2015-0387.1](https://doi.org/10.1190/geo2015-0387.1)
 * Zhu, H. & Fomel, S. (2016). *Building good starting models for FWI using
-  adaptive matching filtering misfit.*  SEG Technical Program Expanded
-  Abstracts, pp. 1421-1425.
-  doi:[10.1190/segam2016-13865936.1](https://doi.org/10.1190/segam2016-13865936.1)
+  adaptive matching filtering misfit.*  **Geophysics** 81 (5),
+  U61-U72.
+  doi:[10.1190/geo2015-0596.1](https://doi.org/10.1190/geo2015-0596.1)
 
 ## G. Normalized integration method (planned)
 
-* Liu, F., Hu, X. & Wang, J. (2012). *An optimised waveform inversion
-  method based on a non-quadratic misfit function and the normalised
-  integration method.*  Geophys. Prospect. 60 (3), 386-394.
-  doi:[10.1111/j.1365-2478.2011.00993.x](https://doi.org/10.1111/j.1365-2478.2011.00993.x)
 * Donno, D., Chauris, H. & Calandra, H. (2013). *Estimating the
   background velocity model with the normalised integration method.*  75th
   EAGE Conference & Exhibition.
@@ -189,6 +185,6 @@ completeness:
   full-waveform inversion by expanding the search space.*  Geophys. J.
   Int. 195 (1), 661-667.
   doi:[10.1093/gji/ggt258](https://doi.org/10.1093/gji/ggt258)
-* Chauris, H. & Plessix, R.-E. (2013). *Investigating the differential
-  waveform inversion.*  75th EAGE Conference & Exhibition.
-  doi:[10.3997/2214-4609.20130498](https://doi.org/10.3997/2214-4609.20130498)
+* Chauris, H. & Plessix, R.-E. (2012). *Investigating the differential
+  waveform inversion.*  74th EAGE Conference & Exhibition.
+  doi:[10.3997/2214-4609.20149790](https://doi.org/10.3997/2214-4609.20149790)

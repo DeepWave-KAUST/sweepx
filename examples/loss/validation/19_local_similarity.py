@@ -1,4 +1,4 @@
-"""Validate LocalSimilarityLoss (Fomel 2007; Zhang-Sirgue-Zhang 2018).
+"""Validate LocalSimilarityLoss (Fomel 2007).
 
 Recipe:
 * Build a 'partially-matching' pair: syn = ricker(t0); obs = same Ricker
@@ -113,7 +113,7 @@ def run() -> dict:
     ax.legend(loc="upper center", fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    fig.suptitle("LocalSimilarityLoss — Fomel (2007); Zhang-Sirgue-Zhang (2018)",
+    fig.suptitle("LocalSimilarityLoss — Fomel (2007)",
                  y=1.002)
     fig.tight_layout()
     out = fig_path(NAME)
