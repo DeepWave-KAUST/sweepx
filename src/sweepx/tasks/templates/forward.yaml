@@ -1,0 +1,122 @@
+# sweep-tasks Forward task YAML — annotated template.
+#
+# Generate with:    sweep-tasks init forward -o my_forward.yaml
+# Run with:         sweep-tasks run my_forward.yaml
+# Multi-GPU:        sweep-tasks run my_forward.yaml --nproc-per-node 4
+#
+# Forward modelling = generate synthetic seismic records by propagating
+# a wavelet through a velocity model. Use to:
+#  - build synthetic obs for FWI testing (see `examples/tasks/marmousi_*.yaml`)
+#  - debug acquisition geometry before kicking off a long FWI
+#  - explore wave-propagation behaviour for a paper figure
+#
+# Defaults below match a basic Marmousi-style 2-D acoustic forward
+# (12.5 m grid, 1 ms dt, 4 s record, sources along the top, receivers
+# at z=18). Adjust grid / model path / geometry for your own setup.
+
+# ─── Identity ───────────────────────────────────────────────────────────────
+
+# Selects the runner backend; must be "forward" for synthetic shot records.
+task_type: forward
+
+# Output directory. Creates a sub-dir `<task_id>/` with the shot npz +
+# QC PNGs + run_summary.json.
+output_dir: ./sweep_runs
+
+# Descriptive ID for this run; subdirectory name under output_dir.
+task_id: marmousi_forward
+
+seed: 0
+device: auto
+
+# ─── Grid + time axis ───────────────────────────────────────────────────────
+
+grid:
+  # Horizontal & vertical grid spacing in meters. Same value for x and z.
+  # For Marmousi the embedded model is on a 12.5 m grid.
+  dh: 12.5
+  # `shape` is inferred from `models[0].path`'s npy header when omitted.
+  # Uncomment + override only if you have no model file backing the run.
+  # shape: [281, 1361]   # Marmousi default
+
+time:
+  # Time step in seconds. Obey CFL: dt < dh / (v_max * sqrt(ndim)).
+  # Marmousi v_max ≈ 4700 m/s → max safe dt ≈ 1.9e-3, so 1e-3 is safe.
+  dt: 0.001
+  # Number of time samples. tmax = dt × nt. 4000 × 1e-3 = 4 s — enough
+  # to cover the deepest reflectors in Marmousi at this v_max.
+  nt: 4000
+
+# ─── Source wavelet ─────────────────────────────────────────────────────────
+
+wavelet:
+  # ricker             — synthesised at runtime; pick a centre frequency
+  # from_npy           — load a length-nt npy at the same dt as `time.dt`
+  # siren_pipeline_npz — load the output of `sweep-tasks estimate-wavelet`
+  kind: ricker
+  # Peak (dominant) frequency of the Ricker wavelet (Hz). Should satisfy
+  # ≥ 4 pts/wavelength: dh × fm × 4 ≤ v_min. For Marmousi dh=12.5 m,
+  # v_min ≈ 1500 m/s → fm ≤ 30 Hz; we pick 8 Hz for a wide-band signal.
+  fm: 8.0
+  # Peak-time delay of the Ricker (s). Pick ≥ 1/fm so the wavelet is
+  # zero at t=0 (causal). 0.125 s = 1/fm.
+  delay: 0.125
+  # Multiplicative scale on the wavelet amplitude.
+  scale: 1.0
+
+# ─── Acquisition geometry ───────────────────────────────────────────────────
+
+geometry:
+  # Three resolver kinds:
+  #   line       — auto-generate evenly-spaced sources / receivers
+  #   explicit   — hard-coded source / receiver coordinate lists
+  #   from_plan  — load a SeismicPlan npz (used for field data)
+  kind: line
+  # Sources at z=1 grid cell from the top; one every 50 cells in x.
+  sources:
+    step: 50
+    depth: 1
+  # Receivers at z=18 cells (~225 m for Marmousi dh=12.5); every cell.
+  receivers:
+    step: 1
+    depth: 18
+
+# ─── Wave-equation physics ──────────────────────────────────────────────────
+
+physics:
+  # Solver. "Acoustic" = constant-density acoustic wave equation.
+  equation: Acoustic
+  # FD spatial order (2/4/6/8). Higher → more accurate, more memory.
+  spatial_order: 8
+  # PML thickness in grid cells. 20–40 is typical.
+  abcn: 20
+  # Free-surface at z=0. Set true for marine surveys (with sea surface),
+  # false for synthetic underground / no-free-surface experiments.
+  free_surface: false
+  # PML kind. cpmlr is the C-backend's high-quality complex-frequency variant.
+  pml_type: cpmlr
+  # Source / receiver directional sensitivity. "h1" = horizontal-stress
+  # component (hydrophone-like).
+  source_type: [h1]
+  receiver_type: [h1]
+
+# ─── Compute backend ────────────────────────────────────────────────────────
+
+backend:
+  # "eager" = pure-torch autograd (slow but architecture-independent)
+  # "c"     = sweep CUDA C kernels (fast; requires sweep_cuda build)
+  impl: eager
+  use_ckpt: false
+
+# ─── Velocity (and other physical-property) models ──────────────────────────
+#
+# `models:` is a list because some equations need multiple fields
+# (Elastic: vp + vs + rho; Acoustic: just vp). Each entry has a `name`
+# matching the equation's MODEL_SPECS, plus EITHER `path` (npy) OR
+# `constant` + `shape` (for synthetic constants).
+
+models:
+  - name: vp
+    # Replace with the path to your velocity model on disk (a 2-D npy of
+    # shape (nz, nx) on the same dh grid).
+    path: ./vp_true.npy

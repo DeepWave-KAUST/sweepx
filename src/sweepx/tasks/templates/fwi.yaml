@@ -1,0 +1,254 @@
+# sweep-tasks FWI task YAML — annotated template.
+#
+# Generate with:    sweep-tasks init fwi -o my_fwi.yaml
+# Run with:         sweep-tasks run my_fwi.yaml
+# Multi-GPU:        sweep-tasks run my_fwi.yaml --nproc-per-node 4
+#
+# Defaults shown below match the Viking 2-D 6-stage / 30 Hz production
+# reference run. Adjust paths, grid shape, optimizer LR, and the
+# multiscale `stages:` ladder for your own dataset.
+
+# ─── Identity ───────────────────────────────────────────────────────────────
+
+# Which runner backend handles this YAML. Must be "fwi" for FWI tasks.
+task_type: fwi
+
+# Where outputs land. The runner creates a sub-directory `<task_id>/` under
+# this with `output/`, `figures/`, `gradients/`, `qc/`, `run_summary.json`.
+output_dir: ${VIKING_HOME}/run/viking_fwi
+
+# Unique tag for this run; used as the subdirectory name under output_dir
+# and as the task ID in status / log files. Pick something descriptive.
+task_id: viking_fwi_6stage_v1
+
+# RNG seed — affects shot batching, SIREN init, dropout, etc. Pin for
+# reproducibility.
+seed: 2026
+
+# GPU selection. "auto" picks the first visible CUDA device. Set to a
+# specific index (e.g. 0) or "cpu" for CPU-only debugging.
+device: auto
+
+# ─── Grid + time axis ───────────────────────────────────────────────────────
+
+grid:
+  # Horizontal & vertical grid spacing in meters. Should satisfy
+  # ≥ 4 pts/wavelength at the highest frequency of your `stages:` ladder
+  # given v_min. For Viking with v_min=1500 m/s and max 30 Hz:
+  # 1500 / (30 × 4) = 12.5 m.
+  dh: 12.5
+  # `shape` (= [nz, nx] in 2-D or [nz, ny, nx] in 3-D) is **inferred from
+  # init_model.path's npy header** when omitted, which is what you usually
+  # want. Only set it explicitly when you have no init_model file (e.g.
+  # pure-constant starting model with no .npy backing) or you want to
+  # crop / extend the grid relative to the model.
+  # shape: [401, 2305]   # Viking grid 28.8 km × 5 km @ dh=12.5 m
+
+time:
+  # Time step in seconds. Must satisfy CFL: dt < dh / (v_max * sqrt(ndim)).
+  # For Viking @ dh=12.5, v_max=5500: max safe dt ≈ 1.6e-3, so 1e-3 is safe.
+  dt: 0.001
+  # Number of time samples. tmax_s = dt × nt. Viking: 6000 × 1e-3 = 6.0 s.
+  nt: 6000
+
+# ─── Source wavelet ─────────────────────────────────────────────────────────
+
+wavelet:
+  # Loader kind:
+  #   ricker            — generated; needs `frequency_hz` and `delay_s`
+  #   siren_pipeline_npz — load from npz with `wavelet` / `time_s` arrays
+  #                        (what `sweep-tasks estimate-wavelet` writes)
+  #   raw_npy            — 1-D float npy at the same dt as `time.dt`
+  kind: siren_pipeline_npz
+  path: ${VIKING_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
+  # Multiplicative scale; bump up if forward syn amplitude is too small
+  # against obs. Typically 1.0 when the wavelet was estimated from data.
+  scale: 1.0
+
+# ─── Acquisition geometry ───────────────────────────────────────────────────
+
+geometry:
+  # Three resolver kinds:
+  #   from_plan          — sweep_io SeismicPlan (preferred; from `build-plan`)
+  #   from_segy_headers  — read directly from a SEG-Y file's trace headers
+  #   explicit           — hard-coded source/receiver lists (small synthetic)
+  kind: from_plan
+  plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
+  # When True, snap source/receiver positions to the FWI grid and drop
+  # duplicates within the same grid cell (typical for streamer geometry).
+  dedupe: true
+
+# Observed data — must match `geometry`. For `from_plan` use `obs.plan`.
+obs:
+  plan:
+    plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
+    # cache_all=true: load every selected trace into RAM at task start.
+    # 2-D Viking (~660 MB) fits easily; for 3-D OBN set false (per-iter read).
+    cache_all: true
+
+# ─── Wave-equation physics ──────────────────────────────────────────────────
+
+physics:
+  # Solver. Currently "Acoustic" (constant-density acoustic).
+  equation: Acoustic
+  # FD spatial order (2/4/6/8). Higher → more accurate per cell, more memory.
+  # 6 is the typical sweet spot.
+  spatial_order: 6
+  # PML thickness in grid cells. 20–40 is normal; thicker for low frequencies.
+  abcn: 20
+  # Free-surface at z=0 (typical for marine streamer data).
+  free_surface: true
+  # PML kind. cpmlr is the C-backend's high-quality complex-frequency variant.
+  pml_type: cpmlr
+  # Source/receiver type for the directional sensitivity calculation. "h1"
+  # is the horizontal-stress component for streamer / OBN hydrophones.
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+# ─── Compute backend ────────────────────────────────────────────────────────
+
+backend:
+  # "c"     — CUDA C kernels (production, fastest, requires sweep_cuda build)
+  # "eager" — torch eager (slow, GPU-architecture-independent, good for debug)
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      # boundary checkpointing keeps only the PML boundary at every time
+      # step (memory-light, recomputes interior at backward); "full" stores
+      # every wavefield (fastest backward, biggest memory); "ckpt" is the
+      # custom user-defined chunk schedule.
+      strategy: boundary
+      boundary:
+        # Where to stash boundary tensors. "gpu" is fastest; "cpu" trades
+        # PCIe bandwidth for VRAM headroom.
+        storage: gpu
+
+# ─── Starting velocity model ────────────────────────────────────────────────
+
+init_model:
+  # Which physical parameter the npy holds (vp for acoustic).
+  name: vp
+  # Path to an (nz, nx) float npy. Must be on the same grid as `grid.shape`.
+  path: ${VIKING_HOME}/run/models/viking_initial_model_12.5m.npy
+
+# ─── Optimization ──────────────────────────────────────────────────────────
+
+optimizer:
+  # adam / sgd / lbfgs / nadam (Adam recommended for FWI).
+  kind: adam
+  # Learning rate — the most important hyperparameter to tune. For grid-mode
+  # FWI on vp scale 1500–5500 m/s, lr in 5–50 m/s is typical. For SIREN
+  # reparam (below), lr is normalized by `reparam.vp_std` so use ~1e-4.
+  lr: 25.0
+  # Numerical stability epsilon. 1e-16 forces tight Adam behaviour;
+  # default 1e-8 is fine for most cases.
+  eps: 1.0e-16
+
+scheduler:
+  # constant / cosine / step / polynomial. Constant is fine for FWI;
+  # cosine helps when running > 100 iter/stage.
+  kind: constant
+
+# ─── Loss ──────────────────────────────────────────────────────────────────
+
+loss:
+  # mse           — L2 amplitude+phase
+  # trace_cosine  — per-trace normalized cosine; robust to amplitude
+  #                 imbalance, recommended for field data
+  # wasserstein   — optimal transport, helps with cycle-skip but expensive
+  kind: trace_cosine
+  # Subtract each trace's mean before cosine — kills DC drift.
+  trace_cosine_demean: true
+
+# ─── Hard bounds on the velocity update ─────────────────────────────────────
+
+model_bounds:
+  vp:
+    # Hard clip applied after every optimizer step. Pick from your initial
+    # model's range + a 10–20% safety margin.
+    min: 1450.0
+    max: 5500.0
+
+# ─── Optional: SIREN + hash reparameterization (recommended for FWI) ────────
+#
+# Reparameterizes vp(x,z) as a small MLP with multi-resolution hash encoding
+# (an INR). Massively reduces the null-space and stabilizes the gradient
+# without restricting the model class. Comment out the whole block to
+# fall back to plain grid-space optimization.
+
+reparam:
+  kind: velocity_inr
+  # SIREN MLP topology.
+  hidden_features: 128
+  hidden_layers: 2
+  first_omega0: 10.0
+  hidden_omega0: 10.0
+  use_bias: false
+  # SIREN outputs are scaled by vp_std and added to vp_mean. Tune vp_std to
+  # the expected range of perturbations you want the network to express.
+  vp_mean: 0.0
+  vp_std: 400.0
+  # When False, the INR predicts a residual on top of init_model.
+  direct_velocity: false
+  lr: 1.0e-4
+  # Backward strategy for the INR. two_pass_full is the canonical choice
+  # (one forward → one backward on the wave-equation, one full backward on
+  # the network).
+  backward_mode: two_pass_full
+  # Multi-resolution hash encoding (the "hash" in "SIREN+hash"). Provides
+  # local feature resolution that the global SIREN can't, accelerating
+  # convergence on small-scale features (faults, salt).
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 1
+    log2_size: 18
+    base_resolution: 16
+    finest_resolution: 512
+
+# ─── Per-shot local-window optimization (optional, recommended) ──────────────
+#
+# Instead of touching the whole vp grid every iteration, only update the
+# region within (padding_x_m, padding_z_m) of the shot's source+receivers.
+# Dramatically cheaper for long streamer lines.
+
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0
+  padding_z_m: 0.0
+  full_depth: true
+  min_width_m: 0.0
+
+# ─── Iteration counts (top-level; overridden per-stage below) ────────────────
+
+epochs: 300                    # total iters across all stages
+batchsize: 48                  # default batch_size before stages override
+train_shot_batchsize: 1        # gradient micro-batch per forward solve
+show_every: 10                 # console-log every N iters
+
+# ─── Multiscale stages (low → high frequency) ───────────────────────────────
+#
+# Each stage takes `epochs` iterations on its own grid (dh_m, dt_s, nt) and
+# bandpass-filtered observed data. Starting low-frequency / coarse-grid
+# and ramping up is the canonical FWI recipe — fights cycle-skip and
+# saves compute on the easy stages.
+
+stages:
+  - {epochs: 50, batch_size: 48,  dh_m: 75.0,  dt_s: 0.004,  nt: 1500, bandpass: {lo_hz: 2.0, hi_hz:  5.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 64,  dh_m: 37.5,  dt_s: 0.002,  nt: 3000, bandpass: {lo_hz: 2.0, hi_hz: 10.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 80,  dh_m: 25.0,  dt_s: 0.0015, nt: 4000, bandpass: {lo_hz: 2.0, hi_hz: 15.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 96,  dh_m: 18.75, dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 20.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 112, dh_m: 15.0,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 25.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 128, dh_m: 12.5,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0, order: 4, target: syn}}
+
+# ─── QC artifacts written during the run ────────────────────────────────────
+
+qc:
+  every_n_epochs: 10           # cadence for the per-iter QC PNGs
+  vp_png: true                 # current vp model snapshot
+  vp_diff_png: true            # Δvp from init_model
+  gradient_png: false          # per-iter ∂loss/∂vp (large, off by default)
+  shot_gather: true            # N obs/syn side-by-side panels
+  shot_gather_n_shots: 2
+  loss_curve: true             # cumulative loss curve PNG (final-only)

@@ -1,11 +1,14 @@
 """YAML <-> TaskSpec round-trip and `new_template` factory.
 
 Relative paths inside the YAML are resolved against the YAML file's parent
-directory at load time.
+directory at load time. ``$VAR`` / ``${VAR}`` inside path-like values is
+expanded against the current process environment first (so a portable
+template can be authored with ``path: ${MARMOUSI_HOME}/vp_true.npy``).
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +27,8 @@ def _resolve_paths(value: Any, base: Path) -> Any:
     We can't know which strings are paths without inspecting the schema, so
     instead we walk the raw dict before validation and treat any key named
     `path` or `npy_path` whose value is a non-absolute string as relative to
-    `base`.
+    `base`. ``$VAR`` / ``${VAR}`` is expanded against the environment
+    before relative-to-absolute resolution.
     """
 
     if isinstance(value, dict):
@@ -45,6 +49,12 @@ def _resolve_paths(value: Any, base: Path) -> Any:
 def _resolve_one(v: Any, base: Path) -> Any:
     if not isinstance(v, str):
         return v
+    # Expand $VAR / ${VAR} against the current environment first so templates
+    # like ``${MARMOUSI_HOME}/vp_true.npy`` work without pre-`envsubst`.
+    # Unset variables are left as-is (matches expandvars semantics) — they
+    # then fall through to the relative-path branch, which gives a clear
+    # FileNotFoundError downstream rather than silently dropping the prefix.
+    v = os.path.expandvars(v)
     p = Path(v)
     if p.is_absolute():
         return str(p)

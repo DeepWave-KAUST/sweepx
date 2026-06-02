@@ -68,6 +68,56 @@ def test_rebase_geometry_shifts_correctly():
 
 
 # ---------------------------------------------------------------------------
+# 3-D variants of the helpers
+# ---------------------------------------------------------------------------
+
+
+class _DummyWinSpec3D(_DummyWinSpec):
+    def __init__(self, padding_x_m=100.0, padding_y_m=None, padding_z_m=0.0,
+                 full_depth=True, min_width_m=0.0):
+        super().__init__(padding_x_m=padding_x_m, padding_z_m=padding_z_m,
+                         full_depth=full_depth, min_width_m=min_width_m)
+        self.padding_y_m = padding_y_m
+
+
+def test_window_3d_tightly_encloses_geometry():
+    # 1 shot at (x=50, y=30, z=4); receivers spread on (x, y). 100 m / dh=10 m
+    # = 10 cells of pad on x and y; full_depth=True keeps the whole z column.
+    sources = np.array([[50, 30, 4]])
+    receivers = np.array([[[40, 25, 6], [55, 35, 6], [60, 30, 6]]])
+    full_shape = (32, 64, 80)
+    win = _DummyWinSpec3D(padding_x_m=100.0, padding_y_m=None, full_depth=True)
+    out = _compute_local_window(sources, receivers, full_shape, dh=10.0, win_spec=win)
+    assert len(out) == 6, f"expected 6-tuple for 3-D, got {out}"
+    z0, z1, y0, y1, x0, x1 = out
+    assert (z0, z1) == (0, 32)
+    assert (y0, y1) == (max(0, 25 - 10), min(64, 35 + 10 + 1))
+    assert (x0, x1) == (max(0, 40 - 10), min(80, 60 + 10 + 1))
+
+
+def test_window_3d_padding_y_overrides_x_when_set():
+    # Place coords away from edges so padding doesn't clamp.
+    sources = np.array([[40, 40, 1]])
+    receivers = np.array([[[40, 40, 1]]])
+    full_shape = (16, 80, 80)
+    win = _DummyWinSpec3D(padding_x_m=50.0, padding_y_m=200.0)
+    _, _, y0, y1, x0, x1 = _compute_local_window(
+        sources, receivers, full_shape, dh=10.0, win_spec=win,
+    )
+    # x pad = 5 cells; y pad = 20 cells (overridden by padding_y_m).
+    assert (x1 - x0) - 1 == 2 * 5
+    assert (y1 - y0) - 1 == 2 * 20
+
+
+def test_rebase_geometry_3d_shifts_correctly():
+    sources = np.array([[50, 30, 6]])
+    receivers = np.array([[[40, 25, 6], [60, 35, 6]]])
+    s, r = _rebase_geometry_to_window(sources, receivers, z0=2, x0=30, y0=10)
+    assert (s == np.array([[20, 20, 4]])).all()
+    assert (r == np.array([[[10, 15, 4], [30, 25, 4]]])).all()
+
+
+# ---------------------------------------------------------------------------
 # End-to-end smoke
 # ---------------------------------------------------------------------------
 
@@ -210,4 +260,95 @@ def test_local_window_yaml_shortcut_false(tmp_path):
     parsed = load_task(_write(spec, tmp_path / "shortcut_false.yaml"))
     assert parsed.local_model_window is None
     result = TaskRunner().run(parsed)
+    assert result.status.state == "success", result.status.error
+
+
+# ---------------------------------------------------------------------------
+# 3-D end-to-end smoke
+# ---------------------------------------------------------------------------
+
+
+def _tiny_3d_grid_models(tmp_path: Path):
+    shape = (16, 16, 24)  # (nz, ny, nx)
+    nz = shape[0]
+    z = np.arange(nz, dtype=np.float32)[:, None, None] / max(nz - 1, 1)
+    true_vp = (2200.0 + 600.0 * z * np.ones(shape, dtype=np.float32)).astype(np.float32)
+    init_vp = np.full(shape, 2500.0, dtype=np.float32)
+    true_path = tmp_path / "true3d.npy"
+    init_path = tmp_path / "init3d.npy"
+    np.save(true_path, true_vp)
+    np.save(init_path, init_vp)
+    return true_path, init_path
+
+
+def _base_fwi_3d_spec(tmp_path, init_path, true_path):
+    # Sources clustered around the model centre; receivers as a 3x2 grid.
+    # Per-shot crops therefore exercise the lateral (x, y) bbox + abcn pad.
+    return {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 50.0},
+        "time": {"dt": 0.002, "nt": 200},
+        "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.1, "scale": 1.0},
+        "geometry": {
+            "kind": "explicit",
+            "sources": [[6, 8, 2], [14, 8, 2]],
+            "receivers": [
+                [4, 4, 4], [10, 4, 4], [16, 4, 4],
+                [4, 12, 4], [10, 12, 4], [16, 12, 4],
+            ],
+        },
+        "physics": {
+            "equation": "Acoustic3D", "spatial_order": 4, "abcn": 6,
+            "free_surface": False, "pml_type": "cpmlr",
+            "source_type": ["h1"], "receiver_type": ["h1"],
+        },
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "path": str(init_path)},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+    }
+
+
+def test_local_window_3d_runs_and_loss_decreases(tmp_path):
+    """3-D LocalModelWindow path: per-batch lateral bbox crop on Acoustic3D.
+
+    Smoke confirmation that the dispatcher accepts the 6-tuple from
+    ``_compute_local_window`` and that PyTorch's slice-op autograd
+    scatters the gradient back to the full ``(nz, ny, nx)`` vp leaf.
+    """
+    true_path, init_path = _tiny_3d_grid_models(tmp_path)
+    spec = _base_fwi_3d_spec(tmp_path, init_path, true_path)
+    spec.update({
+        "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
+        "epochs": 3, "batchsize": 2, "show_every": 1,
+        "task_id": "fwi_lw_3d",
+        "local_model_window": {
+            "enabled": True,
+            "padding_x_m": 150.0,
+            "padding_y_m": 150.0,
+            "full_depth": True,
+        },
+    })
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "lw3d.yaml")))
+    assert result.status.state == "success", result.status.error
+    assert result.status.summary["loss_decreased"] is True
+
+
+def test_local_window_3d_batch_one_acts_per_shot(tmp_path):
+    """3-D LocalModelWindow + ``batchsize=1`` exercises the per-shot crop
+    path that the user asked for (one bbox per physical shot)."""
+    true_path, init_path = _tiny_3d_grid_models(tmp_path)
+    spec = _base_fwi_3d_spec(tmp_path, init_path, true_path)
+    spec.update({
+        "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
+        "epochs": 2, "batchsize": 1, "show_every": 1,
+        "task_id": "fwi_lw_3d_per_shot",
+        "local_model_window": {
+            "enabled": True,
+            "padding_x_m": 100.0,
+            # padding_y_m omitted → falls back to padding_x_m
+            "full_depth": True,
+        },
+    })
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "lw3d_b1.yaml")))
     assert result.status.state == "success", result.status.error

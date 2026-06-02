@@ -56,14 +56,19 @@ sweep-tasks build-index \
 
 ```bash
 # Submit via sbatch with `--ntasks=50 --cpus-per-task=1 --mem=192G`:
-mpiexec -n "$SLURM_NTASKS" sweep-tasks build-index \
+sweep-tasks build-index -n "$SLURM_NTASKS" \
     --segy-root /path/to/segy_dir \
     --glob '*.sgy' \
     --out /path/to/dataset_index.npz \
-    --mpi \
     --source-depth-m 9.0 \
     --receiver-z-byte 40
 ```
+
+`-n N` is the convenience shortcut for `mpiexec -n N sweep-tasks
+build-index --mpi …` — it re-execs the same command under `mpiexec`
+internally and adds `--mpi` automatically, so no explicit `mpiexec`
+wrapper is needed. The explicit `mpiexec -n N … --mpi` form still
+works for environments where you want to launch ranks yourself.
 
 ### Per-dataset header overrides
 
@@ -192,27 +197,63 @@ sbatch your_fwi.sbatch
 
 ## End-to-end example (Viking 2-D)
 
+Quick summary below assuming **one local GPU, no SLURM**. The full
+walkthrough — including the public S3 download URLs, SEG-Y header
+specs, the legacy wavelet / initial-model bridge, the post-filter
+recipe, and an optional appendix on SLURM / ibex sbatch entry points —
+lives in [`docs/datasets/viking/README.md`](datasets/viking/README.md).
+
 ```bash
-ssh glogin.ibex.kaust.edu.sa
-mkdir -p ${SWEEP_RUNS_ROOT}/viking_unified
+# Pick a writable work folder (any local path).
+export VIKING_HOME=$HOME/viking
+mkdir -p $VIKING_HOME/{raw,run}
+
+# Step 0: one-time download of seismic.segy + Farfield.dat (~1.4 GB).
+# Full URLs in docs/datasets/viking/README.md § Step 0.
 
 # Step 1: scan SEG-Y → index (~10 s for Viking 1001 shots)
 sweep-tasks build-index \
-    --segy-root ${PROJECT_DATA_ROOT}/results/field_data/viking/raw \
+    --segy-root $VIKING_HOME/raw \
     --glob 'seismic.segy' \
-    --out ${SWEEP_RUNS_ROOT}/viking_unified/viking_index.npz \
-    --num-workers 8 --progress
+    --out $VIKING_HOME/run/viking_index.npz \
+    --num-workers 8 --progress \
+    --source-depth-m 6.0 --receiver-depth-m 10.0
 
 # Step 2: build CSG plan with no filter (= use all 1001 shots × 120 receivers)
 sweep-tasks build-plan \
-    --index ${SWEEP_RUNS_ROOT}/viking_unified/viking_index.npz \
+    --index $VIKING_HOME/run/viking_index.npz \
     --grouping csg \
-    --out ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz \
+    --out $VIKING_HOME/run/viking_csg_plan.npz \
     --label "viking_full_csg"
 
-# Step 3: submit the FWI sbatch
-sbatch ${SWEEP_STACK_ROOT}/sweep-tasks/examples/sbatch/viking_from_plan_smoke.sbatch
+# Step 3 (legacy bridge, until ported): produce the SIREN-pipeline
+# wavelet and the 12.5 m initial vp via fwi_workflow-dev.
+#   fwi analyze-wavelet -d viking
+#   fwi estimate-wavelet -d viking
+#   fwi build-initial-model -d viking
+
+# Step 4 — single-GPU FWI (6-stage production, ~1 h on one V100).
+# Copy the example YAML and edit the wavelet / plan / init_model paths in it.
+sweep-tasks run $VIKING_HOME/run/viking_6stage.yaml
+# (multi-GPU on the same box: append --nproc-per-node N)
+
+# Step 5 — RTM + depth-tapered z-low-cut on the inverted vp.
+sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
+sweep-tasks filter-image \
+    $VIKING_HOME/run/viking_rtm/viking_rtm_v1/output/rtm_image_per_shot_normalised.npy \
+    --wavelength-m 300 --depth-m 600 --taper-m 400
 ```
+
+`sweep-tasks run` defaults to one local rank (in-process). For
+multi-GPU on the same box pass `--nproc-per-node N`; sweep-tasks
+re-execs itself under `torchrun --standalone --nproc_per_node=N`
+automatically when needed.
+
+For SLURM / ibex submission, see
+[§ "Running on a cluster"](datasets/viking/README.md#running-on-a-cluster-optional)
+in the Viking walkthrough — same `sweep-tasks run` invocations,
+just wrapped in `sbatch` templates that consume `SWEEP_*_ROOT` /
+`PROJECT_DATA_ROOT` environment variables.
 
 ## Post-processing — depth-tapered z-axis low-cut on RTM images
 

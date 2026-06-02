@@ -1,0 +1,79 @@
+# Marmousi 2-D — single-scale FWI from a 1-D linear init.
+#
+# Recovers vp_true from vp_linear_steep by running 100 Adam epochs at a
+# constant lr against an 8 Hz Ricker broadband source. Grid, wavelet,
+# and geometry match marmousi_forward.yaml so synthetic obs is
+# byte-identical to a Step-1 forward run.
+#
+# Quick-run:
+#   export MARMOUSI_HOME=$HOME/marmousi
+#   bash examples/tasks/marmousi_prepare.sh
+#   sweep-tasks run examples/tasks/marmousi_fwi.yaml
+# Multi-GPU:
+#   sweep-tasks run examples/tasks/marmousi_fwi.yaml --nproc-per-node 4
+
+task_type: fwi
+output_dir: ${MARMOUSI_HOME}/sweep_runs
+task_id: marmousi_fwi
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000                  # 7 s record (1 s pre-source headroom + 6 s propagation)
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0                # 1 s — large enough that the multiscale yaml's 0.5 Hz low-cut bandpass doesn't truncate the filtered Ricker's left tail at t=0.
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic         # other physics knobs (spatial_order, abcn, pml_type, source_type, receiver_type) all use schema defaults.
+
+backend:
+  impl: c                    # fused C/CUDA kernels — much smaller memory footprint than eager autograd and ~3-5× faster. Requires sweep's CUDA extension built for your sm_X target; fall back to `eager` if unavailable.
+  cuda_options:
+    memory:
+      # Boundary-saving adjoint (Symes 2007): only the PML-zone wavefield
+      # slab is stored per timestep; the full wavefield is reconstructed
+      # backwards in time during the adjoint pass. Exact gradient with
+      # O(nt × N_boundary) memory instead of O(nt × N_total).
+      strategy: boundary
+      boundary: { storage: gpu }   # also "cpu" / "disk" for very large jobs
+
+# Starting velocity — 1-D linear gradient (1500 m/s water layer for the
+# top 37 rows, then linear ramp 1500→4000 m/s below the seafloor).
+# See docs/datasets/marmousi/README.md for why this particular init.
+init_model:
+  name: vp
+  path: ${MARMOUSI_HOME}/vp_linear_steep.npy
+
+# Observed data. `synthetic_from`: the runner re-runs forward modelling
+# from vp_true at task start (self-contained, doesn't need Step 1).
+# Alternative: `npy_path: <path/to/record.npy>` to consume Step 1's output.
+obs:
+  synthetic_from:
+    name: vp
+    path: ${MARMOUSI_HOME}/vp_true.npy
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16               # overrides the schema default (1e-22) for stability with the obs scale on this grid
+
+loss:
+  kind: mse                  # alt: l1, huber, trace_cosine
+
+epochs: 100
+batchsize: 4                 # shots per gradient step. 4 fits ~16 GB cards; bump to 8+ on 24+ GB cards for faster wall time.
+
+qc:
+  every_n_epochs: 9999       # >> total epochs ⇒ QC only fires at epoch 0 + the final epoch (the runner always forces last). Saves ~100 s of matplotlib overhead vs the default 10. Set to e.g. 10 to see the inversion evolve.
+  shot_gather: true          # 4-panel obs vs syn comparison (non-default; the runner skips it otherwise)
+  shot_gather_n_shots: 2

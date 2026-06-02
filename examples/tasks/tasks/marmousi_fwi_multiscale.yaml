@@ -1,0 +1,106 @@
+# Marmousi 2-D FWI — 4-stage multiscale (Bunks 1995 frequency continuation).
+#
+# Same grid + geometry + 8 Hz Ricker as marmousi_fwi.yaml. "Multiscale"
+# here means: each stage low-passes the data to a progressively higher
+# cutoff, so the loss only sees a low-frequency view of the wavefield
+# at first, then progressively reveals higher frequencies. The source
+# wavelet is held fixed across stages.
+#
+# How the bandpass works (see StageSpec.bandpass + StageBandpass):
+#  - At stage entry the runner low-passes the pristine obs once.
+#  - With `target: wavelet` (used here) it also filters the source
+#    wavelet, so syn comes out naturally band-limited and we skip the
+#    per-iteration filtfilt on syn. Cheaper than the default `target: syn`.
+#  - At the next stage, the filter is re-applied to the *pristine* obs
+#    + wavelet (filters don't compose).
+#
+# Quick-run:
+#   export MARMOUSI_HOME=$HOME/marmousi
+#   bash examples/tasks/marmousi_prepare.sh
+#   sweep-tasks run examples/tasks/marmousi_fwi_multiscale.yaml
+
+task_type: fwi
+output_dir: ${MARMOUSI_HOME}/sweep_runs
+task_id: marmousi_fwi_multiscale
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000                  # 7 s record (1 s pre-source headroom + 6 s propagation)
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0                # 1 s — needed for the stage-1 0.5 Hz low-cut: the filtered Ricker's left tail extends ~1 s before its peak; smaller delay would clip it at t=0.
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary     # exact-adjoint boundary-saving (see marmousi_fwi.yaml)
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  path: ${MARMOUSI_HOME}/vp_linear_steep.npy
+
+obs:
+  synthetic_from:
+    name: vp
+    path: ${MARMOUSI_HOME}/vp_true.npy
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16
+
+loss:
+  kind: mse
+
+# Four-stage Bunks-style frequency continuation, starting from an
+# extremely low band to break cycle-skip from the linear-gradient init.
+# The final stage drops the bandpass entirely so the inversion finishes
+# against the full broadband obs.
+#
+#  - Stage 1 (≤ 2 Hz):  kinematic-only — wavefield smooth enough that the
+#                        gradient lands in the correct basin even from
+#                        the 1-D init; no cycle-skip.
+#  - Stage 2 (≤ 5 Hz):  long-wavelength reflectors.
+#  - Stage 3 (≤ 10 Hz): mid-resolution layer structure.
+#  - Stage 4 (broadband): fine-detail carve-out with the smallest LR.
+#
+# `lo_hz: 0.5` is a numerical-safety low cut (kills DC drift); cycle-skip
+# avoidance is driven by the `hi_hz` ladder. `lr_scale` decreases so
+# high-frequency stages don't trash the kinematic structure earlier
+# stages locked in.
+stages:
+  - epochs: 25
+    bandpass: { lo_hz: 0.5, hi_hz: 2.0,  target: wavelet }
+    lr_scale: 1.0
+  - epochs: 25
+    bandpass: { lo_hz: 0.5, hi_hz: 5.0,  target: wavelet }
+    lr_scale: 0.7
+  - epochs: 25
+    bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
+    lr_scale: 0.4
+  - epochs: 25     # no bandpass — broadband finish
+    lr_scale: 0.2
+
+epochs: 100                  # required by schema; ignored when `stages:` is present
+batchsize: 4
+show_every: 5                # log per-epoch loss every 5 iters (default is 10)
+
+qc:
+  every_n_epochs: 9999       # QC only at epoch 0 + final (see marmousi_fwi.yaml)
+  shot_gather: true
+  shot_gather_n_shots: 2

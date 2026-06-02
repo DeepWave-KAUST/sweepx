@@ -1,0 +1,41 @@
+# Marmousi 2-D — synthetic forward modelling.
+#
+# Propagates an 8 Hz Ricker through vp_true to produce a synthetic obs
+# record. Pairs with marmousi_fwi.yaml / marmousi_fwi_multiscale.yaml
+# which invert it back.
+#
+# Quick-run:
+#   export MARMOUSI_HOME=$HOME/marmousi
+#   bash examples/tasks/marmousi_prepare.sh
+#   sweep-tasks run examples/tasks/marmousi_forward.yaml
+
+task_type: forward
+output_dir: ${MARMOUSI_HOME}/sweep_runs
+task_id: marmousi_forward
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000                  # 7 s record (1 s pre-source headroom + 6 s propagation)
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0                # 1 s — matches the multiscale yaml so the synthetic obs is consistent across all three tasks
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }    # ~28 shots along the top
+  receivers: { step: 1,  depth: 18 }   # streamer at z=18 cells
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+
+models:
+  - name: vp
+    path: ${MARMOUSI_HOME}/vp_true.npy

@@ -349,6 +349,12 @@ class PhysicsSpec(_Forbid):
     pml_type: str = "cpmlr"
     source_type: list[str] = Field(default_factory=lambda: ["h1"])
     receiver_type: list[str] = Field(default_factory=lambda: ["h1"])
+    # Irregular free-surface topography for curvilinear-grid equations
+    # (AcousticCurvilinear / ElasticCurvilinear). Path to a 1-D .npy of
+    # per-column surface row indices (length nx; topo[ix] = grid row of the
+    # surface at column ix). PropTorch builds the boundary-fitted grid from it.
+    # Distinct from the flat ``free_surface`` flag; None = no topo.
+    topography: Path | None = None
 
 
 class BackendSpec(_Forbid):
@@ -427,15 +433,25 @@ class ModelPlanSpec(_Forbid):
 
 
 class ModelBounds(_Forbid):
-    """Hard bounds applied via in-place clamp after every optimizer step."""
+    """Hard bounds applied via in-place clamp after every optimizer step.
 
+    Set ``enabled: false`` to keep the min/max values documented in the
+    YAML but suppress the clamp at runtime (and also suppress consumers
+    like the QC vp colormap range that read these bounds). Useful for
+    A/B-ing bounded vs unbounded inversion without restructuring the
+    config.
+    """
+
+    enabled: bool = True
     min: float | None = None
     max: float | None = None
 
     @model_validator(mode="after")
     def _at_least_one(self):
+        if not self.enabled:
+            return self
         if self.min is None and self.max is None:
-            raise ValueError("ModelBounds: at least one of min/max must be set.")
+            raise ValueError("ModelBounds: at least one of min/max must be set when enabled.")
         if self.min is not None and self.max is not None and self.min >= self.max:
             raise ValueError(f"ModelBounds: min ({self.min}) must be < max ({self.max}).")
         return self
@@ -462,6 +478,13 @@ class LocalModelWindowSpec(_Forbid):
     slicing automatically scatters the gradient back to the full vp
     tensor — no manual ``scatter_add`` needed.
 
+    Works for both 2-D ``(nz, nx)`` and 3-D ``(nz, ny, nx)`` grids. In
+    3-D the crop tightly encloses the batch in the lateral plane and is
+    padded by ``padding_x_m`` on x and ``padding_y_m`` on y (falling
+    back to ``padding_x_m`` when ``padding_y_m=None``); ``full_depth``
+    keeps the entire z column by default. Set ``batchsize=1`` upstream
+    to get a per-shot crop instead of per-batch.
+
     Cost: a brand-new solver is built for every distinct window shape.
     Solvers are cached by shape inside the runner state so repeated
     shapes (which is the common case at a given stage's dh) reuse
@@ -474,6 +497,7 @@ class LocalModelWindowSpec(_Forbid):
 
     enabled: bool = True
     padding_x_m: float = Field(ge=0, default=1500.0)
+    padding_y_m: float | None = Field(ge=0, default=None)
     padding_z_m: float = Field(ge=0, default=0.0)
     full_depth: bool = True
     min_width_m: float = Field(ge=0, default=0.0)
@@ -1118,6 +1142,13 @@ class FWISpec(BaseTaskSpec):
     freeze_top_n_rows: int = Field(ge=0, default=0)
     stages: list[StageSpec] | None = None
     resume_from: str | None = None  # task_id under output_dir to resume from
+    # Auto-resume from the *same* task_dir's checkpoint.pt when it exists
+    # (no need to set `resume_from` to the same task_id). Pair this with
+    # a fixed ``task_id:`` in the YAML so the directory is deterministic;
+    # ctrl-c during training will save a checkpoint at the next iter
+    # boundary, and re-running the same YAML picks up where it left off.
+    # When True but the file is absent, the run starts fresh silently.
+    resume: bool = False
     save_illumination: bool = False
 
     modeling_override: ModelingOverride | None = None
@@ -1364,6 +1395,9 @@ class LSRTMSpec(BaseTaskSpec):
     freeze_top_n_rows: int = Field(ge=0, default=0)
     stages: list[StageSpec] | None = None
     resume_from: str | None = None
+    # See ``FWISpec.resume`` for semantics: auto-resume from the same
+    # task_dir's checkpoint.pt when present; harmless when absent.
+    resume: bool = False
     save_illumination: bool = False
 
     modeling_override: ModelingOverride | None = None

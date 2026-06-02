@@ -226,15 +226,23 @@ def test_multisource_fwi_requires_sampling_block(tmp_path):
     assert "csg" in err or "grouping" in err
 
 
-def test_multisource_fwi_requires_source_encoding(tmp_path):
-    """Per-shot CRG (multi-GPU) mode not yet implemented; encoding off must fail."""
+def test_multisource_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
+    """Per-shot CRG (multi-GPU) mode is now wired. With
+    source_encoding absent, the runner must NOT raise the old
+    ``Per-shot CRG ... not yet wired`` NotImplementedError at init.
+
+    The downstream forward call may still fail in environments without
+    a working sweep CUDA build, but the failure must no longer reference
+    the per-shot-not-implemented gate.
+    """
     fixture = _build_tiny_multisource_fixture(tmp_path)
     spec = _build_multisource_spec(tmp_path, fixture)
     spec.pop("source_encoding")
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "noenc.yaml")))
-    assert result.status.state == "failed"
     err = (result.status.error or "").lower()
-    assert "per-shot" in err or "encoding" in err
+    # New behaviour: the per-shot init guard no longer fires.
+    assert "not yet wired" not in err
+    assert "per-shot crg" not in err
 
 
 def test_multisource_fwi_emits_ortho_slice_qc(tmp_path):

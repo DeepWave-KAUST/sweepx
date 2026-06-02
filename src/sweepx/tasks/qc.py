@@ -1109,6 +1109,8 @@ def run_epoch_qc(
         return written
     iter_tag = f"iter_{epoch:04d}.png"
     bounds = spec.model_bounds.get("vp") if hasattr(spec, "model_bounds") else None
+    if bounds is not None and not getattr(bounds, "enabled", True):
+        bounds = None  # ``enabled: false`` → no fixed colormap range; let matplotlib auto-scale
     vmin = bounds.min if bounds is not None and bounds.min is not None else None
     vmax = bounds.max if bounds is not None and bounds.max is not None else None
 

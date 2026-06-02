@@ -389,6 +389,83 @@ def test_fwi_resume_from_checkpoint(tmp_path):
     assert np.allclose(losses2[:2], losses1)
 
 
+def test_fwi_auto_resume_same_task_dir(tmp_path):
+    # ``resume: true`` + a fixed ``task_id`` → re-running the same YAML
+    # picks up the checkpoint left under the same task_dir. No need to
+    # set ``resume_from``.
+    spec_dict = _fwi_smoke_spec(tmp_path, epochs=2, task_id="autoresume",
+                                resume=True)
+    result1 = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "first.yaml")))
+    assert result1.status.state == "success", result1.status.error
+    losses1 = np.load(result1.task_dir / "output" / "loss.npy").tolist()
+    assert len(losses1) == 2
+    assert (result1.task_dir / "checkpoint.pt").exists()
+    # The first run starts fresh (no checkpoint yet) — resumed_from
+    # stays None, no "interrupted" flag.
+    assert result1.status.summary["resumed_from"] is None
+    assert result1.status.summary["interrupted"] is False
+
+    # Re-run with same task_id + more epochs → should auto-load the
+    # checkpoint and continue.
+    spec_dict2 = _fwi_smoke_spec(tmp_path, epochs=4, task_id="autoresume",
+                                 resume=True)
+    result2 = TaskRunner().run(load_task(_write(spec_dict2, tmp_path / "second.yaml")))
+    assert result2.status.state == "success", result2.status.error
+    assert result2.task_dir == result1.task_dir  # same task_id ⇒ same dir
+    losses2 = np.load(result2.task_dir / "output" / "loss.npy").tolist()
+    assert len(losses2) == 4
+    assert np.allclose(losses2[:2], losses1)
+    assert result2.status.summary["resumed_from"] == "autoresume"
+
+
+def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
+    # Simulate ctrl-c by patching ``_save_checkpoint`` so the very first
+    # invocation (end of iter 0) also fires a SIGINT to our own PID.
+    # This is deterministic — unlike a timer thread, it can't race past
+    # the iter loop or land mid-setup. After the signal: the handler
+    # arms ``stopper.requested``, the loop's ``should_stop`` check at
+    # end-of-iter 0 trips, and we break out cleanly with a checkpoint
+    # already on disk (the save itself just happened).
+    import os
+    import signal
+
+    from sweep_tasks import runner as _runner
+
+    real_save = _runner._save_checkpoint
+    call_count = {"n": 0}
+
+    def _save_then_sigint(task_dir, payload):
+        out = real_save(task_dir, payload)
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            os.kill(os.getpid(), signal.SIGINT)
+        return out
+
+    monkeypatch.setattr(_runner, "_save_checkpoint", _save_then_sigint)
+
+    spec_dict = _fwi_smoke_spec(tmp_path, epochs=5, task_id="stoptest",
+                                resume=True)
+    result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "stop.yaml")))
+
+    assert result.status.state == "success", result.status.error
+    assert result.status.summary["interrupted"] is True
+    assert result.status.summary["interrupted_at_epoch"] == 0
+    losses_partial = np.load(result.task_dir / "output" / "loss.npy").tolist()
+    assert len(losses_partial) == 1
+    assert (result.task_dir / "checkpoint.pt").exists()
+
+    # Resume the rest. Restore the un-patched ``_save_checkpoint`` so
+    # the 2nd run isn't interrupted, then re-run the same YAML.
+    monkeypatch.setattr(_runner, "_save_checkpoint", real_save)
+    result2 = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "stop2.yaml")))
+    assert result2.status.state == "success", result2.status.error
+    assert result2.status.summary["resumed_from"] == "stoptest"
+    losses_full = np.load(result2.task_dir / "output" / "loss.npy").tolist()
+    assert len(losses_full) == 5
+    # Iter-0 loss must match between the runs (resume preserves Adam state + RNG).
+    assert losses_full[0] == pytest.approx(losses_partial[0])
+
+
 def test_fwi_init_models_list_acoustic_smoke(tmp_path):
     # Multi-model `init_models` API path; for Acoustic the list is just [vp].
     true_path, init_path, _ = _tiny_grid_models(tmp_path)

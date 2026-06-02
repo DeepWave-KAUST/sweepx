@@ -1,0 +1,192 @@
+# sweep-tasks RTM task YAML — annotated template.
+#
+# Generate with:    sweep-tasks init rtm -o my_rtm.yaml
+# Run with:         sweep-tasks run my_rtm.yaml
+# Multi-GPU:        sweep-tasks run my_rtm.yaml --nproc-per-node 4
+#
+# RTM = reverse-time migration. For each shot we forward-model with the
+# given wavelet through the inverted vp, backpropagate the bandpass-
+# filtered observed data, and image-condition (cross-correlation, with
+# optional illumination normalization). The stack across all shots is
+# the RTM image.
+#
+# Defaults shown below mirror the canonical Viking RTM (3 km offset cap,
+# 3-25 Hz pass-band, illumination-normalized, depth-tapered z-low-cut
+# post-filter). Adjust paths + the bandpass for your dataset.
+
+# ─── Identity ───────────────────────────────────────────────────────────────
+
+task_type: rtm
+
+output_dir: ${VIKING_HOME}/run/viking_rtm
+task_id: viking_rtm_v1
+
+seed: 0
+device: auto
+
+# ─── Grid + time axis ───────────────────────────────────────────────────────
+#
+# Should match the FWI grid that produced `velocity_model.path`.
+
+grid:
+  # Horizontal & vertical grid spacing in meters. Should satisfy
+  # ≥ 4 pts/wavelength at the highest frequency of your `imaging.filter`
+  # given v_min.
+  dh: 12.5
+  # `shape` (= [nz, nx] in 2-D or [nz, ny, nx] in 3-D) is inferred from
+  # the npy header of `velocity_model.path` when omitted — usually what
+  # you want. Only set explicitly if you have no model file backing the
+  # run (rare for RTM).
+  # shape: [401, 2305]   # Viking grid 28.8 km × 5 km @ dh=12.5 m
+
+time:
+  dt: 0.001
+  nt: 6000                     # 6.0 s tmax — long enough for the deepest reflectors
+
+# ─── Source wavelet ─────────────────────────────────────────────────────────
+
+wavelet:
+  # Same wavelet used in FWI is standard.
+  kind: siren_pipeline_npz
+  path: ${VIKING_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
+  scale: 1.0
+
+# ─── Acquisition geometry + observed data ───────────────────────────────────
+#
+# Typically a *narrower-offset* plan than FWI uses — far-offset noise
+# pollutes the image. The Viking canonical RTM uses --offset-max-m 3000.
+
+geometry:
+  kind: from_plan
+  plan_path: ${VIKING_HOME}/run/viking_csg_3km.npz
+  dedupe: true
+
+obs:
+  plan:
+    plan_path: ${VIKING_HOME}/run/viking_csg_3km.npz
+    cache_all: true            # 2-D fits in RAM easily; flip to false for 3-D
+
+# ─── Wave-equation physics ──────────────────────────────────────────────────
+
+physics:
+  equation: Acoustic
+  spatial_order: 6
+  abcn: 20
+  free_surface: true
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+# ─── Compute backend ────────────────────────────────────────────────────────
+
+backend:
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+# ─── Velocity model to image with ───────────────────────────────────────────
+#
+# The final FWI vp from your benchmark run (or any other vp model you
+# trust). For a baseline image, use the *initial* vp instead — the
+# difference between baseline and inverted-vp RTM is a useful QC.
+
+velocity_model:
+  name: vp
+  path: ${VIKING_HOME}/run/viking_fwi/viking_fwi_6stage_v1/output/inverted_vp.npy
+
+# ─── Loss kind for the imaging condition ────────────────────────────────────
+#
+# RTM is technically not an inverse problem — `loss` here picks the
+# gradient form used to build the image:
+#   mse           — classical cross-correlation imaging condition
+#   trace_cosine  — normalized version; some noise robustness
+# Stick with mse for direct comparability to legacy RTM workflows.
+
+loss:
+  kind: mse
+  trace_cosine_demean: true
+
+# ─── Velocity bounds ────────────────────────────────────────────────────────
+#
+# Hard clip applied to the velocity (does NOT touch the image). Keep
+# wide enough to cover your model's true range.
+
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+# ─── Per-shot local-window (recommended for long streamer lines) ────────────
+
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0          # x-padding around source+receivers per shot
+  padding_z_m: 0.0
+  full_depth: true             # always image the full z range
+  min_width_m: 0.0
+
+# ─── Imaging condition + filters ────────────────────────────────────────────
+
+imaging:
+  # How many shots forward-modeled per minibatch (in parallel on GPU).
+  # 1 keeps memory bounded; bump up if VRAM allows for faster wall-clock.
+  shots_per_batch: 1
+
+  # Bandpass applied to observed data (always) and synthetics (when
+  # `filter_target=syn`). Picks the frequency band of the image — too low
+  # → blurry; too high → noisy. 3-25 Hz is the Viking canonical.
+  filter_lowcut_hz: 3.0
+  filter_highcut_hz: 25.0
+  filter_order: 4
+  filter_padtype: odd
+
+  # Where to apply the bandpass:
+  #   syn      — filter obs (once) AND syn (every batch). Equivalent to
+  #              the legacy / canonical fwi imaging workflow.
+  #   wavelet  — pre-filter the source wavelet once, skip per-batch syn
+  #              filtering. Numerically equivalent for linear acoustic
+  #              wave eqns, ~2× faster, but harder to debug.
+  filter_target: syn
+
+  # Tikhonov-style stabiliser when dividing by the illumination (source-
+  # wavefield energy). 1e-6 is the standard value; bump up to 1e-4 if you
+  # see ringing in deep-low-energy zones.
+  illumination_epsilon: 1.0e-6
+  # Divide every shot's image by its own illumination before stacking.
+  # On marine streamer this is what makes the deep section visible.
+  normalize_by_illumination: true
+
+  # Off saves disk; the per-shot images are usually only needed for QC.
+  save_per_shot: false
+
+  # Save a stacked image PNG every N batches as the run progresses
+  # (so you can sanity-check before the full 1001 shots finish).
+  live_update_every_batches: 10
+
+  loss_kind: mse               # gradient form for the imaging condition
+  trace_cosine_demean: true
+
+  # ─── Depth-tapered z-axis low-cut post-filter ─────────────────────────
+  #
+  # Applied to every saved imaging product after the RTM finishes — strips
+  # the slowly-varying-with-depth drift that dominates default colour scales
+  # on a stacked RTM. Comment out the whole `post_filter:` block to skip;
+  # the same algorithm is also exposed standalone via
+  #   sweep-tasks filter-image <output>.npy
+  # so you can re-run with different params without redoing the RTM.
+
+  post_filter:
+    enabled: true
+    wavelength_m: 300.0        # z-wavelength threshold for "slow drift"
+    depth_m: 600.0             # filter full-strength in 0..depth_m
+    taper_m: 400.0             # cosine ramp to zero over depth_m..depth_m+taper_m
+    clip_percentile: 1.0       # PNG vmin/vmax = ±percentile (1.0 = 1st/99th)
+    display_scale: 1.0         # multiplier on vmin/vmax half-width
+    cmap: sweep_image          # bundled sweep_viz diverging LUT
+                               # ('seismic' / 'gray' for legacy look)
+    targets: all               # filter all 6 imaging products
+    save_png: true

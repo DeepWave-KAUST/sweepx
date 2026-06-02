@@ -10,11 +10,24 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Shaowen Wang"},
+    {name = "Shaowen Wang", email = "shaowen.wang@kaust.edu.sa"},
 ]
 keywords = ["fwi", "lsrtm", "geophysics", "task", "yaml", "pydantic", "llm", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
-    "sweep",
+    "sweep-solver",
     "sweep-loss",
     "sweep-nn",
     "sweep-runner",
@@ -33,8 +46,16 @@ dev  = ["pytest>=7", "ruff", "black"]
 [project.scripts]
 sweep-tasks = "sweep_tasks.cli:main"
 
+
+[project.urls]
+Homepage = "https://github.com/DeepWave-KAUST/sweep-tasks"
+Issues   = "https://github.com/DeepWave-KAUST/sweep-tasks/issues"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+sweep_tasks = ["templates/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
