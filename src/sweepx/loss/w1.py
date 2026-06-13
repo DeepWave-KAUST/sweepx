@@ -37,8 +37,8 @@ from __future__ import annotations
 
 import torch
 
-from .base import BaseFWILoss, flatten_traces, to_canonical
 from ._utils import normalize_density, positive_transform
+from .base import BaseFWILoss, flatten_traces, to_canonical
 
 
 class Wasserstein1Loss(BaseFWILoss):

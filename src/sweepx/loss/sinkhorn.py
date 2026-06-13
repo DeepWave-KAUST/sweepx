@@ -42,12 +42,10 @@ References
 
 from __future__ import annotations
 
-import math
-
 import torch
 
-from .base import BaseFWILoss, flatten_traces, to_canonical
 from ._utils import normalize_density, positive_transform
+from .base import BaseFWILoss, flatten_traces, to_canonical
 
 
 def _log_sum_exp(a: torch.Tensor, dim: int) -> torch.Tensor:

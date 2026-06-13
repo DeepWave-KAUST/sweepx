@@ -32,6 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# GSOTLoss needs scipy's Hungarian solver at *runtime*. Everything else is
+# pure torch+numpy, so scipy is opt-in: `pip install sweep-loss[gsot]`.
+gsot = ["scipy>=1.8"]
 test = ["pytest>=7", "scipy>=1.8"]
 dev  = ["pytest>=7", "scipy>=1.8", "ruff", "black"]
 
@@ -43,6 +46,27 @@ Issues   = "https://github.com/DeepWave-KAUST/sweep-loss/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Ship the PEP 561 marker so downstream type-checkers use our annotations.
+sweep_loss = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# F = pyflakes, I = isort, W/E = pycodestyle, B = bugbear.
+# UP (pyupgrade) is intentionally NOT selected: this package targets py3.8
+# and deliberately uses `from __future__ import annotations` + quoted /
+# Optional annotations for clean 3.8 support, which UP would "modernise"
+# into 3.10+ idioms.
+select = ["F", "I", "W", "E", "B"]
+# E501: math-heavy docstrings/reference tables overflow 100 cols.
+# E741: single-letter names like O (obs spectrum) / l are conventional in
+#       the FFT / linear-algebra code here.
+ignore = ["E501", "E741"]

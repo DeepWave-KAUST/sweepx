@@ -261,11 +261,21 @@ class LogarithmicShinMinLoss(BaseFWILoss):
 
 
 class LaplaceL2Loss(BaseFWILoss):
-    """Laplace-domain L2 misfit (Shin-Cha 2008).
+    """Time-domain damped L2 misfit (Laplace-domain flavour, Shin-Cha 2008).
 
     The data are damped by :math:`e^{-s\\,t}` (with ``s > 0`` the damping
     rate) and then compared in L2.  Equivalent to the time-domain L2 of
     :math:`\\hat d(t) = e^{-s t} d(t)`.
+
+    .. note::
+
+       This is the **time-domain damped-L2** practical flavour
+       :math:`\\tfrac12\\sum_t (e^{-st}(d_s-d_o))^2`, *not* the exact
+       frequency-domain logarithmic Laplace misfit of Shin & Cha (2008,
+       eqs. 4-11), which uses :math:`\\log D(s)` of the complex-frequency
+       Helmholtz solution (i.e. :math:`|\\sum_t e^{-st} d|^2`, summing before
+       the square).  The two are not equivalent; this damped-L2 variant is
+       the one commonly used in time-domain FWI codes.
 
     Parameters
     ----------

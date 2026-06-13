@@ -50,8 +50,6 @@ References
 
 from __future__ import annotations
 
-import math
-
 import torch
 
 from .base import BaseFWILoss, flatten_traces, to_canonical

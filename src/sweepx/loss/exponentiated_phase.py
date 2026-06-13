@@ -39,8 +39,8 @@ from __future__ import annotations
 
 import torch
 
-from .base import BaseFWILoss
 from ._utils import hilbert
+from .base import BaseFWILoss
 
 
 class ExponentiatedPhaseLoss(BaseFWILoss):

@@ -74,7 +74,6 @@ import torch
 
 from .base import BaseFWILoss, flatten_traces, to_canonical
 
-
 try:
     from scipy.optimize import linear_sum_assignment as _scipy_lsa  # type: ignore
     HAS_SCIPY = True

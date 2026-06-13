@@ -62,14 +62,21 @@ def test_gradient_flow():
 
 
 def test_gamma_larger_smoother():
-    """Larger gamma should yield smaller per-trace loss because the soft-min
-    blends more paths (Cuturi & Blondel 2017, prop. 1)."""
+    """Larger gamma should yield smaller *raw* soft-DTW because the soft-min
+    blends more paths (Cuturi & Blondel 2017, prop. 1).
+
+    This monotonicity is a property of the raw soft-DTW, so we pin
+    ``divergence=False`` here.  The default ``divergence=True`` subtracts the
+    gamma-dependent self-terms sDTW(x,x)/sDTW(y,y) and is *not* monotone in
+    gamma (see Blondel-Mensch-Vert 2020), so the assertion below only holds
+    for the raw variant.
+    """
     nt, dt = 32, 1e-3
     t = np.arange(nt) * dt
     s = torch.tensor(_ricker(t, 0.012)).view(1, nt, 1, 1).double()
     o = torch.tensor(_ricker(t, 0.014)).view(1, nt, 1, 1).double()
-    cold = float(SoftDTWLoss(gamma=0.01, normalize_by_length=False, reduction="sum")(s, o))
-    hot = float(SoftDTWLoss(gamma=10.0, normalize_by_length=False, reduction="sum")(s, o))
+    cold = float(SoftDTWLoss(gamma=0.01, divergence=False, normalize_by_length=False, reduction="sum")(s, o))
+    hot = float(SoftDTWLoss(gamma=10.0, divergence=False, normalize_by_length=False, reduction="sum")(s, o))
     assert hot < cold
 
 

@@ -57,12 +57,10 @@ References
 
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 
+from ._utils import hilbert
 from .base import BaseFWILoss
-from ._utils import envelope, hilbert
 
 
 def _wrap_phase_diff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
