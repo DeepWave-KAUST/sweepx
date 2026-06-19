@@ -390,3 +390,19 @@ def test_multisource_fwi_requires_shared_shots_per_iter(tmp_path):
     import pytest
     with pytest.raises(Exception, match="shared_shots_per_iter"):
         load_task(_write(spec, tmp_path / "noshared.yaml"))
+
+
+def test_multisource_fwi_data_mask_runs_end_to_end(tmp_path):
+    """The data_mask switch runs end-to-end through the real TaskRunner FWI:
+    a broadcasting all-ones mask drives a full masked-misfit training loop to a
+    finite loss + output, exercising the new `_loss_sum`/`_mask_chunk` path."""
+    fixture = _build_tiny_multisource_fixture(tmp_path)
+    ones = tmp_path / "ones_mask.npy"
+    np.save(ones, np.ones((1,), dtype=np.float32))  # broadcasts over (nshots,nt,nrec[,nchan])
+    spec = _build_multisource_spec(tmp_path, fixture, epochs=2, extra={
+        "loss": {"kind": "mse", "data_mask_path": str(ones)},
+    })
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "masked.yaml")))
+    loss = np.load(result.task_dir / "output" / "loss.npy")
+    assert loss.size == 2
+    assert np.all(np.isfinite(loss))

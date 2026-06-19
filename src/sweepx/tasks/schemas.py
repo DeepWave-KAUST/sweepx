@@ -388,6 +388,11 @@ class LossSpec(_Forbid):
     # (matches fwi_workflow-dev's behavior).
     trace_cosine_demean: bool = True
     trace_cosine_eps: float = 1.0e-8
+    # Optional per-sample DATA mute mask (diving-wave window etc.). Path to a
+    # .npy broadcastable to obs (nshots, nt, nrec[, nchan]). When set, the
+    # data misfit is multiplied by it (window outside -> excluded); None = off
+    # (the FWI/LSRTM misfit then runs exactly as before).
+    data_mask_path: str | None = None
 
 
 class DataPlanSpec(_Forbid):

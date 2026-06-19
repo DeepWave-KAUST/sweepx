@@ -1087,6 +1087,24 @@ def _compute_loss(syn, obs, loss_spec):
     raise ValueError(f"Unknown loss kind '{kind}'.")
 
 
+def _loss_sum(syn, obs_chunk, loss_spec, mask_chunk=None):
+    """Pointwise misfit summed, optionally weighted by a per-sample data mask.
+    ``mask_chunk=None`` is bit-identical to the legacy ``_compute_loss(...).sum()``."""
+    pw = _compute_loss(syn, obs_chunk, loss_spec)
+    if mask_chunk is not None:
+        pw = pw * mask_chunk
+    return pw.sum()
+
+
+def _mask_chunk(data_mask, chunk, dev):
+    """Slice the per-shot data mask for a chunk (or broadcast it when its
+    leading dim is 1). Returns None when no mask is configured."""
+    if data_mask is None:
+        return None
+    m = data_mask if data_mask.shape[0] == 1 else data_mask[chunk]
+    return m.to(dev)
+
+
 def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
     """Construct a torch optimizer; supports per-model lr via dict."""
 
@@ -3451,6 +3469,31 @@ class TaskRunner:
                   flush=True)
             raise SystemExit(0)
 
+    def _get_data_mask(self, spec, obs, dev):
+        """Optional per-sample DATA mute mask (the on/off switch). Returns a CPU
+        float tensor broadcastable to ``obs`` (nshots, nt, nrec[, nchan]) loaded
+        from ``spec.loss.data_mask_path``, or None when unset -> the misfit runs
+        exactly as before. Cached after first load. Indexed per-chunk like obs."""
+        import torch
+        path = getattr(getattr(spec, "loss", None), "data_mask_path", None)
+        if not path:
+            return None
+        cached = getattr(self, "_data_mask_cache", None)
+        if cached is not None and cached[0] == path:
+            return cached[1]
+        m = torch.as_tensor(np.asarray(np.load(path)), dtype=torch.float32)
+        while m.ndim < obs.ndim:
+            m = m.unsqueeze(-1)          # per-trace (nshots,nt,nrec) -> add channel axis
+        try:
+            torch.broadcast_shapes(tuple(m.shape), tuple(obs.shape))
+        except RuntimeError as e:
+            raise ValueError(
+                f"data_mask_path shape {tuple(m.shape)} not broadcastable to "
+                f"obs {tuple(obs.shape)}: {e}"
+            )
+        self._data_mask_cache = (path, m)
+        return m
+
     def _fwi_train_step(self, spec, solver, wavelet, sources, receivers,
                         inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
                         *, dist_info=None, stage_batchsize: int | None = None,
@@ -3508,6 +3551,9 @@ class TaskRunner:
         sample = obs[:1]
         per_shot_numel = int(sample.numel())
         global_norm = float(per_shot_numel * global_batchsize)
+        data_mask = self._get_data_mask(spec, obs, dev)
+        if data_mask is not None:
+            global_norm = float(global_norm * max(float(data_mask.float().mean()), 1.0e-6))
 
         # Per-chunk forward input. In reparam mode we render a fresh vp
         # each chunk so the autograd graph from solver -> loss -> backward
@@ -3603,7 +3649,7 @@ class TaskRunner:
                         syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
                                                   stage_dt, order=syn_bandpass.order)
                     obs_chunk = obs[chunk].to(dev)
-                    loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                    loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 if reparam_net is None:
@@ -3678,7 +3724,7 @@ class TaskRunner:
                 if _TPROF: _sync(); _t_bp = _t.perf_counter()
                 obs_chunk = obs[chunk].to(dev)
                 if _TPROF: _sync(); _t_obs = _t.perf_counter()
-                loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
                 if _TPROF: _sync(); _t_loss = _t.perf_counter()
                 (loss_t / global_norm).backward()
                 if _TPROF: _sync(); _t_bwd = _t.perf_counter()
@@ -3818,7 +3864,7 @@ class TaskRunner:
                     syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
                                               stage_dt, order=syn_bandpass.order)
                 obs_chunk = obs[chunk].to(dev)
-                loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
                 (loss_t / global_norm).backward()
                 acc_loss_local += float(loss_t.detach().cpu())
                 if illum_on:
@@ -6341,6 +6387,9 @@ class TaskRunner:
         sample = obs[:1]
         per_shot_numel = int(sample.numel())
         global_norm = float(per_shot_numel * global_batchsize)
+        data_mask = self._get_data_mask(spec, obs, dev)
+        if data_mask is not None:
+            global_norm = float(global_norm * max(float(data_mask.float().mean()), 1.0e-6))
 
         if spec.optimizer.kind == "lbfgs":
             def _closure():
@@ -6350,7 +6399,7 @@ class TaskRunner:
                     syn = lsrtm_solver(wavelet, sources[chunk], receivers[chunk],
                                        models=[vp, ref])
                     obs_chunk = obs[chunk].to(dev)
-                    loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+                    loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
@@ -6364,7 +6413,7 @@ class TaskRunner:
             syn = lsrtm_solver(wavelet, sources[chunk], receivers[chunk],
                                models=[vp, ref])
             obs_chunk = obs[chunk].to(dev)
-            loss_t = _compute_loss(syn, obs_chunk, spec.loss).sum()
+            loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
             (loss_t / global_norm).backward()
             acc_loss_local += float(loss_t.detach().cpu())
         _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
