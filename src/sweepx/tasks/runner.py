@@ -3635,6 +3635,16 @@ class TaskRunner:
                 local_vp if name == "vp" else inv_by_name[name]
                 for name in ordered_names
             ] if len(inv_by_name) > 1 else [local_vp]
+            # perf/acoustic-bwd-skip-illum (3d6fe97): the c-backend now makes
+            # backward illumination OPT-IN (default off for speed). Enable it on
+            # each (cached) solver when illumination_precondition is active, else
+            # solver.source_illumination stays None and the precond silently
+            # no-ops. Harmless on older cores (plain attr, ignored).
+            if getattr(getattr(spec, "illumination_precondition", None), "enabled", False):
+                try:
+                    local_solver.compute_illumination = True
+                except Exception:
+                    pass
             return models, local_solver, local_src, local_rec
 
         if spec.optimizer.kind == "lbfgs":
@@ -4641,6 +4651,14 @@ class TaskRunner:
         if illum_on and getattr(spec.backend, "impl", "eager") == "eager":
             print("[illum] WARN: eager backend does not populate solver "
                   "illumination buffers; precondition is a no-op.")
+        # perf/acoustic-bwd-skip-illum (3d6fe97): c-backend illumination is now
+        # opt-in (default off). Re-enable on the solver when precond is active so
+        # the backend populates source/receiver_illumination. No-op on old cores.
+        if illum_on and getattr(spec.backend, "impl", "eager") == "c":
+            try:
+                solver.compute_illumination = True
+            except Exception:
+                pass
         loss_fn = lambda syn, obs: _compute_loss(syn, obs, spec.loss)
         def _csync():
             if dev.type == "cuda":
