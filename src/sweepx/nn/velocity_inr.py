@@ -137,6 +137,8 @@ class VelocityINR(nn.Module):
         bounds: Tuple[float, float] | None = None,
         water_mask: torch.Tensor | None = None,
         water_vp: float = 1500.0,
+        lateral_downsample: Tuple[int, int] | int = 1,
+        compile_render: bool = False,
     ) -> None:
         super().__init__()
         if base_velocity.ndim not in (2, 3):
@@ -213,6 +215,60 @@ class VelocityINR(nn.Module):
             bias=bool(use_bias),
         )
 
+        # --- Anisotropic lateral downsampling ---------------------------- #
+        # Render the INR delta on a grid coarsened in the LATERAL axes only
+        # (full resolution kept in z, where seismic structure is sharp), then
+        # trilinearly upsample the delta back to full resolution and add the
+        # full-res base. The hash+MLP is evaluated at far fewer coords
+        # (lateral_ds**2 fewer in 3-D) → proportionally faster render AND
+        # reparam backward, with negligible error where the model is laterally
+        # smooth (the FWI-resolvable case). Param count is UNCHANGED.
+        if isinstance(lateral_downsample, int):
+            lat = (lateral_downsample,) * (self.dim - 1)
+        else:
+            lat = tuple(int(s) for s in lateral_downsample)
+        if len(lat) != self.dim - 1:
+            raise ValueError(
+                f"lateral_downsample must have {self.dim - 1} entries for "
+                f"{self.dim}-D; got {lateral_downsample!r}"
+            )
+        self.lateral_ds = tuple(max(1, int(s)) for s in lat)
+        self.compile_render = bool(compile_render)
+        self._zslab_fn = None  # lazily-built (optionally compiled) renderer
+        if any(ds > 1 for ds in self.lateral_ds) or self.compile_render:
+            # TF32 accelerates the hash+MLP matmuls ~2-3× (Ampere+) at ~6e-4
+            # relative gradient error (cosine 1.000000) — essentially lossless.
+            # Only affects torch matmuls (the INR), never the C/CUDA solver.
+            # Enabled whenever the perf path is active (anisotropic OR compile),
+            # independent of compile so the reliable eager+TF32+aniso config
+            # (no torch.compile — which jitters on some GPUs) gets it too.
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        self._build_coarse_coords()
+
+    def _build_coarse_coords(self) -> None:
+        """(Re)build the coarse-lateral coord grid used by anisotropic render."""
+        import math
+        full = tuple(int(s) for s in self.base_velocity.shape)
+        nz = full[0]
+        lateral_full = full[1:]
+        coarse_lat = tuple(
+            max(2, math.ceil(n / ds)) if ds > 1 else n
+            for n, ds in zip(lateral_full, self.lateral_ds)
+        )
+        self._coarse_lateral = coarse_lat
+        self._aniso = any(ds > 1 for ds in self.lateral_ds)
+        if self._aniso:
+            self._coarse_coords = _make_coord_grid(
+                (nz,) + coarse_lat,
+                coord_min=self.coord_min,
+                coord_max=self.coord_max,
+                device=self.base_velocity.device,
+            ).reshape((nz,) + coarse_lat + (self.dim,))
+        else:
+            self._coarse_coords = None
+        self._zslab_fn = None  # invalidate compiled fn on shape change
+
     # ------------------------------------------------------------------ #
     # Stage transitions: replace the base velocity (+ shape) but keep    #
     # all learnable parameters intact — this is the multi-scale benefit. #
@@ -247,6 +303,7 @@ class VelocityINR(nn.Module):
             coord_max=self.coord_max,
             device=device,
         )
+        self._build_coarse_coords()  # refresh anisotropic coarse grid for new shape
         if water_mask is not None:
             if tuple(water_mask.shape) != tuple(new_base.shape):
                 raise ValueError(
@@ -318,9 +375,77 @@ class VelocityINR(nn.Module):
         """Render the velocity model on the current base grid."""
         return self.render()
 
-    def render(self) -> torch.Tensor:
-        shape = tuple(int(s) for s in self.base_velocity.shape)
-        return self._render_at_coords(self.coords, shape, self.base_velocity)
+    def _render_coords_chunk(self, cc, base_chunk, mask_chunk):
+        """Compile-friendly anisotropic render of one z-slab. Takes TENSORS
+        only (no python ints) so torch.compile guards on tensor shapes — which
+        are constant when chunk_rows divides nz — and compiles exactly ONCE.
+        (Passing z0/z1 ints made dynamo guard on their *values*, recompiling
+        per slab → recompile_limit(8) → eager fallback → reparam_bwd spikes.)
+        """
+        feats = self.encoder(cc) if self.encoder is not None else cc
+        rows = base_chunk.shape[0]
+        raw = self.mlp(feats).reshape(rows, *self._coarse_lateral)
+        delta = raw * self.vp_std + self.vp_mean
+        mode = "bilinear" if self.dim == 2 else "trilinear"
+        delta = F.interpolate(
+            delta[None, None], size=tuple(base_chunk.shape),
+            mode=mode, align_corners=True)[0, 0]
+        vp = delta if self.direct_velocity else base_chunk + delta
+        if self.bounds is not None:
+            vp = vp.clamp(self.bounds[0], self.bounds[1])
+        if mask_chunk is not None:
+            vp = torch.where(mask_chunk, vp.new_full((), self.water_vp), vp)
+        return vp
+
+    def _zslab(self, z0: int, z1: int) -> torch.Tensor:
+        """Render z-rows [z0:z1] at FULL lateral resolution. Anisotropic:
+        coarse-lateral render + upsample (z stays exact); isotropic: defer to
+        render_window. Slicing is done eagerly here; the heavy compute goes
+        through the (optionally compiled) tensor-only ``_render_coords_chunk``.
+        """
+        full = tuple(int(s) for s in self.base_velocity.shape)
+        if not self._aniso:
+            if self.dim == 2:
+                return self.render_window(z0, z1, 0, full[1])
+            return self.render_window(z0, z1, 0, full[1], 0, full[2])
+        cc = self._coarse_coords[z0:z1].reshape(-1, self.dim)
+        base_chunk = self.base_velocity[z0:z1]
+        mask_chunk = self.water_mask[z0:z1] if self.water_mask is not None else None
+        if self.compile_render:
+            if self._zslab_fn is None:
+                self._zslab_fn = torch.compile(self._render_coords_chunk, dynamic=False)
+            return self._zslab_fn(cc, base_chunk, mask_chunk)
+        return self._render_coords_chunk(cc, base_chunk, mask_chunk)
+
+    def render(self, chunk_rows: int | None = None) -> torch.Tensor:
+        full = tuple(int(s) for s in self.base_velocity.shape)
+        nz = int(full[0])
+        lateral = 1
+        for s in full[1:]:
+            lateral *= int(s)
+        coarse_lat = 1
+        for s in self._coarse_lateral:
+            coarse_lat *= int(s)
+        # Auto-chunk along z. The hash encoder materializes O(n_coords) vertex
+        # positions, so a full fine-grid render can need tens of GB
+        # on a large 3-D grid. Chunking z-slabs is bit-identical (pointwise) and bounds
+        # peak memory under no_grad. With anisotropic lateral downsampling the
+        # effective per-row coord count is coarse_lat, so chunks can be larger.
+        eff_lat = coarse_lat if self._aniso else lateral
+        if chunk_rows is None:
+            _CHUNK_POINTS = 2_000_000
+            chunk_rows = (
+                max(1, _CHUNK_POINTS // eff_lat)
+                if eff_lat > 0 and nz * eff_lat > _CHUNK_POINTS
+                else nz
+            )
+        if chunk_rows >= nz and not self._aniso:
+            return self._render_at_coords(self.coords, full, self.base_velocity)
+        slabs = []
+        for z0 in range(0, nz, int(chunk_rows)):
+            z1 = min(nz, z0 + int(chunk_rows))
+            slabs.append(self._zslab(z0, z1))
+        return torch.cat(slabs, dim=0)
 
     def render_shape(self, shape: Tuple[int, ...]) -> torch.Tensor:
         """Render at an arbitrary grid shape (bilinear/trilinear-resample the base)."""
@@ -434,14 +559,11 @@ class VelocityINR(nn.Module):
         nz = full_shape[0]
         for z0 in range(0, nz, rows):
             z1 = min(nz, z0 + rows)
-            if self.dim == 2:
-                vp_chunk = self.render_window(z0, z1, 0, full_shape[1])
-                vp_chunk.backward(grad[z0:z1], retain_graph=False)
-            else:
-                vp_chunk = self.render_window(
-                    z0, z1, 0, full_shape[1], 0, full_shape[2]
-                )
-                vp_chunk.backward(grad[z0:z1], retain_graph=False)
+            # ``_zslab`` is anisotropic-aware (coarse lateral + upsample) and
+            # optionally torch.compiled; per-slab .backward keeps peak memory
+            # O(rows) regardless of grid size.
+            vp_chunk = self._zslab(z0, z1)
+            vp_chunk.backward(grad[z0:z1], retain_graph=False)
 
 
 __all__ = ["VelocityINR"]
