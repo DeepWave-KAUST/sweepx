@@ -1598,6 +1598,8 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
         bounds=bounds_tuple,
         water_mask=water_mask,
         water_vp=float(getattr(spec, "water_vp_m_s", 1500.0)),
+        lateral_downsample=getattr(spec, "lateral_downsample", 1),
+        compile_render=bool(getattr(spec, "compile_render", False)),
     ).to(base_vp.device)
 
 

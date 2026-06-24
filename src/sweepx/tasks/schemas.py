@@ -724,6 +724,15 @@ class ReparamSpec(_Forbid):
     water_vp_m_s: float = Field(gt=0, default=1500.0)
     seabed_depth_path: Path | None = None
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
+    # Anisotropic lateral downsampling of the INR render: evaluate the
+    # hash+MLP on a grid coarsened by this factor in x/y (full-res in z),
+    # then upsample the delta back. lateral_ds**2 fewer coords -> much faster
+    # render + reparam backward, negligible error where the model is laterally
+    # smooth. Param count UNCHANGED. 1 = off (default). int = same on x and y.
+    lateral_downsample: int | tuple[int, int] = 1
+    # torch.compile the (anisotropic) z-slab renderer. Fast on some GPUs but
+    # jitters on others (A100); eager + lateral_downsample is already fast.
+    compile_render: bool = False
     # Optimizer lr override for the network (the top-level optimizer.lr is
     # ignored when reparam is active, since grid-FWI lr ~25 is wildly wrong
     # for SIREN/hash parameters ~1e-4).
