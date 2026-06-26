@@ -57,6 +57,10 @@ class EagerOptionsModel(_Forbid):
 
 class BoundaryOptionsModel(_Forbid):
     storage: Literal["gpu", "cpu", "disk"] = "gpu"
+    # Boundary ring-buffer storage precision. fp16/bf16/int8 shrink the saved
+    # boundary buffer (compute + seed frame stay fp32). Maps to
+    # sweep BoundaryOptions.storage_dtype -> C boundary_cfg['storage_dtype'].
+    storage_dtype: Literal["fp32", "fp16", "bf16", "int8"] = "fp32"
     transfer_interval: int | None = None
     pinned_memory: bool | None = None
     disk_dir: str | None = None
@@ -726,12 +730,12 @@ class ReparamSpec(_Forbid):
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
     # Anisotropic lateral downsampling of the INR render: evaluate the
     # hash+MLP on a grid coarsened by this factor in x/y (full-res in z),
-    # then upsample the delta back. lateral_ds**2 fewer coords -> much faster
+    # then upsample the delta back. lateral_ds**2 fewer coords → much faster
     # render + reparam backward, negligible error where the model is laterally
     # smooth. Param count UNCHANGED. 1 = off (default). int = same on x and y.
     lateral_downsample: int | tuple[int, int] = 1
-    # torch.compile the (anisotropic) z-slab renderer. Fast on some GPUs but
-    # jitters on others (A100); eager + lateral_downsample is already fast.
+    # torch.compile the (anisotropic) z-slab renderer — fuses the pure-torch
+    # hash+MLP+interp into far fewer kernels (~4× render, large backward win).
     compile_render: bool = False
     # Optimizer lr override for the network (the top-level optimizer.lr is
     # ignored when reparam is active, since grid-FWI lr ~25 is wildly wrong
@@ -968,6 +972,18 @@ class PlanSamplingConfig(_Forbid):
         Optional in-RAM trace cache shared across iters (bytes). Mirrors
         legacy ``--trace-cache-bytes``: keeps hot SEG-Y traces so repeated
         picks avoid cold-Lustre reads. ``0`` disables, ``-1`` = unbounded.
+    receiver_first
+        Use the receiver-first shared-shot sampler
+        (:func:`sweep_io.seismic_plan.sample_shared_shots_receiver_first`)
+        instead of the default random-group intersection. Picks ONE target
+        shot per iter then the nodes that recorded it, so the per-iter
+        supershot sweeps the WHOLE survey instead of collapsing toward the
+        centre — fixes the periphery under-sampling of partial-coverage OBN
+        surveys. A shot_key->nodes reverse index is built once at setup.
+    receiver_first_max_retries
+        Re-roll the target shot up to this many times to find one covered by
+        ``>= shared_shots_per_iter`` nodes before falling back to the random
+        sampler. Only used when ``receiver_first=True``.
     """
 
     min_coverage: int = Field(ge=0, default=0)
@@ -978,6 +994,8 @@ class PlanSamplingConfig(_Forbid):
     prefetch_factor: int = Field(ge=1, default=2)
     persistent_workers: bool = True
     dedup_mode: Literal["none", "first", "nearest"] = "none"
+    receiver_first: bool = False
+    receiver_first_max_retries: int = Field(ge=1, default=20)
     trace_cache_bytes: int = 0
 
 

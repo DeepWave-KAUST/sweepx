@@ -2191,11 +2191,27 @@ def _prepare_stage(
     if stage.bandpass is not None:
         if on_cuda:
             with torch.no_grad():
-                obs_t = _bandpass_torch_fft(
-                    obs_t, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
-                    dt=new_dt, order=stage.bandpass.order,
-                    axis=time_axis_pristine,
-                )
+                # Chunk the bandpass over the shot axis (dim 0) so each cuFFT
+                # plan stays under the 2^31-element limit; a full dense-OBN obs
+                # (nshots*nt*nrec) can exceed INT_MAX and trip
+                # CUFFT_INVALID_SIZE. Per-shot spectra are independent, so
+                # filtering shot-chunks in place is exact.
+                _bp_chunk = 64
+                if obs_t.shape[0] > _bp_chunk and time_axis_pristine != 0:
+                    for _b0 in range(0, obs_t.shape[0], _bp_chunk):
+                        _b1 = min(_b0 + _bp_chunk, obs_t.shape[0])
+                        obs_t[_b0:_b1] = _bandpass_torch_fft(
+                            obs_t[_b0:_b1].contiguous(),
+                            lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
+                            dt=new_dt, order=stage.bandpass.order,
+                            axis=time_axis_pristine,
+                        )
+                else:
+                    obs_t = _bandpass_torch_fft(
+                        obs_t, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
+                        dt=new_dt, order=stage.bandpass.order,
+                        axis=time_axis_pristine,
+                    )
             _flavor = "GPU FFT (sweep_preproc.bandpass_torch)"
         else:
             obs_np2 = _bandpass_cpu(
@@ -3314,8 +3330,28 @@ class TaskRunner:
             print(f"[fwi] modeling_override applied (wavelet={spec.modeling_override.wavelet is not None}, "
                   f"geometry={spec.modeling_override.geometry is not None})")
         with torch.no_grad():
-            obs = solver(mod_wavelet, mod_sources, mod_receivers,
-                         models=true_in_order).detach().cpu()
+            # Chunk the obs-generation forward over shots so peak solver
+            # workspace stays O(chunk) instead of O(nshots). Generating all
+            # shots in one call allocates an adjoint workspace for the whole
+            # batch and OOMs on large OBN surveys; the per-shot obs are
+            # independent, so concatenating chunk outputs is exact. Chunk by
+            # ``batchsize`` (the training shot batch); wavelet is shared.
+            _n_src = int(mod_sources.shape[0])
+            _cn = max(1, int(getattr(spec, "batchsize", 0) or _n_src))
+            if _cn >= _n_src:
+                obs = solver(mod_wavelet, mod_sources, mod_receivers,
+                             models=true_in_order).detach().cpu()
+            else:
+                _obs_parts = []
+                for _s0 in range(0, _n_src, _cn):
+                    _s1 = min(_s0 + _cn, _n_src)
+                    _part = solver(mod_wavelet, mod_sources[_s0:_s1],
+                                   mod_receivers[_s0:_s1],
+                                   models=true_in_order).detach().cpu()
+                    _obs_parts.append(_part)
+                    if dev.type == "cuda":
+                        torch.cuda.empty_cache()
+                obs = torch.cat(_obs_parts, dim=0)
         del true_in_order
         if dev.type == "cuda":
             torch.cuda.empty_cache()
@@ -3811,12 +3847,23 @@ class TaskRunner:
             # ---- (B) two-pass: solver phase against a leaf, then net phase ----
             optimizer.zero_grad()
             acc_loss_local = 0.0
+            # Optional SYNCED per-phase profile (SWEEP_TASKS_TPROF=1). The
+            # two-pass timing the QC line prints is NOT cuda-synced, so the
+            # solver-adjoint async tail bleeds into reparam_bwd. This block
+            # measures real wall-time per phase.
+            import time as _tm
+            _TPROF = os.environ.get("SWEEP_TASKS_TPROF") == "1"
+            def _sync():
+                if _TPROF and torch.cuda.is_available(): torch.cuda.synchronize()
+            _pf = {"render": 0.0, "fwd": 0.0, "loss": 0.0, "bwd": 0.0, "reparam": 0.0}
+            if _TPROF: _sync(); _t_a = _tm.perf_counter()
 
             # Render the full-grid base velocity once, detached. The leaf is
             # the autograd boundary; solver backward accumulates onto leaf.grad.
             with torch.no_grad():
                 base_leaf = reparam_net().detach().clone()
             base_leaf = base_leaf.requires_grad_(True)
+            if _TPROF: _sync(); _pf["render"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
 
             # Per-chunk forward + backward (autograd graph from solver to leaf).
             # ``_chunk_inputs`` already handles local-window slicing if enabled;
@@ -3871,13 +3918,17 @@ class TaskRunner:
             rill_sum = None
             for chunk_idx_in_iter, chunk in enumerate(chunks):
                 models, chunk_solver, chunk_src, chunk_rec = _two_pass_chunk_inputs(chunk, base_leaf)
+                if _TPROF: _sync(); _t_a = _tm.perf_counter()
                 syn = chunk_solver(wavelet, chunk_src, chunk_rec, models=models)
+                if _TPROF: _sync(); _pf["fwd"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
                 if syn_bandpass is not None and stage_dt is not None:
                     syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
                                               stage_dt, order=syn_bandpass.order)
                 obs_chunk = obs[chunk].to(dev)
                 loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
+                if _TPROF: _sync(); _pf["loss"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
                 (loss_t / global_norm).backward()
+                if _TPROF: _sync(); _pf["bwd"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
                 acc_loss_local += float(loss_t.detach().cpu())
                 if illum_on:
                     sill_sum, rill_sum = _accumulate_illumination(
@@ -3930,6 +3981,13 @@ class TaskRunner:
                 )
             else:
                 raise ValueError(f"unknown reparam backward_mode {reparam_mode!r}")
+
+            if _TPROF: _sync(); _pf["reparam"] += _tm.perf_counter() - _t_a
+            if _TPROF and dist_info.is_root:
+                _tot = sum(_pf.values()) * 1e3
+                print(f"[TPROF-B synced] render={_pf['render']*1e3:6.0f} solver_fwd={_pf['fwd']*1e3:6.0f} "
+                      f"loss={_pf['loss']*1e3:5.0f} solver_bwd_adjoint={_pf['bwd']*1e3:6.0f} "
+                      f"reparam={_pf['reparam']*1e3:6.0f}  sum={_tot:6.0f} ms", flush=True)
 
             _dist.all_reduce_grad_sum(
                 [p for p in reparam_net.parameters() if p.grad is not None],
@@ -3993,8 +4051,10 @@ class TaskRunner:
         from sweep_io.seismic_plan import (
             PlanReader,
             SeismicPlan,
+            build_shotkey_to_nodes_index,
             precompute_group_unique_keys,
             sample_shared_shots_from_plan,
+            sample_shared_shots_receiver_first,
         )
         from sweep_runner import distributed as _dist
 
@@ -4129,16 +4189,22 @@ class TaskRunner:
         if origin is None:
             x_min = float(min(src_model_xy[:, 0].min(), plan_model_xy[:, 0].min()))
             y_min = float(min(src_model_xy[:, 1].min(), plan_model_xy[:, 1].min()))
-            z_min = float(min(plan.group_xyz[:, 2].min(),
-                              plan.row_source_xyz[:, 2].min()))
+            # z-origin: the model top IS the free surface (sea surface), which
+            # by convention is the first layer (index 0 = 0 m datum). Do NOT
+            # pad above it — there is nothing to model above the sea surface,
+            # and a z-pad would shift the model_plan z-crop downward, silently
+            # chopping the top of the water column and dropping the free
+            # surface / receivers ~pad_z*dz below where they belong. Only the
+            # lateral x/y axes get the PML buffer pad.
             origin = (
-                z_min - pad_z * dz_m,
+                0.0,
                 y_min - pad_y * dy_m,
                 x_min - pad_x * dx_m,
             )
             print(f"[multisource] auto grid_origin_xyz_m = "
-                  f"({origin[0]:.1f}, {origin[1]:.1f}, {origin[2]:.1f})")
-            _t = _stage("auto grid_origin (bbox.min - pad)", _t)
+                  f"({origin[0]:.1f}, {origin[1]:.1f}, {origin[2]:.1f}) "
+                  f"(z=0 at sea surface; x/y padded by auto_origin_pad_cells)")
+            _t = _stage("auto grid_origin (z=0 surface; x/y bbox.min - pad)", _t)
         init_origin_z = float(origin[0])
         init_origin_y = float(origin[1])
         init_origin_x = float(origin[2])
@@ -4220,32 +4286,55 @@ class TaskRunner:
         _t = _stage(f"bounds check (row_in={row_in.sum()}/{row_in.size}, "
                     f"slot_in={slot_in.sum()}/{slot_in.size})", _t)
 
-        # Bounds-check soft-drop. We keep the PLAN itself unchanged and
-        # just compute the eligible-groups mask + per-row keep mask. The
-        # sampler is parameterized by eligible_groups; per-iter, we filter
-        # sampler-returned rows by row_in_keep. This avoids the 3-minute
-        # filter_rows() rewrite on a multi-GB plan (with its fancy-index
-        # copy of every row × 4 arrays). The WARN still tells users when
-        # they're dropping data.
-        eligible_groups = np.flatnonzero(slot_in).astype(np.int64)
-        row_in_keep = row_in  # per-row keep mask, original-index space
+        # --- 4a) Setup-stage in-window filter (ALL modes). Drop ONCE, here,
+        # every shot row whose receiver grid index is out of bounds AND every
+        # row belonging to an out-of-grid source node, then drop nodes left
+        # empty. Unified-plan equivalent of fwi_workflow Step-6b
+        # ``filter_*_to_rotated_box``: the sampler (random OR receiver-first)
+        # then only ever sees in-window shots/nodes, so no out-of-window shot
+        # or trace can reach the solver — where the C kernel would silently
+        # zero it (record_kernel range-guard), diluting the gradient with
+        # zero-synthetic-vs-real-obs residuals. This REPLACES the old per-iter
+        # ``row_in_keep``, which was computed, printed, and NEVER applied —
+        # out-of-window receivers leaked straight through to the solver.
         if not (row_in.all() and slot_in.all()):
+            # Combined row keep: in-window receiver AND its source node in-window.
+            row_group = np.repeat(
+                np.arange(plan.n_groups, dtype=np.int64),
+                np.diff(plan.group_offsets),
+            )
+            row_keep = row_in & slot_in[row_group]
             n_oob_rows = int((~row_in).sum())
             n_oob_groups = int((~slot_in).sum())
-            if spec.model_plan is None:
-                print(
-                    f"[multisource] WARN: dropping {n_oob_rows} "
-                    f"({n_oob_rows / max(row_in.size, 1):.3%}) shot rows "
-                    f"and {n_oob_groups} ({n_oob_groups / max(slot_in.size, 1):.3%}) "
-                    f"virtual sources OUTSIDE the auto-sized grid "
-                    f"(nz,ny,nx={nz},{ny},{nx}). Set spec.model_plan "
-                    "explicitly if you want deterministic crop semantics "
-                    "or to silence this warning."
-                )
-            print(f"[multisource] geometry filter (DEFERRED to sampler): "
-                  f"{eligible_groups.size}/{plan.n_groups} eligible groups, "
-                  f"{int(row_in_keep.sum())}/{plan.n_rows} eligible rows")
-            _t = _stage("eligible-mask compute (no plan rewrite)", _t)
+            n_rows0, n_groups0 = int(plan.n_rows), int(plan.n_groups)
+            plan = plan.filter_rows(row_keep).drop_empty_groups()
+            # Re-derive every plan-indexed geometry array on the filtered plan
+            # (group renumbering after drop_empty_groups makes the old arrays
+            # stale). Same origin / dh / grid as steps 3-4 above.
+            plan_model_xy = frame.to_model(plan.row_source_xyz[:, :2])
+            src_model_xy = frame.to_model(plan.group_xyz[:, :2])
+            plan_grid_xyz = np.stack([
+                np.rint((plan_model_xy[:, 0] - origin_x) / dx_m).astype(np.int64),
+                np.rint((plan_model_xy[:, 1] - origin_y) / dy_m).astype(np.int64),
+                np.rint((plan.row_source_xyz[:, 2] - origin_z) / dz_m).astype(np.int64),
+            ], axis=-1)
+            src_grid_xyz = np.stack([
+                np.rint((src_model_xy[:, 0] - origin_x) / dx_m).astype(np.int64),
+                np.rint((src_model_xy[:, 1] - origin_y) / dy_m).astype(np.int64),
+                np.rint((plan.group_xyz[:, 2] - origin_z) / dz_m).astype(np.int64),
+            ], axis=-1)
+            # Everything left is in-window by construction.
+            row_in = np.ones(plan.n_rows, dtype=bool)
+            slot_in = np.ones(plan.n_groups, dtype=bool)
+            print(
+                f"[multisource] setup in-window filter: dropped {n_oob_rows} "
+                f"({n_oob_rows / max(n_rows0, 1):.1%}) OOB shot rows + "
+                f"{n_oob_groups} OOB nodes -> plan {n_rows0}->{plan.n_rows} rows, "
+                f"{n_groups0}->{plan.n_groups} nodes "
+                f"(grid nz,ny,nx={nz},{ny},{nx})"
+            )
+            _t = _stage("setup in-window plan filter (filter_rows+drop_empty)", _t)
+        eligible_groups = np.flatnonzero(slot_in).astype(np.int64)
 
         # --- 4b) QC: dump the receiver layout in BOTH UTM (raw) and model
         # frame (post-rotation, origin-shifted) so the user can confirm the
@@ -4436,6 +4525,33 @@ class TaskRunner:
             f"precompute_group_unique_keys ({plan.n_groups} groups)", _t,
         )
 
+        # Receiver-first reverse index (shot_key -> covering nodes), built
+        # ONCE when sampling.receiver_first is on. It lets the per-iter
+        # target shot sweep the whole survey (pick a target, then the nodes
+        # that recorded it) instead of the random-group intersection
+        # collapsing toward the survey centre on partial-coverage OBN data.
+        shotkey_to_nodes = None
+        shotkey_keys_arr = None
+        if bool(getattr(sampling_cfg, "receiver_first", False)):
+            # min_cov (= max(sampling, source_encoding) coverage) and
+            # eligible_groups (= the in-grid slot_in nodes) must match the
+            # random-sampler path exactly, else receiver-first surfaces nodes
+            # the encoded path would reject (out-of-grid source / below the
+            # effective coverage threshold).
+            shotkey_to_nodes = build_shotkey_to_nodes_index(
+                plan, min_coverage=int(min_cov),
+                eligible_groups=eligible_groups,
+                verbose=bool(dist_info.is_root),
+            )
+            shotkey_keys_arr = np.fromiter(
+                shotkey_to_nodes.keys(), dtype=np.int64,
+                count=len(shotkey_to_nodes),
+            )
+            _t = _stage(
+                f"build_shotkey_to_nodes_index "
+                f"({len(shotkey_to_nodes)} shot keys)", _t,
+            )
+
         # Survey-wide sub-sample of every physical shot's (sx, sy) — used
         # as the faint background in the per-iter QC map. The full
         # set kills matplotlib; ~20k random hits give a clear footprint.
@@ -4544,18 +4660,51 @@ class TaskRunner:
                       "resample": 0.0, "trim": 0.0}
             t_sample0 = time.perf_counter()
             local_rng = np.random.default_rng(rng_state)
-            b = sample_shared_shots_from_plan(
-                plan, local_rng,
-                batch_size=int(spec.batchsize),
-                source_lines_per_group=int(sampling_cfg.source_lines_per_group),
-                max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
-                # min_coverage + eligible_groups applied per-iter at sample
-                # time (instead of pre-filtering the plan via filter_groups
-                # / filter_rows) — see _run_fwi_multisource setup.
-                min_coverage=int(min_cov),
-                eligible_groups=eligible_groups,
-                precomputed_group_unique_keys=group_unique_keys,
-            )
+            # Deterministic group ENUMERATION (SWEEP_ENUM_GROUPS=1): treat
+            # ``rng_state`` as the group ordinal and process exactly that
+            # ONE CRG (B=1) with its OWN shots. Iterating ordinals 0..N-1
+            # over N=epochs dumps the init-model sum/mean of every CRG's
+            # gradient — a true full-survey gradient, vs the random
+            # shared-shot supershot draws.
+            if os.environ.get("SWEEP_ENUM_GROUPS") == "1":
+                _elig_all = (eligible_groups if eligible_groups is not None
+                             else np.arange(int(plan.n_groups), dtype=np.int64))
+                _gi = int(rng_state) % int(_elig_all.size)
+                _elig_iter = _elig_all[_gi:_gi + 1]
+                _bs_iter = 1
+            else:
+                _elig_iter = eligible_groups
+                _bs_iter = int(spec.batchsize)
+            if shotkey_to_nodes is not None and _bs_iter > 1:
+                # Receiver-first: pick a target shot then the nodes that
+                # recorded it, so the per-iter supershot sweeps the whole
+                # survey. Falls back internally to the random sampler if no
+                # target reaches batch_size within the retry budget.
+                b = sample_shared_shots_receiver_first(
+                    plan, local_rng,
+                    batch_size=_bs_iter,
+                    source_lines_per_group=int(sampling_cfg.source_lines_per_group),
+                    max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
+                    min_coverage=int(min_cov),
+                    max_retries=int(sampling_cfg.receiver_first_max_retries),
+                    eligible_groups=eligible_groups,
+                    shotkey_to_nodes=shotkey_to_nodes,
+                    shotkey_keys_arr=shotkey_keys_arr,
+                    precomputed_group_unique_keys=group_unique_keys,
+                )
+            else:
+                b = sample_shared_shots_from_plan(
+                    plan, local_rng,
+                    batch_size=_bs_iter,
+                    source_lines_per_group=int(sampling_cfg.source_lines_per_group),
+                    max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
+                    # min_coverage + eligible_groups applied per-iter at sample
+                    # time (instead of pre-filtering the plan via filter_groups
+                    # / filter_rows) — see _run_fwi_multisource setup.
+                    min_coverage=int(min_cov),
+                    eligible_groups=_elig_iter,
+                    precomputed_group_unique_keys=group_unique_keys,
+                )
             tstats["sample"] = time.perf_counter() - t_sample0
             t_alloc0 = time.perf_counter()
             B = int(b.group_indices.size)
@@ -4610,6 +4759,13 @@ class TaskRunner:
             """Draw + return a fresh seed for the next iter's sampler,
             keeping ``sample_rng`` as the single source of randomness."""
             return int(sample_rng.integers(0, 2**31 - 1))
+
+        def _iter_seed(iter_idx):
+            """Sampler arg for iter ``iter_idx``: the group ordinal in
+            enumerate mode (SWEEP_ENUM_GROUPS=1), else a fresh random seed."""
+            if os.environ.get("SWEEP_ENUM_GROUPS") == "1":
+                return int(iter_idx)
+            return _next_rng_state()
 
         # --- 7b) Optional priors: TVPrior + SeabedFreezeMask.
         tv_prior = None
@@ -4775,7 +4931,7 @@ class TaskRunner:
 
         # Prime the prefetcher with iter 0's load so the first iter's
         # ``wait_io`` is also overlapped (with setup work above, ideally).
-        next_future = prefetch_pool.submit(_load_iter_payload, _next_rng_state())
+        next_future = prefetch_pool.submit(_load_iter_payload, _iter_seed(0))
         for epoch in range(total_epochs):
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
@@ -4786,7 +4942,7 @@ class TaskRunner:
             # the I/O overlaps with the solver fwd/bwd.
             if epoch + 1 < total_epochs:
                 next_future = prefetch_pool.submit(
-                    _load_iter_payload, _next_rng_state(),
+                    _load_iter_payload, _iter_seed(epoch + 1),
                 )
             B = int(batch.group_indices.size)
             n_shared = int(batch.n_shared)
@@ -4864,12 +5020,13 @@ class TaskRunner:
                     n_shared = int(keep_idx.size)
             if encoding_on:
                 # ----- encoded supershot path (1 GPU, B=1) -----
-                # source_encoding expects shapes (1, *, 3) and wavelet (1, B, nt).
+                # source-encoding (sweep IO contract geophyai 24e91c9): sources
+                # (1, nsrc, 3), receivers batch 1, wavelet (nsrc, nt) [per-source signed].
                 sources_super = sources_grid[None, :, :].astype(np.int64)
                 receivers_super = recv_grid[None, :, :].astype(np.int64)
                 signs_np = sign_rng.choice([-1.0, 1.0], size=B).astype(np.float32)
                 signs_t = torch.as_tensor(signs_np, device=dev)
-                wavelet_super = (wavelet_t[None, :] * signs_t[:, None]).unsqueeze(0)
+                wavelet_super = (wavelet_t[None, :] * signs_t[:, None])              # (B, nt)
                 obs_super = (obs_t * signs_t[:, None, None]).sum(dim=0, keepdim=True)
                 # Bandpass the encoded obs supershot to match the (already
                 # bandpassed) wavelet. Linearity: filtering each obs_i then
@@ -4912,13 +5069,16 @@ class TaskRunner:
                     dummy_slice = False
                 B_local = local_end - local_start
                 sources_local = sources_grid[local_start:local_end].astype(np.int64)
-                sources_super = sources_local[:, None, :]                          # (B_local, 1, 3)
+                # sweep IO contract (geophyai 24e91c9): per-shot multi-shot uses
+                # 2-D sources (nshots, ndim) + 2-D per-shot wavelet (nshots, nt);
+                # 3-D (1, nsrc, ndim) is reserved for source-encoding mode.
+                sources_super = sources_local                                      # (B_local, 3)
                 receivers_super = np.broadcast_to(
                     recv_grid[None, :, :], (B_local, n_shared, 3),
                 ).astype(np.int64).copy()                                          # (B_local, n_shared, 3)
                 wavelet_super = (
-                    wavelet_t[None, None, :].expand(B_local, 1, -1).contiguous()
-                )                                                                  # (B_local, 1, nt)
+                    wavelet_t[None, :].expand(B_local, -1).contiguous()
+                )                                                                  # (B_local, nt)
                 obs_super = obs_t[local_start:local_end].contiguous()              # (B_local, n_shared, nt)
                 if bandpass_spec is not None:
                     obs_super = _bandpass_torch_fft(
@@ -4990,16 +5150,69 @@ class TaskRunner:
                 rill = getattr(solver, "receiver_illumination", None)
                 if reparam_net is None or v_leaf_for_illum is not None:
                     target_grad = v_leaf_for_illum.grad if v_leaf_for_illum is not None else None
+                    # DUMP grad before/after illum precond. SWEEP_DUMP_GRAD=1
+                    # writes the iter-0 raw/precond/illum once. Additionally
+                    # SWEEP_DUMP_GRAD_NMEAN>0 accumulates the RAW grad (and
+                    # S*R illum) over EVERY iter and writes a running MEAN.
+                    # With the model frozen (lr=0) this mean is the full-batch
+                    # gradient estimate: E over the per-iter shared-shot draws
+                    # = the all-shots gradient the stochastic mini-batches
+                    # sample (the supershot geometry forbids all groups at
+                    # once, so we average instead).
+                    _DG = (os.environ.get("SWEEP_DUMP_GRAD") == "1"
+                           and dist_info.is_root and target_grad is not None)
+                    _nmean = int(os.environ.get("SWEEP_DUMP_GRAD_NMEAN", "0") or 0)
+                    if _DG:
+                        import numpy as _np
+                        _dd = os.environ.get("SWEEP_DUMP_DIR", "/tmp")
+                        _graw = target_grad.detach().cpu().numpy()
+                        _illsr = ((sill * rill).detach().cpu().numpy()
+                                  if (sill is not None and rill is not None)
+                                  else None)
+                        if epoch == 0:
+                            _np.save(_dd + "/grad_raw.npy", _graw)
+                            if _illsr is not None:
+                                _np.save(_dd + "/illum_sr.npy", _illsr)
+                        if _nmean > 0:
+                            _acc = getattr(self, "_graddump_acc", None)
+                            if _acc is None:
+                                _acc = {"g": _np.zeros_like(_graw),
+                                        "i": (None if _illsr is None
+                                              else _np.zeros_like(_illsr)),
+                                        "n": 0}
+                                self._graddump_acc = _acc
+                            _acc["g"] += _graw
+                            if _illsr is not None and _acc["i"] is not None:
+                                _acc["i"] += _illsr
+                            _acc["n"] += 1
+                            _np.save(_dd + "/grad_raw_mean.npy",
+                                     _acc["g"] / _acc["n"])
+                            if _acc["i"] is not None:
+                                _np.save(_dd + "/illum_sr_mean.npy",
+                                         _acc["i"] / _acc["n"])
+                            print(f"[graddump] mean over n={_acc['n']} iters",
+                                  flush=True)
                     _apply_illumination_precond(
                         target_grad, sill, rill,
                         eps=illum_spec.epsilon, exponent=illum_spec.exponent,
                     )
+                    if _DG and epoch == 0:
+                        _np.save(_dd + "/grad_precond.npy",
+                                 target_grad.detach().cpu().numpy())
 
             # --- Smooth regularization (TVPrior on the current vp/leaf).
+            # SYNCED profile (SWEEP_TASKS_TPROF=1): time smooth-reg separately
+            # and sync before the reparam timer so t_reparam_bwd is PURE reparam
+            # (otherwise the smooth-reg backward's async tail bleeds into it).
+            _tprof = os.environ.get("SWEEP_TASKS_TPROF") == "1"
+            if _tprof and dev.type == "cuda": torch.cuda.synchronize(dev)
+            _t_reg0 = time.perf_counter()
             if tv_prior is not None and v_leaf_for_illum is not None:
                 reg_loss = float(smooth_spec.weight) * tv_prior(v_leaf_for_illum)
                 # Accumulate into v_leaf_for_illum.grad (.backward adds).
                 reg_loss.backward(retain_graph=False)
+            if _tprof and dev.type == "cuda": torch.cuda.synchronize(dev)
+            t_smoothreg = time.perf_counter() - _t_reg0
 
             # --- Seabed-freeze mask on the leaf gradient (post illum +
             # post smooth-reg so any mask zeros take precedence).
@@ -5007,6 +5220,12 @@ class TaskRunner:
                 seabed_mask.apply_to(v_leaf_for_illum.grad)
 
             # --- Reparam two-pass full: push leaf grad through the net.
+            # Drain any in-flight solver-adjoint async tail BEFORE starting the
+            # reparam timer — otherwise that tail (which is large relative to a
+            # fast/optimized reparam) bleeds into t_reparam_bwd and makes it
+            # jitter wildly even though the reparam compute itself is steady.
+            if _tprof and dev.type == "cuda":
+                torch.cuda.synchronize(dev)
             t = time.perf_counter()
             if (reparam_net is not None
                     and spec.reparam.backward_mode == "two_pass_full"):
@@ -5062,7 +5281,8 @@ class TaskRunner:
             print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
                   f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
-                  f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} reparam_bwd={t_reparam_bwd:.2f} "
+                  f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
+                  f"reparam_bwd={t_reparam_bwd:.2f} "
                   f"opt={t_opt:.2f}]{cache_str}{pf_str}")
 
             # --- Snapshots + QC.
