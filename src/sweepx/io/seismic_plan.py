@@ -1112,6 +1112,169 @@ def sample_shared_shots_from_plan(
     )
 
 
+def build_shotkey_to_nodes_index(
+    plan: SeismicPlan,
+    *,
+    min_coverage: int = 0,
+    eligible_groups: np.ndarray | None = None,
+    verbose: bool = True,
+) -> dict:
+    """Build the receiver-first reverse index ``shot_key -> covering groups``.
+
+    For each eligible CRG group (one whose recorded-shot row count is
+    ``>= min_coverage``; all groups when ``min_coverage <= 0``) take its
+    UNIQUE mm-quantised ``(sx, sy)`` shot keys and accumulate, per key, the
+    group (node) indices that record it. Lets
+    :func:`sample_shared_shots_receiver_first` answer "which nodes recorded
+    shot K?" in O(1) instead of an O(n_groups) per-iter scan. Built ONCE and
+    reused for the whole run (pass via ``shotkey_to_nodes=``).
+
+    ``eligible_groups`` (optional) restricts the index to a caller-supplied
+    set of group indices — e.g. the in-grid (``slot_in``) nodes the encoded
+    FWI path will accept. WITHOUT it the index can surface a node whose
+    source position is OUTSIDE the grid, which the random-group sampler
+    excludes via its own ``eligible_groups`` arg, so receiver-first would
+    inject a source out of bounds. The final eligible set is the
+    intersection of the ``min_coverage`` filter and this set.
+
+    Returns ``dict[int shot_key -> np.ndarray(group_idx, int64)]`` (each
+    array sorted, unique). Unified-plan port of the fwi_workflow
+    receiver-first reverse index.
+    """
+    if plan.grouping != "crg":
+        raise ValueError(
+            f"build_shotkey_to_nodes_index: requires grouping='crg', "
+            f"got {plan.grouping!r}."
+        )
+    n_groups = int(plan.n_groups)
+    if min_coverage and int(min_coverage) > 0:
+        counts = plan.per_group_row_counts()
+        eligible = np.flatnonzero(counts >= int(min_coverage))
+        if eligible.size == 0:
+            eligible = np.arange(n_groups, dtype=np.int64)
+    else:
+        eligible = np.arange(n_groups, dtype=np.int64)
+    # Intersect with a caller-supplied eligible set (the in-grid nodes). Keep
+    # the in-grid invariant even if the min_coverage filter would empty it
+    # (out-of-grid sources are a hard error; low coverage is a soft loss).
+    if eligible_groups is not None:
+        eg = np.unique(np.asarray(eligible_groups, dtype=np.int64).reshape(-1))
+        eligible = np.intersect1d(eligible, eg, assume_unique=False)
+        if eligible.size == 0:
+            eligible = eg
+    acc: dict = {}
+    for g in eligible:
+        g = int(g)
+        sl = plan.group_slice(g)
+        if sl.stop == sl.start:
+            continue
+        keys = np.unique(_shot_xy_keys(plan.row_source_xyz[sl, 0],
+                                       plan.row_source_xyz[sl, 1]))
+        for k in keys.tolist():
+            lst = acc.get(k)
+            if lst is None:
+                acc[k] = [g]
+            else:
+                lst.append(g)
+    index = {k: np.asarray(sorted(set(v)), dtype=np.int64) for k, v in acc.items()}
+    if verbose:
+        print(
+            f"[receiver-first] built shot_key->nodes reverse index: "
+            f"{int(eligible.size)} eligible groups "
+            f"(min_coverage={int(min_coverage)}), "
+            f"{len(index)} distinct shot keys",
+            flush=True,
+        )
+    return index
+
+
+def sample_shared_shots_receiver_first(
+    plan: SeismicPlan,
+    rng: np.random.Generator,
+    *,
+    batch_size: int,
+    source_lines_per_group: int = 0,
+    max_traces_per_sourceline: int = 0,
+    min_coverage: int = 0,
+    max_retries: int = 20,
+    eligible_groups: np.ndarray | None = None,
+    shotkey_to_nodes: dict | None = None,
+    shotkey_keys_arr: np.ndarray | None = None,
+    precomputed_group_unique_keys: list | None = None,
+) -> SharedShotBatch:
+    """Receiver-first shared-shot sampler (anti-bias for survey periphery).
+
+    :func:`sample_shared_shots_from_plan` picks ``batch_size`` groups at
+    random then intersects their shots; on a partial-coverage OBN survey that
+    intersection collapses toward the survey CENTRE, leaving the periphery
+    chronically under-sampled by the encoded gradient. This variant inverts
+    the order so the per-iter target sweeps the WHOLE survey:
+
+      1) Pick ONE target shot uniformly from all distinct shot keys.
+      2) Look up (via the reverse index) every eligible group that recorded
+         it.
+      3) If ``>= batch_size`` such groups exist, draw ``batch_size`` of them;
+         else retry with a fresh target (up to ``max_retries``). On exhausted
+         retries fall back to :func:`sample_shared_shots_from_plan`.
+      4) Delegate the intersection + hierarchical sub-sample to
+         :func:`sample_shared_shots_from_plan` with ``eligible_groups`` = the
+         chosen groups (whose intersection is guaranteed non-empty — it
+         contains the target).
+
+    Port of fwi_workflow ``sample_crg_iter_receiver_first`` onto the unified
+    SeismicPlan. Build ``shotkey_to_nodes`` ONCE via
+    :func:`build_shotkey_to_nodes_index` and pass it in (building per call is
+    O(n_groups × rows)). Uses ONLY the passed ``rng``.
+    """
+    bs_req = int(batch_size)
+    if shotkey_to_nodes is None:
+        shotkey_to_nodes = build_shotkey_to_nodes_index(
+            plan, min_coverage=int(min_coverage),
+            eligible_groups=eligible_groups, verbose=True,
+        )
+    if shotkey_keys_arr is None:
+        shotkey_keys_arr = np.fromiter(
+            shotkey_to_nodes.keys(), dtype=np.int64, count=len(shotkey_to_nodes)
+        )
+
+    chosen: np.ndarray | None = None
+    if shotkey_keys_arr.size > 0 and bs_req >= 1:
+        for _ in range(max(1, int(max_retries))):
+            cand_key = int(shotkey_keys_arr[rng.integers(shotkey_keys_arr.size)])
+            nodes = shotkey_to_nodes[cand_key]
+            if nodes.size >= bs_req:
+                chosen = np.sort(
+                    rng.choice(nodes, size=bs_req, replace=False)
+                ).astype(np.int64)
+                break
+
+    if chosen is None:
+        # No target reached batch_size within retries — plain shared-shots.
+        # Forward the in-grid eligible set so the fallback also refuses
+        # out-of-grid nodes (matches the random-sampler path).
+        return sample_shared_shots_from_plan(
+            plan, rng,
+            batch_size=bs_req,
+            source_lines_per_group=int(source_lines_per_group),
+            max_traces_per_sourceline=int(max_traces_per_sourceline),
+            min_coverage=int(min_coverage),
+            eligible_groups=eligible_groups,
+            precomputed_group_unique_keys=precomputed_group_unique_keys,
+        )
+
+    # The chosen groups all record the target shot, so their intersection is
+    # non-empty; reuse the canonical intersection + sub-sampling path.
+    return sample_shared_shots_from_plan(
+        plan, rng,
+        batch_size=bs_req,
+        source_lines_per_group=int(source_lines_per_group),
+        max_traces_per_sourceline=int(max_traces_per_sourceline),
+        min_coverage=0,
+        eligible_groups=chosen,
+        precomputed_group_unique_keys=precomputed_group_unique_keys,
+    )
+
+
 __all__ = [
     "SCHEMA_FORMAT",
     "VALID_GROUPINGS",
@@ -1121,4 +1284,6 @@ __all__ = [
     "PlanReader",
     "precompute_group_unique_keys",
     "sample_shared_shots_from_plan",
+    "build_shotkey_to_nodes_index",
+    "sample_shared_shots_receiver_first",
 ]
