@@ -5327,7 +5327,7 @@ class TaskRunner:
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
                   f"reparam_bwd={t_reparam_bwd:.2f} "
-                  f"opt={t_opt:.2f}]{cache_str}{pf_str}")
+                  f"opt={t_opt:.2f}]{cache_str}{pf_str}", flush=True)
 
             # --- Snapshots + QC.
             snapshot_now = (epoch % spec.show_every == 0
