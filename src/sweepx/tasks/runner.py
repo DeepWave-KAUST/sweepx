@@ -4829,6 +4829,15 @@ class TaskRunner:
         # --- 9) Per-iter loop (global epoch counter across all stages).
         total_epochs = int(sum(stage_epochs))
         losses: list[float] = []
+        # Optional per-phase profile (SWEEP_TASKS_MSPROF=1): cuda-synced timing
+        # of the non-solver per-iter work — dedup / obs-encode+bandpass /
+        # reparam render — to locate the GPU-idle gap seen in util traces.
+        # Adds syncs, so only when explicitly enabled.
+        _msprof = os.environ.get("SWEEP_TASKS_MSPROF") == "1"
+
+        def _msync():
+            if _msprof and dev.type == "cuda":
+                torch.cuda.synchronize(dev)
         illum_spec = getattr(spec, "illumination_precondition", None)
         illum_on = bool(illum_spec is not None and illum_spec.enabled)
         if illum_on and getattr(spec.backend, "impl", "eager") == "eager":
@@ -5022,6 +5031,7 @@ class TaskRunner:
             # cell center. Apply the same row mask to obs traces across
             # all groups so the encoded supershot stays receiver-consistent.
             dedup_mode = getattr(sampling_cfg, "dedup_mode", "none")
+            _msync(); _t_de = time.perf_counter()
             if dedup_mode != "none" and n_shared > 1:
                 if dedup_mode == "first":
                     _, keep_idx = np.unique(
@@ -5046,22 +5056,25 @@ class TaskRunner:
                         | (recv_grid[:, 1].astype(np.int64) * (1 << 11))
                         | recv_grid[:, 0].astype(np.int64)
                     )
-                    order = np.argsort(key, kind="stable")
+                    # Vectorised per-cell argmin(d2): lexsort by (d2, key) so
+                    # each cell's rows are contiguous (primary=key) and ascending
+                    # in d2 (secondary), then keep the FIRST row of each cell =
+                    # the nearest (min-d2) one. Replaces a Python per-cell loop
+                    # that ran on the main thread and left the GPU idle every
+                    # iteration on dense OBN supershots.
+                    order = np.lexsort((d2, key))
                     key_s = key[order]
-                    starts = np.concatenate(
-                        [[0], np.flatnonzero(np.diff(key_s) != 0) + 1]
+                    first_of_cell = np.concatenate(
+                        [[True], key_s[1:] != key_s[:-1]]
                     )
-                    ends = np.concatenate([starts[1:], [key.size]])
-                    keep_idx = []
-                    for s_i, e_i in zip(starts, ends):
-                        local = order[s_i:e_i]
-                        keep_idx.append(int(local[int(np.argmin(d2[local]))]))
-                    keep_idx = np.sort(np.asarray(keep_idx, dtype=np.int64))
+                    keep_idx = np.sort(order[first_of_cell].astype(np.int64))
                 if keep_idx.size < n_shared:
                     obs_t = obs_t[:, keep_idx, :].contiguous()
                     recv_grid = recv_grid[keep_idx]
                     rows0_used = rows0_used[keep_idx]
                     n_shared = int(keep_idx.size)
+            _msync(); t_dedup = time.perf_counter() - _t_de
+            _msync(); _t_ob = time.perf_counter()
             if encoding_on:
                 # ----- encoded supershot path (1 GPU, B=1) -----
                 # source-encoding (sweep IO contract geophyai 24e91c9): sources
@@ -5133,7 +5146,9 @@ class TaskRunner:
                         axis=-1,
                     )
 
+            _msync(); t_obsbp = time.perf_counter() - _t_ob
             optimizer.zero_grad()
+            _msync(); _t_re = time.perf_counter()
             if reparam_net is None:
                 models = [vp_leaf]
                 v_leaf_for_illum = vp_leaf
@@ -5146,6 +5161,7 @@ class TaskRunner:
                 base_leaf = base_leaf.requires_grad_(True)
                 models = [base_leaf]
                 v_leaf_for_illum = base_leaf
+            _msync(); t_render = time.perf_counter() - _t_re
 
             t = time.perf_counter()
             syn = solver(
@@ -5322,12 +5338,17 @@ class TaskRunner:
                 pf_str = (f"  prefetch:[sample={pf['sample']:.2f} "
                           f"alloc={pf['alloc']:.2f} read={pf['read']:.2f} "
                           f"resample={pf['resample']:.2f} trim={pf['trim']:.2f}]")
+            ms_str = ""
+            if _msprof:
+                ms_str = (f"  MSPROF:[dedup={t_dedup:.2f} "
+                          f"obs_encode_bandpass={t_obsbp:.2f} "
+                          f"reparam_render={t_render:.2f}]")
             print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
                   f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
                   f"reparam_bwd={t_reparam_bwd:.2f} "
-                  f"opt={t_opt:.2f}]{cache_str}{pf_str}", flush=True)
+                  f"opt={t_opt:.2f}]{cache_str}{pf_str}{ms_str}", flush=True)
 
             # --- Snapshots + QC.
             snapshot_now = (epoch % spec.show_every == 0
