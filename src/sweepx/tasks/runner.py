@@ -4390,21 +4390,46 @@ class TaskRunner:
                 f"(@ effective_dt={effective_dt*1000:.2f} ms) each iter to "
                 f"align syn/obs in the SIREN frame"
             )
-        # Optional bandpass: pre-filter the wavelet once at setup, then
-        # filter the per-iter encoded obs supershot below. Differentiable
-        # via :func:`sweep_preproc.filter.bandpass_torch`.
-        bandpass_spec = getattr(spec, "bandpass", None)
-        if bandpass_spec is not None:
-            wavelet_t = _bandpass_torch_fft(
-                wavelet_t, lo=float(bandpass_spec.lo_hz),
-                hi=float(bandpass_spec.hi_hz),
-                dt=float(effective_dt),
-                order=int(bandpass_spec.order),
-                axis=-1,
-            ).detach()
-            print(f"[crg] wavelet bandpass {bandpass_spec.lo_hz}-"
-                  f"{bandpass_spec.hi_hz} Hz order={bandpass_spec.order} "
-                  "applied at setup")
+        # Multi-stage frequency continuation. ``_normalise_stage_list``
+        # returns the stage list (single-stage fallback when spec.stages is
+        # None, using spec.bandpass + spec.epochs). The encoded path
+        # bandpasses BOTH the source wavelet and the per-iter obs from the
+        # PRISTINE wavelet at each stage entry ("target=wavelet" regime: syn
+        # stays naturally bandlimited, no per-iter syn filter). The reparam
+        # net / optimizer carry over across stages — one plan load + one
+        # solver build for the whole sweep, no per-band resume.
+        stage_list = _normalise_stage_list(spec)
+        for _si, _st in enumerate(stage_list):
+            _unsup = [_f for _f in ("dh_m", "dt_s", "nt", "wavelet")
+                      if getattr(_st, _f, None) is not None]
+            if abs(float(_st.lr_scale) - 1.0) > 1e-12:
+                _unsup.append("lr_scale")
+            if abs(float(getattr(_st, "inr_lr_scale", 1.0)) - 1.0) > 1e-12:
+                _unsup.append("inr_lr_scale")
+            if getattr(_st, "batch_size", None) is not None:
+                _unsup.append("batch_size")
+            if _unsup:
+                raise NotImplementedError(
+                    f"stage {_si}: the encoded OBN path supports only "
+                    f"bandpass / epochs / optimizer_reset per stage; "
+                    f"unsupported here: {_unsup}"
+                )
+        stage_epochs = [int(_st.epochs) for _st in stage_list]
+        stage_starts = [int(s) for s in np.cumsum([0] + stage_epochs[:-1])]
+        wavelet_orig = wavelet_t.detach().clone()  # pristine, pre-bandpass
+
+        def _stage_bandpass(_st):
+            return (_st.bandpass if _st.bandpass is not None
+                    else getattr(spec, "bandpass", None))
+        # bandpass_spec is (re)assigned per stage inside the loop; seed it
+        # with stage 0 so the run-meta / wavelet build reflect band 1.
+        bandpass_spec = _stage_bandpass(stage_list[0])
+        if len(stage_list) > 1:
+            _bands = [(b.lo_hz, b.hi_hz) if (b := _stage_bandpass(s)) is not None
+                      else None for s in stage_list]
+            print(f"[crg] multi-stage FWI: {len(stage_list)} stages, "
+                  f"epochs={stage_epochs} (total {sum(stage_epochs)}), "
+                  f"bandpass/stage={_bands}")
         vp_leaf = torch.from_numpy(init_vp_np).to(dev).requires_grad_(True)
         inv_by_name = {"vp": vp_leaf}
         reparam_net = None
@@ -4801,8 +4826,8 @@ class TaskRunner:
         qc_dir = task_dir / "qc"
         qc_enabled = spec.qc is not None and spec.qc.every_n_epochs > 0
 
-        # --- 9) Per-iter loop.
-        total_epochs = int(spec.epochs)
+        # --- 9) Per-iter loop (global epoch counter across all stages).
+        total_epochs = int(sum(stage_epochs))
         losses: list[float] = []
         illum_spec = getattr(spec, "illumination_precondition", None)
         illum_on = bool(illum_spec is not None and illum_spec.enabled)
@@ -4933,6 +4958,25 @@ class TaskRunner:
         # ``wait_io`` is also overlapped (with setup work above, ideally).
         next_future = prefetch_pool.submit(_load_iter_payload, _iter_seed(0))
         for epoch in range(total_epochs):
+            # Stage entry: re-bandpass the PRISTINE wavelet + switch the obs
+            # bandpass spec when crossing into a new frequency-continuation
+            # stage. Net/optimizer state carries over (reset only on request).
+            if epoch in stage_starts:
+                _si = stage_starts.index(epoch)
+                _st = stage_list[_si]
+                bandpass_spec = _stage_bandpass(_st)
+                wavelet_t = (_bandpass_torch_fft(
+                    wavelet_orig, lo=float(bandpass_spec.lo_hz),
+                    hi=float(bandpass_spec.hi_hz), dt=float(effective_dt),
+                    order=int(bandpass_spec.order), axis=-1).detach()
+                    if bandpass_spec is not None else wavelet_orig)
+                if bool(getattr(_st, "optimizer_reset", False)) and _si > 0:
+                    optimizer.state.clear()
+                _bp_txt = (f"{bandpass_spec.lo_hz}-{bandpass_spec.hi_hz}Hz"
+                           if bandpass_spec is not None else "none")
+                print(f"[crg] === STAGE {_si + 1}/{len(stage_list)} "
+                      f"epoch[{epoch}:{epoch + int(_st.epochs)}] "
+                      f"bandpass={_bp_txt} ===", flush=True)
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
             t = time.perf_counter()
