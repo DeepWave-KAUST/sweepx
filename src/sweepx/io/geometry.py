@@ -349,6 +349,60 @@ class PhysicalGeometry:
 
 
 # ============================================================================
+# Line-azimuth estimation (PCA) — derive a rotation from scattered points
+# ============================================================================
+def _normalize_angle_rad(angle: float) -> float:
+    """Normalize an angle to the half-open interval ``[-pi, pi)``."""
+    return float((angle + np.pi) % (2.0 * np.pi) - np.pi)
+
+
+def principal_direction(points_xy: np.ndarray) -> Tuple[np.ndarray, float]:
+    """Estimate the dominant 2-D line direction with a two-component PCA.
+
+    Fits the principal axis of a scattered ``(x, y)`` point cloud (e.g. the
+    shot positions of a 2-D streamer line, or the node positions of an OBN
+    receiver line) via SVD and returns its azimuth.
+
+    Parameters
+    ----------
+    points_xy
+        ``(npoints, 2)`` coordinates. At least two distinct points required.
+
+    Returns
+    -------
+    direction : np.ndarray
+        ``(2,)`` unit vector along the dominant line direction.
+    angle : float
+        ``arctan2(dy, dx)`` of ``direction`` in radians.
+
+    Notes
+    -----
+    The SVD sign of the leading singular vector is arbitrary, so the
+    returned direction may point either way along the line (the azimuth is
+    only defined modulo π). This mirrors
+    ``fwi_workflow.geometry.acquisition.principal_direction`` exactly, so a
+    frame fit here reproduces the legacy rotation bit-for-bit.
+    """
+    points = np.asarray(points_xy, dtype="float64")
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError(
+            f"points_xy must have shape (npoints, 2); got {points.shape}"
+        )
+    if len(points) < 2:
+        raise ValueError(
+            "at least two points are required to estimate a line direction"
+        )
+    centered = points - np.mean(points, axis=0)
+    if np.allclose(centered, 0.0):
+        raise ValueError("cannot estimate a line direction from identical points")
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    direction = np.asarray(vh[0], dtype="float64")
+    direction /= np.linalg.norm(direction)
+    angle = float(np.arctan2(direction[1], direction[0]))
+    return direction, angle
+
+
+# ============================================================================
 # RotatedFrame — 2-D rotation around an origin in the horizontal plane
 # ============================================================================
 @dataclass(frozen=True)
@@ -461,6 +515,99 @@ class RotatedFrame:
             target_axis=str(meta.get("target_axis", "x")),
             inline_shift=float(meta.get("inline_shift", 0.0)),
             crossline_shift=float(meta.get("crossline_shift", 0.0)),
+        )
+
+    @classmethod
+    def fit(
+        cls,
+        points_xy: np.ndarray,
+        *,
+        target_axis: Literal["x", "y"] = "x",
+        shift_inline_to_zero: bool = False,
+        shift_crossline_to_zero: bool = False,
+        shift_points_xy: np.ndarray | None = None,
+    ) -> "RotatedFrame":
+        """Derive a frame from scattered UTM points via a 2-D PCA line fit.
+
+        This is the companion *constructor* to :meth:`from_rotation_deg` /
+        :meth:`from_metadata`: those **consume** a known rotation, while
+        ``fit`` **derives** one from the acquisition geometry. It estimates
+        the dominant survey-line azimuth from ``points_xy`` with
+        :func:`principal_direction` and builds the frame that rotates that
+        azimuth onto the model ``target_axis``.
+
+        Ports the rotation estimation of
+        ``fwi_workflow.geometry.line2d.rotate_csg_index``: identical SVD
+        principal direction, ``origin = mean(points)``, and
+        ``[[cos, -sin], [sin, cos]]`` matrix convention. The resulting frame
+        therefore serialises (via :meth:`to_dict`) to the same
+        ``rotation_metadata.json`` schema and reproduces the legacy
+        inline / crossline coordinates bit-for-bit.
+
+        Parameters
+        ----------
+        points_xy
+            ``(npoints, 2)`` UTM xy used to estimate the line azimuth (e.g.
+            one point per shot for a 2-D streamer line).
+        target_axis
+            Model axis the inline direction is rotated onto: ``"x"``
+            (default, 2-D streamer convention) or ``"y"``.
+        shift_inline_to_zero
+            Shift the inline coordinate so its minimum is ``0`` (line starts
+            at the grid edge). Matches the legacy 2-D streamer default.
+        shift_crossline_to_zero
+            Shift the crossline coordinate so its minimum is ``0``. Combine
+            with ``shift_inline_to_zero`` for the 3-D OBN first-quadrant
+            layout.
+        shift_points_xy
+            Points used to compute the shift minima; defaults to
+            ``points_xy``. Pass the union of sources + receivers to
+            reproduce the legacy ``rotate_csg_index`` shift, which always
+            minimised over both even when the rotation was fit on shots only.
+
+        Returns
+        -------
+        RotatedFrame
+            Frame whose :meth:`to_model` aligns the fitted line to
+            ``target_axis`` and applies the requested shifts.
+        """
+        if target_axis not in ("x", "y"):
+            raise ValueError(f"target_axis must be 'x' or 'y'; got {target_axis!r}")
+        pts = np.asarray(points_xy, dtype="float64")
+        _, line_angle = principal_direction(pts)
+        target_angle = 0.0 if target_axis == "x" else np.pi / 2.0
+        applied = _normalize_angle_rad(target_angle - line_angle)
+        c, s = np.cos(applied), np.sin(applied)
+        # Match the legacy ``rotation_metadata.json`` convention used by
+        # ``to_model`` (``model = (utm - origin) @ R.T + shifts``). NOTE this
+        # is the opposite-sign matrix to :meth:`from_rotation_deg`, which maps
+        # its ``rotation_deg`` argument through ``[[c, s], [-s, c]]``.
+        R = np.array([[c, -s], [s, c]], dtype="float64")
+        origin = np.mean(pts, axis=0)
+
+        inline_shift = 0.0
+        crossline_shift = 0.0
+        if shift_inline_to_zero or shift_crossline_to_zero:
+            shift_pts = (
+                pts if shift_points_xy is None
+                else np.asarray(shift_points_xy, dtype="float64")
+            )
+            rotated = (shift_pts - origin[None, :]) @ R.T
+            if target_axis == "x":
+                inline_vals, crossline_vals = rotated[:, 0], rotated[:, 1]
+            else:
+                inline_vals, crossline_vals = rotated[:, 1], rotated[:, 0]
+            if shift_inline_to_zero:
+                inline_shift = -float(np.nanmin(inline_vals))
+            if shift_crossline_to_zero:
+                crossline_shift = -float(np.nanmin(crossline_vals))
+
+        return cls(
+            origin_xy_utm=origin,
+            rotation_matrix=R,
+            target_axis=target_axis,
+            inline_shift=inline_shift,
+            crossline_shift=crossline_shift,
         )
 
     # --------------------------------------------------------- transforms
