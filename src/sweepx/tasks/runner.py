@@ -2631,6 +2631,18 @@ class TaskRunner:
         dev = _dist.resolve_dist_device(spec.device, dist_info.local_rank)
         equation_cls = _get_equation_class(spec.physics.equation)
 
+        # Resolved config + run metadata for the standard (non-multisource)
+        # FWI path. The CRG/multisource path (`_run_fwi_multisource`) already
+        # writes these; mirror it here so every FWI run dir is self-documenting
+        # (config_resolved.yaml + run_meta.json: host/CUDA/env/git). rank-0 only.
+        if dist_info.local_rank == 0:
+            try:
+                _dump_run_metadata(spec, task_dir)
+                print(f"[run-meta] wrote {task_dir/'config_resolved.yaml'} "
+                      f"+ {task_dir/'run_meta.json'}")
+            except Exception as meta_err:  # noqa: BLE001
+                print(f"[run-meta] dump skipped: {meta_err}")
+
         # Graceful ctrl-c / SIGTERM: install the handler *before* the heavy
         # setup phase (obs synth, solver build, etc.) so that a signal
         # delivered early just arms the stop flag instead of crashing the
