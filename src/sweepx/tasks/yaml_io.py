@@ -80,7 +80,7 @@ def load_task_from_dict(raw: dict, *, base_dir: Path | str | None = None) -> Tas
 
     Used by the CLI to support ``--override key=value`` flags: the raw
     YAML is loaded into a dict, dotted-key overrides are applied via
-    :func:`sweep_runner.config.apply_overrides`, then this function does
+    :func:`sweep_tasks.runtime.config.apply_overrides`, then this function does
     path resolution + pydantic validation against the same base_dir the
     YAML lived in.
     """

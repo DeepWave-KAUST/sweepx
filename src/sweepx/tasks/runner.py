@@ -1244,13 +1244,13 @@ def _build_reparam_optimizer(opt_spec, net_params, lr: float):
 
 
 def _build_scheduler(sched_spec, optimizer, total_epochs):
-    """Dispatch the LR scheduler via `sweep_runner.scheduler.build`.
+    """Dispatch the LR scheduler via `sweep_tasks.runtime.scheduler.build`.
 
     The runner's `build()` accepts any object with the right `kind` +
     field attributes, so our Pydantic `Scheduler*` discriminated union
     plugs in directly without conversion.
     """
-    from sweep_runner.scheduler import build as build_scheduler
+    from sweep_tasks.runtime.scheduler import build as build_scheduler
     return build_scheduler(sched_spec, optimizer, total_epochs)
 
 
@@ -1548,7 +1548,7 @@ def _dump_run_metadata(
 
     pkgs = [
         "sweep_tasks", "sweep_nn", "sweep_io", "sweep",
-        "sweep_loss", "sweep_preproc", "sweep_viz", "sweep_runner",
+        "sweep_loss", "sweep_preproc", "sweep_viz",
         "torch", "numpy",
     ]
     versions = {n: _pkg_version(n) for n in pkgs}
@@ -1678,14 +1678,14 @@ def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
 
 
 def _save_checkpoint(task_dir: Path, payload: dict) -> Path:
-    """Atomic checkpoint write via `sweep_runner.checkpoint.save_payload`."""
-    from sweep_runner.checkpoint import save_payload
+    """Atomic checkpoint write via `sweep_tasks.runtime.checkpoint.save_payload`."""
+    from sweep_tasks.runtime.checkpoint import save_payload
     return save_payload(task_dir / "checkpoint.pt", payload)
 
 
 def _load_checkpoint(prev_task_dir: Path) -> dict:
     """Counterpart to :func:`_save_checkpoint`. Raises FileNotFoundError if missing."""
-    from sweep_runner.checkpoint import load_payload
+    from sweep_tasks.runtime.checkpoint import load_payload
     return load_payload(prev_task_dir / "checkpoint.pt", weights_only=False)
 
 
@@ -1764,7 +1764,7 @@ class _GracefulStopper:
     def should_stop(self, dist_info=None) -> bool:
         if dist_info is None or not getattr(dist_info, "is_distributed", False):
             return self.requested
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         flag = self.requested if dist_info.is_root else None
         flag = _dist.broadcast_object(flag, dist_info, src=0)
@@ -2424,7 +2424,7 @@ class TaskRunner:
     """Synchronous local task runner. One-shot: instantiate and call .run(spec)."""
 
     def run(self, spec: TaskSpec) -> TaskResult:
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         dist_info = _dist.init_distributed_if_needed()
         self._dist = dist_info
@@ -2675,7 +2675,7 @@ class TaskRunner:
 
         import torch
 
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -3695,7 +3695,7 @@ class TaskRunner:
 
         import torch
 
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
@@ -4211,7 +4211,7 @@ class TaskRunner:
             sample_shared_shots_from_plan,
             sample_shared_shots_receiver_first,
         )
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -5990,7 +5990,7 @@ class TaskRunner:
         """
         import torch
 
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -6858,7 +6858,7 @@ class TaskRunner:
     def _run_lsrtm(self, spec: LSRTMSpec, task_dir: Path):
         import torch
 
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -7082,7 +7082,7 @@ class TaskRunner:
                           *, dist_info=None) -> float:
         import torch
 
-        from sweep_runner import distributed as _dist
+        from sweep_tasks.runtime import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()

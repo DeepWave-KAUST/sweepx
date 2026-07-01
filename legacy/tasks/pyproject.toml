@@ -30,7 +30,6 @@ dependencies = [
     "sweep-solver",
     "sweep-loss",
     "sweep-nn",
-    "sweep-runner",
     "sweep-viz",
     "pydantic>=2.0",
     "PyYAML>=6.0",

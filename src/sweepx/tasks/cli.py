@@ -189,7 +189,7 @@ def _cmd_run(args) -> int:
     elif resume_flag is False:
         overrides.append("resume=false")
     if overrides:
-        from sweep_runner.config import apply_overrides
+        from sweep_tasks.runtime.config import apply_overrides
 
         task_path = Path(args.task_file).resolve()
         with task_path.open("r") as fh:
