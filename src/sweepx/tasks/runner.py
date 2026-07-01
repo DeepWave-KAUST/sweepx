@@ -5536,10 +5536,22 @@ class TaskRunner:
                 # gradient equals the single-GPU run. (all_reduce-sum backward is
                 # identity for the local term -> correct per-tile gradient.)
                 _own = solver._own_rec_idx
-                obs_tile = obs_match[:, :, _own, :] if _own else obs_match[:, :, :0, :]
-                loss_t = loss_fn(syn, obs_tile).sum()
+                if _own:
+                    obs_tile = obs_match[:, :, _own, :]
+                    loss_t = loss_fn(syn, obs_tile).sum()
+                    _local_numel = float(syn.numel())
+                else:
+                    # This tile owns NO receivers for this (reseeded) supershot:
+                    # the DD forward emitted a dummy placeholder receiver so the
+                    # solver stays happy (syn shape (1, nt, 1, 1)), but obs has 0.
+                    # Contribute 0 loss / 0 count -- the tile's gradient comes from
+                    # neighbour adjoint wavefield via halo, not a local misfit.
+                    # Keep syn in the graph (x0) and still all_reduce so the
+                    # collective backward stays in sync across ranks.
+                    loss_t = syn.sum() * 0.0
+                    _local_numel = 0.0
                 import torch.distributed as _td
-                _tn = torch.tensor(float(syn.numel()), device=dev)
+                _tn = torch.tensor(_local_numel, device=dev)
                 _td.all_reduce(_tn, op=_td.ReduceOp.SUM)
                 global_norm = float(_tn.item()) or 1.0
                 _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
