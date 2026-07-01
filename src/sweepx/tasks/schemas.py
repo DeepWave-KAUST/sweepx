@@ -1027,6 +1027,23 @@ class ObsPlanConfig(_Forbid):
     plan_path: Path
     cache_all: bool = False
     sampling: PlanSamplingConfig | None = None
+    # --- Single-source materialization (sampling=None, conventional FWI) ----
+    # When ``sampling`` is None the runner materialises ONE static
+    # ``(nshots, nrec, nt)`` dataset from the plan at setup and runs the
+    # standard single-source FWI loop (per-shot gradient accumulation via
+    # ``train_shot_batchsize``). Works for BOTH 2-D/3-D, CSG and CRG plans:
+    #   * CSG: group = air-gun shot (source = group_xyz), receivers = the
+    #     recording nodes (row_receiver_xyz).
+    #   * CRG: group = OBN node (virtual source = group_xyz, reciprocity),
+    #     receivers = the air-gun positions it recorded (row_source_xyz).
+    # Each group is reduced to a FIXED ``n_receivers_per_shot`` so the
+    # dataset is rectangular (groups with fewer than ``min_receivers`` are
+    # dropped; groups with more are sub-sampled per ``receiver_select``).
+    n_receivers_per_shot: int | None = None
+    receiver_select: Literal["random", "nearest", "all"] = "nearest"
+    max_shots: int | None = None
+    min_receivers: int = Field(ge=1, default=8)
+    materialize_seed: int = 0
 
 
 class ObsSpec(_Forbid):

@@ -21,9 +21,16 @@ Building the map alongside the init vp avoids two foot-guns:
 2. **Per-column bathymetry**: real surveys have varying water depth.
    A 2-D map captures it correctly; a flat ``z < N`` rule does not.
 
-CLI:
-    sweep-tasks derive-seabed-depth INIT_VP.npy \\
-        --dh-z 75 --water-vp 1500 --output seabed_depth.npz
+Usage (Python API)::
+
+    import numpy as np
+    from sweep_tasks.bathymetry import derive_seabed_depth_from_vp
+
+    init_vp = np.load("init_vp.npy")  # (nz, nx) or (nz, ny, nx)
+    seabed_depth = derive_seabed_depth_from_vp(
+        init_vp, dh_z_m=75.0, water_vp=1500.0
+    )
+    np.savez("seabed_depth.npz", seabed_depth=seabed_depth)
 """
 
 from __future__ import annotations

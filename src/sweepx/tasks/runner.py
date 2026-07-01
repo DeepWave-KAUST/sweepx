@@ -106,6 +106,68 @@ def _resolve_device(device: str) -> "torch.device":
     return torch.device(device)
 
 
+# --- Domain-decomposition (DD) mode helpers (env-gated; no-op when off) -------
+# DD splits the solver's spatial domain across N GPUs (ModelParallel), with the
+# velocity_inr reparam rendered PER TILE (render_window). Validated standalone
+# in runs/dd_ifwi_smoke; wired into _run_fwi_multisource behind SWEEP_DD_ENABLE.
+def _dd_config():
+    """Returns (dd_on, py, px, render_chunk) from env."""
+    import os
+    return (os.environ.get("SWEEP_DD_ENABLE") == "1",
+            int(os.environ.get("SWEEP_DD_PY", "1")),
+            int(os.environ.get("SWEEP_DD_PX", "1")),
+            int(os.environ.get("SWEEP_DD_RENDER_CHUNK", "8")))
+
+
+def _dd_wrap(solver, mesh):
+    """Wrap a PropTorch in ModelParallel for domain-decomposed fwd/adjoint."""
+    from sweep.parallel.dd_propagator import ModelParallel
+    return ModelParallel(solver, mesh)
+
+
+def _dd_tile_bounds(ddp):
+    """This rank's tile INTERIOR bounds in GLOBAL coords, as render_window args.
+    Reads ddp.global_shape so it is correct after any per-stage mesh rebuild."""
+    shape = ddp.global_shape
+    nz = int(shape[0])
+    if len(shape) == 3:
+        return (0, nz, int(ddp.y0), int(ddp.y0 + ddp.nyp),
+                int(ddp.x0), int(ddp.x0 + ddp.nxp))
+    return (0, nz, int(ddp.x0), int(ddp.x0 + ddp.nxp))
+
+
+def _dd_render_tile(reparam_net, bounds, rc):
+    """Detached per-tile vp via z-chunked render_window (bounds render memory)."""
+    import torch
+    tz0, tz1, rest = bounds[0], bounds[1], bounds[2:]
+    slabs = []
+    with torch.no_grad():
+        for z0 in range(tz0, tz1, rc):
+            z1 = min(tz1, z0 + rc)
+            slabs.append(reparam_net.render_window(z0, z1, *rest))
+    return torch.cat(slabs, dim=0).detach().requires_grad_(True)
+
+
+def _dd_backward_tile(reparam_net, model_leaf, bounds, rc):
+    """Push the tile velocity grad through net params (z-chunked), then
+    all_reduce net-param grads across tiles. The all_reduce runs
+    UNCONDITIONALLY (zero-filling missing grads) so the collective stays
+    consistent even for tiles whose model_leaf.grad is None."""
+    import torch
+    import torch.distributed as _td
+    tz0, tz1, rest = bounds[0], bounds[1], bounds[2:]
+    g = model_leaf.grad
+    if g is not None:
+        for z0 in range(tz0, tz1, rc):
+            z1 = min(tz1, z0 + rc)
+            reparam_net.render_window(z0, z1, *rest).backward(g[z0 - tz0:z1 - tz0])
+    if _td.is_available() and _td.is_initialized():
+        for p in reparam_net.parameters():
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            _td.all_reduce(p.grad, op=_td.ReduceOp.SUM)
+
+
 def _apply_seed(seed: int) -> None:
     import torch
 
@@ -2705,41 +2767,76 @@ class TaskRunner:
         )
         # Shared cache so SEG-Y-backed geometry + obs don't scan the file twice.
         segy_cache: dict = {}
-        sources, receivers = _build_geometry_2d(
-            spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+        # ``obs.plan`` with ``sampling=None`` → conventional single-source FWI
+        # materialised from a SeismicPlan (CSG or CRG, 2-D/3-D field data). The
+        # OBN supershot/encoding path (sampling != None) is dispatched earlier
+        # to ``_run_fwi_multisource``; here we build ONE static dataset and run
+        # the normal ``_fwi_train_step`` loop (per-shot gradient accumulation).
+        _obs_plan_mat = (
+            spec.obs is not None and spec.obs.plan is not None
+            and spec.obs.plan.sampling is None
         )
-        nshots = int(sources.shape[0])
-
-        # 3c) Gap 2 — apply model_plan if set: crop every loaded model array,
-        # drop out-of-window sources, rebase geometry indices to the crop.
         model_plan_cropped: dict | None = None
         model_plan_keep: "np.ndarray | None" = None
-        if spec.model_plan is not None:
-            loaded_originals = []
-            for ref in init_models:
-                if ref.constant is not None:
-                    loaded_originals.append(
-                        (ref.name, np.full(tuple(ref.shape), float(ref.constant), dtype=np.float32))
-                    )
-                else:
-                    loaded_originals.append(
-                        (ref.name, np.load(ref.path).astype(np.float32))
-                    )
-            model_plan_cropped, sources, receivers, model_plan_keep = _apply_model_plan_to_fwi(
-                spec, loaded_originals, sources, receivers, spec.grid.dh,
+        if _obs_plan_mat:
+            from .plan_materialize import materialize_plan_dataset
+            _mat = materialize_plan_dataset(
+                spec, init_models,
+                effective_dt=effective_dt, effective_nt=effective_nt,
+                source_delay_s=_get_wavelet_source_delay_s(spec.wavelet),
+                verbose=dist_info.is_root,
             )
-            new_shape = next(iter(model_plan_cropped.values())).shape
-            if dist_info.is_root:
-                print(f"[model_plan] vp shape {shape} -> {new_shape}, "
-                      f"sources kept: {int((model_plan_keep is None) or model_plan_keep.sum())}"
-                      f"/{nshots}")
-            shape = tuple(new_shape)
-            nshots = int(sources.shape[0])
-            # Rebuild solver at the cropped grid.
+            sources = _mat["sources"]
+            receivers = _mat["receivers"]
+            obs = torch.from_numpy(_mat["obs"])
+            shape = tuple(_mat["shape"])
+            model_plan_cropped = _mat["cropped_models"] or None
+            nshots = int(_mat["nshots"])
+            # Rebuild solver at the materialised (cropped) grid.
             solver = _build_solver(
                 spec.physics, spec.backend, shape, spec.grid.dh,
                 effective_dt, effective_nt, dev,
             )
+            # Mark obs as already at solver dt so the pristine_dt detector
+            # below does not schedule a redundant per-stage resample.
+            segy_cache["__materialized_plan__"] = {"dt_s": float(_mat["native_dt"])}
+            if dist_info.is_root:
+                print(f"[fwi] obs.plan materialised (single-source): "
+                      f"nshots={nshots} nrec={_mat['nrec']} shape={shape}")
+        else:
+            sources, receivers = _build_geometry_2d(
+                spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+            )
+            nshots = int(sources.shape[0])
+
+            # 3c) Gap 2 — apply model_plan if set: crop every loaded model array,
+            # drop out-of-window sources, rebase geometry indices to the crop.
+            if spec.model_plan is not None:
+                loaded_originals = []
+                for ref in init_models:
+                    if ref.constant is not None:
+                        loaded_originals.append(
+                            (ref.name, np.full(tuple(ref.shape), float(ref.constant), dtype=np.float32))
+                        )
+                    else:
+                        loaded_originals.append(
+                            (ref.name, np.load(ref.path).astype(np.float32))
+                        )
+                model_plan_cropped, sources, receivers, model_plan_keep = _apply_model_plan_to_fwi(
+                    spec, loaded_originals, sources, receivers, spec.grid.dh,
+                )
+                new_shape = next(iter(model_plan_cropped.values())).shape
+                if dist_info.is_root:
+                    print(f"[model_plan] vp shape {shape} -> {new_shape}, "
+                          f"sources kept: {int((model_plan_keep is None) or model_plan_keep.sum())}"
+                          f"/{nshots}")
+                shape = tuple(new_shape)
+                nshots = int(sources.shape[0])
+                # Rebuild solver at the cropped grid.
+                solver = _build_solver(
+                    spec.physics, spec.backend, shape, spec.grid.dh,
+                    effective_dt, effective_nt, dev,
+                )
 
         # 4) Build inv_tensors (ordered to match equation.MODEL_SPECS).
         inv_in_order, inv_by_name, required_names = _build_inv_tensors(
@@ -2783,31 +2880,33 @@ class TaskRunner:
         # When model_plan dropped shots, the obs loader still produces the
         # ORIGINAL shot count for npy / SEG-Y paths (they don't know about the
         # crop). Generate obs at the original nshots first, then mask.
-        if model_plan_keep is not None and (
-            spec.obs.npy_path is not None or spec.obs.segy is not None
-            or spec.obs.segy_index is not None
-        ):
-            original_nshots = int(model_plan_keep.size)
-            obs = self._fwi_generate_obs(
-                spec, equation_cls, solver, wavelet,
-                sources, receivers, shape, dev, original_nshots,
-                segy_cache=segy_cache,
-            )
-            obs = obs[model_plan_keep]
-        else:
-            obs = self._fwi_generate_obs(
-                spec, equation_cls, solver, wavelet,
-                sources, receivers, shape, dev, nshots,
-                segy_cache=segy_cache,
-            )
+        # (The obs.plan single-source path already produced ``obs`` above.)
+        if not _obs_plan_mat:
+            if model_plan_keep is not None and (
+                spec.obs.npy_path is not None or spec.obs.segy is not None
+                or spec.obs.segy_index is not None
+            ):
+                original_nshots = int(model_plan_keep.size)
+                obs = self._fwi_generate_obs(
+                    spec, equation_cls, solver, wavelet,
+                    sources, receivers, shape, dev, original_nshots,
+                    segy_cache=segy_cache,
+                )
+                obs = obs[model_plan_keep]
+            else:
+                obs = self._fwi_generate_obs(
+                    spec, equation_cls, solver, wavelet,
+                    sources, receivers, shape, dev, nshots,
+                    segy_cache=segy_cache,
+                )
 
-        # 5b) Apply data_plan (and reject unimplemented model_plan) — see
-        # _apply_data_plan_to_fwi for the supported subset. Updates
-        # `nshots` if shot subsetting kicked in.
-        sources, receivers, obs = _apply_data_plan_to_fwi(
-            spec, sources, receivers, obs, spec.grid.dh, spec.time.dt, spec.time.nt, dev,
-        )
-        nshots = int(sources.shape[0])
+            # 5b) Apply data_plan (and reject unimplemented model_plan) — see
+            # _apply_data_plan_to_fwi for the supported subset. Updates
+            # `nshots` if shot subsetting kicked in.
+            sources, receivers, obs = _apply_data_plan_to_fwi(
+                spec, sources, receivers, obs, spec.grid.dh, spec.time.dt, spec.time.nt, dev,
+            )
+            nshots = int(sources.shape[0])
 
         # 6) Optimizer + scheduler.
         total_epochs = (sum(s.epochs for s in spec.stages)
@@ -2825,6 +2924,30 @@ class TaskRunner:
             optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
         scheduler = _build_scheduler(spec.scheduler, optimizer, total_epochs)
         initial_lrs = _remember_initial_lrs(optimizer)
+
+        # Smoothing prior (TVPrior) — applied to the velocity gradient each
+        # iteration. The OBN multisource (encoded) path builds + applies this;
+        # the single-source path historically dropped it (smooth_regularization
+        # was a silent no-op), leaving the per-shot gradient unregularised
+        # (high-wavenumber speckle). Build it here and thread it into
+        # _fwi_train_step so conventional FWI matches the encoded run's
+        # regularisation.
+        tv_prior = None
+        smooth_weight = 0.0
+        _smooth_spec = getattr(spec, "smooth_regularization", None)
+        if _smooth_spec is not None and float(_smooth_spec.weight) > 0.0:
+            from sweep_nn import TVPrior
+            tv_prior = TVPrior(
+                order=_smooth_spec.order,
+                x_weight=float(_smooth_spec.x_weight),
+                y_weight=float(_smooth_spec.y_weight),
+                z_weight=float(_smooth_spec.z_weight),
+                velocity_scale_m_s=float(_smooth_spec.velocity_scale_m_s),
+            )
+            smooth_weight = float(_smooth_spec.weight)
+            if dist_info.is_root:
+                print(f"[fwi] smooth_regularization (TVPrior) ON: "
+                      f"weight={smooth_weight:.2e} order={_smooth_spec.order}")
 
         # 7) Resume from checkpoint if requested. Rank 0 loads + broadcasts state.
         # Two modes:
@@ -3085,6 +3208,8 @@ class TaskRunner:
                     local_window_ctx=local_window_ctx,
                     syn_bandpass=stage_bandpass,
                     stage_dt=state["dt"],
+                    tv_prior=tv_prior,
+                    smooth_weight=smooth_weight,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
                 )
@@ -3550,7 +3675,8 @@ class TaskRunner:
                         reparam_net=None, local_window_ctx=None,
                         syn_bandpass=None, stage_dt: float | None = None,
                         state_for_dump: dict | None = None,
-                        take_qc_snapshot: bool = True) -> float:
+                        take_qc_snapshot: bool = True,
+                        tv_prior=None, smooth_weight: float = 0.0) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -3839,6 +3965,15 @@ class TaskRunner:
                     print("[illum] WARN: illumination_precondition is "
                           "a no-op under reparam.backward_mode='single_step'. "
                           "Switch to 'two_pass_full' to enable it.")
+            # Smoothing prior (single-step / grid path): add ∂(w·TV)/∂v after
+            # the data-gradient all-reduce, before the step.
+            if tv_prior is not None:
+                if reparam_net is None:
+                    _vp = inv_by_name.get("vp")
+                    if _vp is not None and _vp.requires_grad:
+                        (smooth_weight * tv_prior(_vp)).backward()
+                else:
+                    (smooth_weight * tv_prior(reparam_net())).backward()
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:
@@ -3975,6 +4110,14 @@ class TaskRunner:
                     v_grad, sill_sum, rill_sum,
                     eps=illum_spec.epsilon, exponent=illum_spec.exponent,
                 )
+            # Smoothing prior: add ∂(w·TV)/∂v to the (illum-preconditioned)
+            # leaf gradient BEFORE pushing it through the network — matches the
+            # multisource path's order (illum, then smooth). base_leaf carries
+            # requires_grad, so reg_loss.backward() accumulates into
+            # base_leaf.grad (which v_grad aliases).
+            if tv_prior is not None and v_grad is not None:
+                reg_loss = smooth_weight * tv_prior(base_leaf)
+                reg_loss.backward()
             if v_grad is None:
                 # Nothing actually backpropped (e.g. all chunks were empty);
                 # nothing to do.
@@ -4089,7 +4232,9 @@ class TaskRunner:
             )
 
         _apply_seed(spec.seed)
-        dev = _resolve_device(spec.device)
+        dd_on, dd_py, dd_px, dd_rc = _dd_config()
+        dev = (_dist.resolve_dist_device(spec.device, dist_info.local_rank)
+               if dd_on else _resolve_device(spec.device))
 
         encoding_spec = spec.source_encoding
         encoding_on = bool(encoding_spec is not None and encoding_spec.enabled)
@@ -4101,12 +4246,28 @@ class TaskRunner:
         # supershot. Under torchrun, each rank gets a contiguous slice of
         # the B batch — ``B_local = ceil(B / world_size)`` shots per rank
         # — and the vp gradient is all-reduce'd after backward.
-        if encoding_on and dist_info.is_distributed:
+        if encoding_on and dist_info.is_distributed and not dd_on:
             raise NotImplementedError(
                 "Encoded supershot FWI is 1-GPU by construction. Run with "
                 "source_encoding.enabled=false to use the per-shot multi-"
                 "GPU path, or run on a single GPU (no torchrun)."
             )
+        dd_mesh = None
+        if dd_on:
+            from sweep.parallel.mesh import MeshTopology
+            if not encoding_on:
+                raise ValueError(
+                    "SWEEP_DD_ENABLE=1 requires source_encoding.enabled=true "
+                    "(DD v1 = encoded supershot, shot_groups=1).")
+            _w, _r = int(dist_info.world_size), int(dist_info.rank)
+            if _w != dd_py * dd_px:
+                raise ValueError(
+                    f"DD world_size {_w} != SWEEP_DD_PY*PX {dd_py}*{dd_px}.")
+            dd_mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
+                                   world_size=_w, rank=_r)
+            print(f"[dd] ModelParallel ON: world={_w} py={dd_py} px={dd_px} "
+                  f"render_chunk={dd_rc} (illum/smooth/seabed/cudagraph "
+                  f"disabled in DD v1)", flush=True)
         if int(sampling_cfg.shared_shots_per_iter) == 0:
             raise ValueError(
                 "obs.plan.sampling.shared_shots_per_iter > 0 is required "
@@ -4259,6 +4420,20 @@ class TaskRunner:
                   f"[{init_origin_x + crop_origin_offset[2]:.1f}, "
                   f"{init_origin_x + crop_origin_offset[2] + init_vp_np.shape[-1] * dx_m:.1f}) m)")
         shape = tuple(int(v) for v in init_vp_np.shape)
+        if dd_on:
+            # DD v1 needs uniform tiles: edge-replicate the HIGH x/y edge so
+            # nx % px == 0 and ny % py == 0. Padding is appended past the survey
+            # edge, so the origin and every source/receiver coord stay valid; the
+            # extra cells carry no sources/receivers (PML-absorbed).
+            _pz, _pny, _pnx = init_vp_np.shape
+            _ny_pad, _nx_pad = (-_pny) % dd_py, (-_pnx) % dd_px
+            if _ny_pad or _nx_pad:
+                init_vp_np = np.pad(
+                    init_vp_np, ((0, 0), (0, _ny_pad), (0, _nx_pad)), mode="edge")
+                shape = tuple(int(v) for v in init_vp_np.shape)
+                print(f"[dd] padded grid to uniform tiles: "
+                      f"({_pz},{_pny},{_pnx}) -> {shape} (px={dd_px} py={dd_py})",
+                      flush=True)
         nz, ny, nx = shape
 
         # Final cropped-frame origin (used by all grid-index projections).
@@ -4376,6 +4551,8 @@ class TaskRunner:
         solver = _build_solver(
             spec.physics, spec.backend, shape, dx_m, effective_dt, effective_nt, dev,
         )
+        if dd_on:
+            solver = _dd_wrap(solver, dd_mesh)
         _t = _stage(f"_build_solver ({spec.physics.equation}, shape={shape})", _t)
         wavelet_np = _build_wavelet(
             spec.wavelet, spec.time,
@@ -4412,7 +4589,11 @@ class TaskRunner:
         # solver build for the whole sweep, no per-band resume.
         stage_list = _normalise_stage_list(spec)
         for _si, _st in enumerate(stage_list):
-            _unsup = [_f for _f in ("dh_m", "dt_s", "nt", "wavelet")
+            # Multi-resolution: per-stage ``dh_m`` IS supported (coarse grid for
+            # low-freq bands → finer for high). dt/nt are kept FIXED across
+            # stages (a dt valid at the finest grid is conservatively valid at
+            # any coarser grid), so the obs/wavelet time axis never re-samples.
+            _unsup = [_f for _f in ("dt_s", "nt", "wavelet")
                       if getattr(_st, _f, None) is not None]
             if abs(float(_st.lr_scale) - 1.0) > 1e-12:
                 _unsup.append("lr_scale")
@@ -4422,8 +4603,8 @@ class TaskRunner:
                 _unsup.append("batch_size")
             if _unsup:
                 raise NotImplementedError(
-                    f"stage {_si}: the encoded OBN path supports only "
-                    f"bandpass / epochs / optimizer_reset per stage; "
+                    f"stage {_si}: the encoded OBN path supports per stage only "
+                    f"bandpass / epochs / optimizer_reset / dh_m (dt_s/nt fixed); "
                     f"unsupported here: {_unsup}"
                 )
         stage_epochs = [int(_st.epochs) for _st in stage_list]
@@ -4451,6 +4632,7 @@ class TaskRunner:
         # x_lo:x_hi) window that cropped init_vp_np above, so the
         # broadcast 3-D mask lines up voxel-for-voxel with vp_leaf.
         water_mask_override = None
+        cropped_sd = None   # captured for per-stage water-mask rebuild (multi-res)
         if (spec.reparam is not None
                 and bool(getattr(spec.reparam, "mask_water_layer", False))
                 and getattr(spec.reparam, "seabed_depth_path", None) is not None):
@@ -4473,6 +4655,12 @@ class TaskRunner:
             mask_np = water_mask_from_seabed_depth(
                 cropped_sd, nz=int(init_vp_np.shape[0]), dh_z_m=float(dz_m),
             )
+            if dd_on and tuple(mask_np.shape) != tuple(shape):
+                # match the DD-padded base grid (edge-replicate high x/y)
+                mask_np = np.pad(
+                    mask_np, ((0, 0),
+                              (0, shape[-2] - mask_np.shape[-2]),
+                              (0, shape[-1] - mask_np.shape[-1])), mode="edge")
             water_mask_override = torch.from_numpy(mask_np)
             print(
                 f"[crg] reparam water_mask from {spec.reparam.seabed_depth_path}: "
@@ -4495,6 +4683,123 @@ class TaskRunner:
 
         _t = _stage(f"build wavelet + bandpass + vp_leaf + reparam_net "
                     f"({'SIREN' if reparam_net is not None else 'no reparam'})", _t)
+
+        # ---- Multi-resolution per-stage grid support -----------------------
+        # Capture the dh-INDEPENDENT base state so a stage that sets ``dh_m``
+        # can re-project geometry + resample vp/water-mask + rebuild the solver
+        # at its own spacing (coarse for low-freq bands → fine for high), cutting
+        # low-frequency compute by ~(dh_base/dh_stage)^3 cells. dt/nt stay fixed
+        # (a dt valid at the finest grid is conservatively valid coarser), so the
+        # obs/wavelet time axis never re-samples. Geometry re-projects from the
+        # model-frame metres (dh-independent); the C kernel's OOB guard absorbs
+        # the handful of edge rows that round just out of a coarser grid.
+        _mr_origin = (float(origin_x), float(origin_y), float(origin_z))
+        _mr_base_shape = tuple(int(v) for v in shape)
+        _mr_base_dh = float(dx_m)
+        _mr_pristine_vp = torch.from_numpy(np.ascontiguousarray(init_vp_np)).to(dev)
+        _mr_plan_model_xy = plan_model_xy
+        _mr_src_model_xy = src_model_xy
+        _mr_row_z = np.ascontiguousarray(plan.row_source_xyz[:, 2]).astype(np.float64)
+        _mr_grp_z = np.ascontiguousarray(plan.group_xyz[:, 2]).astype(np.float64)
+        _mr_cropped_sd = cropped_sd
+        # When the water mask is derived INTERNALLY (seabed_depth_path=null →
+        # mask = init_vp == water_vp), there is no 2-D seabed_depth to resample
+        # per stage; deriving the mask from the trilinear-resampled base would
+        # fail the exact-equality test. Recover an effective 2-D seabed depth
+        # from the base water mask (water column is contiguous from z=0:
+        # seabed_depth[x,y] = n_water_cells * dz_base) so the per-stage
+        # ``water_mask_from_seabed_depth`` rebuild works for both cases.
+        if (_mr_cropped_sd is None and spec.reparam is not None
+                and bool(getattr(spec.reparam, "mask_water_layer", False))):
+            _wvp = float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
+            _base_wmask = (init_vp_np == _wvp)            # (nz, ny, nx)
+            if bool(_base_wmask.any()):
+                _mr_cropped_sd = (_base_wmask.sum(axis=0).astype(np.float64)
+                                  * float(dz_m))          # (ny, nx) seabed depth (m)
+                print(f"[crg] multi-res: derived effective seabed_depth from "
+                      f"base water mask (init_vp=={_wvp:.0f}) for per-stage mask "
+                      f"rebuild ({int((_mr_cropped_sd > 0).sum())}/"
+                      f"{_mr_cropped_sd.size} wet columns)")
+        _cur_dh = float(dx_m)
+
+        def _grid_for_dh(dh):
+            ox, oy, oz = _mr_origin
+            nz_b, ny_b, nx_b = _mr_base_shape
+            r = _mr_base_dh / float(dh)
+            sh = (max(1, int(round(nz_b * r))),
+                  max(1, int(round(ny_b * r))),
+                  max(1, int(round(nx_b * r))))
+            pg = np.stack([
+                np.rint((_mr_plan_model_xy[:, 0] - ox) / dh).astype(np.int64),
+                np.rint((_mr_plan_model_xy[:, 1] - oy) / dh).astype(np.int64),
+                np.rint((_mr_row_z - oz) / dh).astype(np.int64),
+            ], axis=-1)
+            sg = np.stack([
+                np.rint((_mr_src_model_xy[:, 0] - ox) / dh).astype(np.int64),
+                np.rint((_mr_src_model_xy[:, 1] - oy) / dh).astype(np.int64),
+                np.rint((_mr_grp_z - oz) / dh).astype(np.int64),
+            ], axis=-1)
+            return sh, pg, sg
+
+        def _apply_stage_dh(dh, si):
+            """Switch the run to grid spacing ``dh`` (m) for the current stage."""
+            nonlocal shape, plan_grid_xyz, src_grid_xyz, solver, vp_leaf, _cur_dh
+            sh, pg, sg = _grid_for_dh(dh)
+            plan_grid_xyz, src_grid_xyz = pg, sg
+            nz_s, ny_s, nx_s = sh
+            new_base = _resample_vp_tensor(_mr_pristine_vp, sh).detach().to(dev)
+            new_mask = None
+            if _mr_cropped_sd is not None:
+                import torch.nn.functional as _F
+                from sweep_tasks.bathymetry import water_mask_from_seabed_depth
+                sd_t = torch.from_numpy(
+                    np.ascontiguousarray(_mr_cropped_sd))[None, None].float()
+                sd_s = _F.interpolate(
+                    sd_t, size=(ny_s, nx_s), mode="bilinear",
+                    align_corners=False)[0, 0].numpy()
+                new_mask = torch.from_numpy(
+                    water_mask_from_seabed_depth(sd_s, nz=nz_s, dh_z_m=float(dh))
+                ).to(dev)
+            if dd_on:
+                # DD v1 needs uniform tiles.  The base pad (at grid.dh) does NOT
+                # survive a per-stage dh_m resample (e.g. 25 m -> 18.75 m can
+                # leave ny % py != 0), so edge-replicate the HIGH y/x edge of the
+                # RESAMPLED stage grid here so ny%py==0 and nx%px==0.  Pad is past
+                # the survey edge -> origin + every src/rec coord stay valid.
+                import torch.nn.functional as _F
+                _yp, _xp = (-ny_s) % dd_py, (-nx_s) % dd_px
+                if _yp or _xp:
+                    # 3-D (nz, ny, nx) is (C, H, W) for F.pad -> size-4 replicate
+                    # pads the last two dims (ny, nx), leaving nz untouched.
+                    new_base = _F.pad(new_base, (0, _xp, 0, _yp), mode="replicate")
+                    if new_mask is not None:
+                        new_mask = _F.pad(
+                            new_mask.float(), (0, _xp, 0, _yp),
+                            mode="replicate").to(new_mask.dtype)
+                    print(f"[dd] stage padded grid to uniform tiles: "
+                          f"({nz_s},{ny_s},{nx_s}) -> "
+                          f"({nz_s},{ny_s + _yp},{nx_s + _xp}) "
+                          f"(px={dd_px} py={dd_py})", flush=True)
+                    sh = (nz_s, ny_s + _yp, nx_s + _xp)
+                    nz_s, ny_s, nx_s = sh
+            shape = sh
+            if reparam_net is not None:
+                # update_base_velocity resamples coords + (optionally) the water
+                # mask to the new shape; per-iter ``reparam_net()`` then renders
+                # at the new grid, so no inv_by_name swap is needed here.
+                reparam_net.update_base_velocity(new_base, water_mask=new_mask)
+            else:
+                vp_leaf = new_base.requires_grad_(True)
+                inv_by_name["vp"] = vp_leaf
+            solver = _build_solver(
+                spec.physics, spec.backend, sh, float(dh),
+                effective_dt, effective_nt, dev,
+            )
+            if dd_on:
+                solver = _dd_wrap(solver, dd_mesh)
+            _cur_dh = float(dh)
+            print(f"[crg] STAGE {si + 1} grid -> dh={dh:.1f} m shape={sh} "
+                  f"(base {_mr_base_dh:.1f} m / {_mr_base_shape})", flush=True)
 
         # --- 6) Optimizer.
         if reparam_net is not None:
@@ -4998,6 +5303,12 @@ class TaskRunner:
                 print(f"[crg] === STAGE {_si + 1}/{len(stage_list)} "
                       f"epoch[{epoch}:{epoch + int(_st.epochs)}] "
                       f"bandpass={_bp_txt} ===", flush=True)
+                # Multi-resolution: switch the grid spacing if this stage sets
+                # dh_m (geometry re-projection + vp/water-mask resample + solver
+                # rebuild). Reparam net params + Adam state carry over unchanged.
+                _stage_dh = getattr(_st, "dh_m", None)
+                if _stage_dh is not None and abs(float(_stage_dh) - _cur_dh) > 1e-9:
+                    _apply_stage_dh(float(_stage_dh), _si)
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
             t = time.perf_counter()
@@ -5164,6 +5475,13 @@ class TaskRunner:
             if reparam_net is None:
                 models = [vp_leaf]
                 v_leaf_for_illum = vp_leaf
+            elif dd_on:
+                # DD Level-B: render ONLY this rank's tile window so the reparam
+                # memory divides across tiles (validated in runs/dd_ifwi_smoke).
+                _dd_bounds = _dd_tile_bounds(solver)
+                base_leaf = _dd_render_tile(reparam_net, _dd_bounds, dd_rc)
+                models = [base_leaf]
+                v_leaf_for_illum = base_leaf
             elif spec.reparam.backward_mode == "single_step":
                 models = [reparam_net()]
                 v_leaf_for_illum = None  # net params; illum precond no-op
@@ -5175,26 +5493,65 @@ class TaskRunner:
                 v_leaf_for_illum = base_leaf
             _msync(); t_render = time.perf_counter() - _t_re
 
+            _memprof = os.environ.get("SWEEP_MEM_PROFILE") == "1"
+            if _memprof and epoch == 0 and dev.type == "cuda":
+                torch.cuda.synchronize(dev)
+                _mem_pre_fwd = torch.cuda.memory_allocated(dev)
             t = time.perf_counter()
-            syn = solver(
-                wavelet_super, sources_super, receivers_super,
-                models=models, source_encoding=encoding_on,
-            )
+            if dd_on:
+                # Per-iter shared-shot sampling varies the receiver set (and so
+                # each tile's owned-receiver count), so force a re-capture of the
+                # DD geometry every iter — the captured record buffers are sized
+                # for a fixed layout. Costs ~1 extra fwd+bwd (v1 correctness over
+                # speed; a fixed-geometry fast path is a follow-up).
+                solver._captured = False
+                # ModelParallel infers the encoded supershot from shapes; the
+                # source_encoding kwarg was removed from the core API.
+                syn = solver(wavelet_super, sources_super, receivers_super,
+                             models=models)
+            else:
+                syn = solver(
+                    wavelet_super, sources_super, receivers_super,
+                    models=models, source_encoding=encoding_on,
+                )
             _csync()
             t_fwd = time.perf_counter() - t
+            if _memprof and epoch == 0 and dev.type == "cuda":
+                _mem_post_fwd = torch.cuda.memory_allocated(dev)
             # Adapt obs to syn's canonical layout (n, nt, nrec, 1).
             # ``obs_super`` from the CRG prefetcher is (n, nrec, nt), so we
             # always permute + unsqueeze. After geophyai 21041c5 both
             # backends emit syn as 4-D canonical, so this is unconditional.
             obs_match = obs_super.permute(0, 2, 1).unsqueeze(-1).contiguous()
             t = time.perf_counter()
-            loss_t = loss_fn(syn, obs_match).sum()
-            global_norm = float(syn.numel())
-            # Dummy-slice ranks contribute zero loss / zero grad so the
-            # all_reduce stays consistent across ranks; non-dummy ranks
-            # use their full per-rank loss.
-            loss_scale = 0.0 if (not encoding_on and dummy_slice) else 1.0
-            (loss_t / global_norm * loss_scale).backward()
+            if dd_on:
+                # ModelParallel returns a 3-D record (ns, nrec, nt); make it
+                # canonical 4-D (ns, nt, nrec, 1) to match the single-domain
+                # backends and obs_match (already 4-D) before the loss.
+                if syn.dim() == 3:
+                    syn = syn.permute(0, 2, 1).unsqueeze(-1).contiguous()
+                # DD: each tile records only its OWN receivers (ordered by
+                # solver._own_rec_idx); subset obs to match syn, then all_reduce
+                # the misfit sum AND the element count so the global-normalised
+                # gradient equals the single-GPU run. (all_reduce-sum backward is
+                # identity for the local term -> correct per-tile gradient.)
+                _own = solver._own_rec_idx
+                obs_tile = obs_match[:, :, _own, :] if _own else obs_match[:, :, :0, :]
+                loss_t = loss_fn(syn, obs_tile).sum()
+                import torch.distributed as _td
+                _tn = torch.tensor(float(syn.numel()), device=dev)
+                _td.all_reduce(_tn, op=_td.ReduceOp.SUM)
+                global_norm = float(_tn.item()) or 1.0
+                _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
+                (loss_t / global_norm).backward()
+            else:
+                loss_t = loss_fn(syn, obs_match).sum()
+                global_norm = float(syn.numel())
+                # Dummy-slice ranks contribute zero loss / zero grad so the
+                # all_reduce stays consistent across ranks; non-dummy ranks
+                # use their full per-rank loss.
+                loss_scale = 0.0 if (not encoding_on and dummy_slice) else 1.0
+                (loss_t / global_norm * loss_scale).backward()
             _csync()
             t_bwd = time.perf_counter() - t
 
@@ -5217,7 +5574,9 @@ class TaskRunner:
             losses.append(float(loss_t.detach().cpu()) / global_norm)
 
             # --- Illumination precond (single_step + grid; or two_pass leaf).
-            if illum_on:
+            # DD v1: disabled (ModelParallel exposes no illum tensors; v_leaf is
+            # a tile). See _dd_config / the [dd] setup banner.
+            if illum_on and not dd_on:
                 sill = getattr(solver, "source_illumination", None)
                 rill = getattr(solver, "receiver_illumination", None)
                 if reparam_net is None or v_leaf_for_illum is not None:
@@ -5279,7 +5638,7 @@ class TaskRunner:
             _tprof = os.environ.get("SWEEP_TASKS_TPROF") == "1"
             if _tprof and dev.type == "cuda": torch.cuda.synchronize(dev)
             _t_reg0 = time.perf_counter()
-            if tv_prior is not None and v_leaf_for_illum is not None:
+            if tv_prior is not None and v_leaf_for_illum is not None and not dd_on:
                 reg_loss = float(smooth_spec.weight) * tv_prior(v_leaf_for_illum)
                 # Accumulate into v_leaf_for_illum.grad (.backward adds).
                 reg_loss.backward(retain_graph=False)
@@ -5288,18 +5647,28 @@ class TaskRunner:
 
             # --- Seabed-freeze mask on the leaf gradient (post illum +
             # post smooth-reg so any mask zeros take precedence).
-            if seabed_mask is not None and v_leaf_for_illum is not None:
+            if seabed_mask is not None and v_leaf_for_illum is not None and not dd_on:
                 seabed_mask.apply_to(v_leaf_for_illum.grad)
 
-            # --- Reparam two-pass full: push leaf grad through the net.
-            # Drain any in-flight solver-adjoint async tail BEFORE starting the
-            # reparam timer — otherwise that tail (which is large relative to a
-            # fast/optimized reparam) bleeds into t_reparam_bwd and makes it
-            # jitter wildly even though the reparam compute itself is steady.
-            if _tprof and dev.type == "cuda":
-                torch.cuda.synchronize(dev)
+            # --- Reparam two-pass: push leaf grad through the net.
+            # UNCONDITIONALLY drain any in-flight solver-adjoint async tail BEFORE
+            # the reparam timer and attribute that drain to t_bwd (where it
+            # belongs) — otherwise the tail bleeds into t_reparam_bwd and makes it
+            # look like the SIREN backward (which is really ~0.05 s) when it is in
+            # fact the solver adjoint (scales with B). t_drain is printed so the
+            # split is auditable without SWEEP_TASKS_TPROF.
+            _t_drain0 = time.perf_counter()
+            _csync()
+            t_drain = time.perf_counter() - _t_drain0
+            t_bwd += t_drain
             t = time.perf_counter()
-            if (reparam_net is not None
+            if dd_on and reparam_net is not None:
+                # DD Level-B: push the TILE velocity grad through the net params
+                # (z-chunked windowed backward) then all_reduce net-param grads
+                # across tiles. Mirrors the validated runs/dd_ifwi_smoke path.
+                _dd_backward_tile(reparam_net, v_leaf_for_illum,
+                                  _dd_tile_bounds(solver), dd_rc)
+            elif (reparam_net is not None
                     and spec.reparam.backward_mode == "two_pass_full"):
                 v_grad = v_leaf_for_illum.grad
                 if v_grad is not None:
@@ -5308,7 +5677,15 @@ class TaskRunner:
             elif (reparam_net is not None
                   and spec.reparam.backward_mode == "two_pass_chunked"):
                 v_grad = v_leaf_for_illum.grad
-                if v_grad is not None:
+                if v_grad is not None and os.environ.get("SWEEP_REPARAM_CUDAGRAPH") == "1" \
+                        and hasattr(reparam_net, "backward_velocity_gradient_graphed") \
+                        and dev.type == "cuda":
+                    # Root-cure for the prefetch-GIL stall: replay a captured
+                    # render+backward graph (1 host launch) instead of ~500
+                    # launches that get GIL-starved by the SEG-Y prefetch
+                    # threads. Numerically equivalent (cosine 0.9999999).
+                    reparam_net.backward_velocity_gradient_graphed(v_grad)
+                elif v_grad is not None:
                     reparam_net.backward_velocity_gradient(
                         v_grad, chunk_rows=int(spec.reparam.backward_chunk_rows),
                     )
@@ -5319,13 +5696,38 @@ class TaskRunner:
             optimizer.step()
             _csync()
             t_opt = time.perf_counter() - t
+            if _memprof and epoch == 0 and dev.type == "cuda":
+                _nn_p = (sum(p.numel() * p.element_size() for p in reparam_net.parameters())
+                         if reparam_net is not None else vp_leaf.numel() * vp_leaf.element_size())
+                _nn_o = 0
+                for _st in optimizer.state.values():
+                    for _v in _st.values():
+                        if torch.is_tensor(_v):
+                            _nn_o += _v.numel() * _v.element_size()
+                _tot = torch.cuda.memory_allocated(dev)
+                _pk = torch.cuda.max_memory_allocated(dev)
+                _res = torch.cuda.memory_reserved(dev)
+                _solver_fwd = _mem_post_fwd - _mem_pre_fwd
+                print(f"[mem_profile] epoch0 | total_alloc={_tot/1e9:.2f}G peak={_pk/1e9:.2f}G reserved={_res/1e9:.2f}G "
+                      f"|| NN(network): params={_nn_p/1e9:.3f}G optim_states={_nn_o/1e9:.3f}G "
+                      f"|| SOLVER fwd-alloc(wavefields+boundary)={_solver_fwd/1e9:.2f}G "
+                      f"(net_params_count={sum(p.numel() for p in reparam_net.parameters()) if reparam_net is not None else 0})",
+                      flush=True)
             if reparam_net is None:
                 bound = _effective_bound(spec.model_bounds, "vp")
                 if bound is not None:
                     vp_leaf.data.clamp_(min=bound.min, max=bound.max)
             else:
                 with torch.no_grad():
-                    inv_by_name["vp"] = reparam_net().detach()
+                    if dd_on:
+                        # chunked (downsample-path) global render for
+                        # snapshots/QC — bounded memory (a bare reparam_net()
+                        # would materialise the full grid + activations and can
+                        # OOM the tile GPUs at production scale).
+                        inv_by_name["vp"] = reparam_net.render(
+                            chunk_rows=dd_rc).detach()
+                    else:
+                        inv_by_name["vp"] = reparam_net().detach()
 
             iter_s = time.perf_counter() - t_iter
             cache_str = ""
@@ -5359,7 +5761,7 @@ class TaskRunner:
                   f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
-                  f"reparam_bwd={t_reparam_bwd:.2f} "
+                  f"drain={t_drain:.2f} reparam_bwd={t_reparam_bwd:.2f} "
                   f"opt={t_opt:.2f}]{cache_str}{pf_str}{ms_str}", flush=True)
 
             # --- Snapshots + QC.
