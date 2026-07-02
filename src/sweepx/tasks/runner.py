@@ -4021,6 +4021,16 @@ class TaskRunner:
                 chunk_rec = receivers[chunk_idx]
                 if local_window_ctx is None:
                     models = [leaf]
+                    # Opt-in backward illumination on the new c-core (perf/
+                    # acoustic-bwd-skip-illum): the two-pass reparam path must
+                    # enable it too, else solver.source_illumination stays None
+                    # and the illum precond silently no-ops (the single-step
+                    # chunk helper already does this). Harmless on older cores.
+                    if getattr(getattr(spec, "illumination_precondition", None), "enabled", False):
+                        try:
+                            solver.compute_illumination = True
+                        except Exception:
+                            pass
                     return models, solver, chunk_src, chunk_rec
                 win_spec = local_window_ctx["spec"]
                 full_shape = local_window_ctx["shape"]
@@ -4059,6 +4069,11 @@ class TaskRunner:
                 local_src, local_rec = _rebase_geometry_to_window(chunk_src, chunk_rec, **rebase_kwargs)
                 # View into leaf — gradient scatters back to leaf.grad on backward.
                 models = [leaf[leaf_slice].contiguous()]
+                if getattr(getattr(spec, "illumination_precondition", None), "enabled", False):
+                    try:
+                        local_solver.compute_illumination = True
+                    except Exception:
+                        pass
                 return models, local_solver, local_src, local_rec
 
             sill_sum = None
