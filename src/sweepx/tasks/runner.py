@@ -4806,6 +4806,16 @@ class TaskRunner:
             else:
                 vp_leaf = new_base.requires_grad_(True)
                 inv_by_name["vp"] = vp_leaf
+            # Free the PREVIOUS stage's solver GPU buffers before building the new
+            # one. Each DD stage holds tile boundary rings + wavefields + record
+            # buffers; if the old ModelParallel/PropTorch isn't dropped first they
+            # accumulate across stages (a fine stage OOM'd while still carrying
+            # the coarser stages' residue, though it alone needs far less).
+            solver = None
+            import gc as _gc
+            _gc.collect()
+            if dev.type == "cuda":
+                torch.cuda.empty_cache()
             solver = _build_solver(
                 spec.physics, spec.backend, sh, float(dh),
                 effective_dt, effective_nt, dev,
@@ -5514,12 +5524,16 @@ class TaskRunner:
                 _mem_pre_fwd = torch.cuda.memory_allocated(dev)
             t = time.perf_counter()
             if dd_on:
-                # Per-iter shared-shot sampling varies the receiver set (and so
-                # each tile's owned-receiver count), so force a re-capture of the
-                # DD geometry every iter — the captured record buffers are sized
-                # for a fixed layout. Costs ~1 extra fwd+bwd (v1 correctness over
-                # speed; a fixed-geometry fast path is a follow-up).
-                solver._captured = False
+                # Per-iter shared-shot sampling varies each tile's owned
+                # source/receiver COUNT, but ModelParallel._set_geometry now
+                # reallocates only the two count-sized buffers (record ~ nrec,
+                # grad-wavelet ~ nsrc) and reuses the model-sized wavefield +
+                # boundary buffers, so the geometry is swapped in place — no
+                # forced re-capture. (The old force-recapture-every-iter
+                # reallocated every buffer + the boundary ring each iter,
+                # leaking ~one adjoint-wavefield set/iter and paying a throwaway
+                # fwd+bwd.) First iter of each stage still captures via the fresh
+                # per-stage solver; later iters hit the _set_geometry fast path.
                 # ModelParallel infers the encoded supershot from shapes; the
                 # source_encoding kwarg was removed from the core API.
                 syn = solver(wavelet_super, sources_super, receivers_super,
@@ -5784,8 +5798,13 @@ class TaskRunner:
                 ms_str = (f"  MSPROF:[dedup={t_dedup:.2f} "
                           f"obs_encode_bandpass={t_obsbp:.2f} "
                           f"reparam_render={t_render:.2f}]")
+            _memstr = ""
+            if dev.type == "cuda":
+                _memstr = (f" memGB={torch.cuda.memory_allocated(dev) / 2**30:.1f}"
+                           f"/{torch.cuda.max_memory_allocated(dev) / 2**30:.1f}pk")
+                torch.cuda.reset_peak_memory_stats(dev)   # per-epoch peak trend
             print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
-                  f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}  "
+                  f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}{_memstr}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
                   f"drain={t_drain:.2f} reparam_bwd={t_reparam_bwd:.2f} "
