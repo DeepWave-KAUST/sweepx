@@ -559,6 +559,59 @@ class FreezeWaterLayerSpec(_Forbid):
         return self
 
 
+class FreqSelectionSpec(_Forbid):
+    """Frequency-selection (steady-state comb) encoding parameters.
+
+    Every node of the active pool continuously emits ONE exclusive DFT-comb
+    bin; the last ``probe_samples`` record samples form an integer-period
+    window in which bins are orthogonal, so the window DFT separates nodes
+    exactly (deterministic zero crosstalk). Wavelet-free: the GCN loss is
+    invariant to any per-node complex scale, so no wavelet spec, no obs
+    prepad, no bandpass filter and no shared-shots sampler exist in this
+    mode. Observed data are pre-extracted DTFT coefficients
+    (:mod:`sweep_tasks.freqsel`), fold-averaged onto grid cells — the
+    inversion performs zero SEG-Y I/O.
+
+    ``coeff_shards`` is a glob for the extraction npz shard(s). For
+    synthetic tests set ``synthesize_from_true=True`` instead: the runner
+    forward-models the shots through ``model_true`` once at setup, DTFTs
+    them at the comb and writes the shard to the task dir (then inverts
+    from it exactly like the field path).
+
+    Comb: bins ``k_lo..k_hi`` of the window, i.e. frequencies
+    ``k / (probe_samples * dt)``. Record length must be
+    ``steady_samples + slack_samples + probe_samples``; the leading
+    ``steady_samples`` let transients decay (validate with the two-window
+    QC printed at setup), ``slack_samples`` gives the QC a second window.
+    """
+
+    coeff_shards: str | None = None
+    synthesize_from_true: bool = False
+    # synthetic-test layout (used only with synthesize_from_true): path of
+    # the true model npy (target grid), number of nodes on the surface line
+    # grid, receiver stride in cells, and node depth in cells.
+    true_model_path: str | None = None
+    synth_n_nodes: int = Field(gt=0, default=16)
+    synth_rec_stride: int = Field(gt=0, default=2)
+    synth_node_z: int = Field(ge=0, default=2)
+    probe_samples: int = Field(gt=0, default=6000)
+    k_lo: int = Field(gt=0, default=49)
+    k_hi: int = Field(gt=0, default=96)
+    steady_samples: int = Field(gt=0, default=2500)
+    slack_samples: int = Field(ge=0, default=500)
+    ramp_s: float = Field(gt=0, default=0.5)
+    n_pools: int = Field(gt=0, default=14)
+    eps: float = Field(gt=0, default=1.0e-12)
+
+    @model_validator(mode="after")
+    def _one_source(self):
+        if bool(self.coeff_shards) == bool(self.synthesize_from_true):
+            raise ValueError(
+                "FreqSelectionSpec: set exactly one of coeff_shards / "
+                "synthesize_from_true")
+        return self
+
+
 class SourceEncodingSpec(_Forbid):
     """Random ±1 source encoding for single-supershot OBN FWI.
 
@@ -589,6 +642,19 @@ class SourceEncodingSpec(_Forbid):
     min_coverage: int = Field(ge=0, default=0)
     sign_seed: int | None = None
     reseed_every_iter: bool = True
+    # "random": the ±1 path above. "frequency_selection": deterministic
+    # frequency-division comb encoding (see FreqSelectionSpec); requires
+    # ``frequency`` to be set. Default keeps existing YAMLs unchanged.
+    mode: Literal["random", "frequency_selection"] = "random"
+    frequency: FreqSelectionSpec | None = None
+
+    @model_validator(mode="after")
+    def _freqsel_requires_spec(self):
+        if self.mode == "frequency_selection" and self.frequency is None:
+            raise ValueError(
+                "source_encoding.mode='frequency_selection' requires the "
+                "'frequency' sub-spec")
+        return self
 
 
 class IlluminationPreconditionSpec(_Forbid):
@@ -1166,8 +1232,13 @@ class FWISpec(BaseTaskSpec):
     task_type: Literal["fwi"] = "fwi"
     grid: GridSpec
     time: TimeSpec
-    wavelet: Wavelet
-    geometry: Geometry
+    # wavelet/geometry/obs are optional ONLY under
+    # source_encoding.mode == "frequency_selection" (wavelet-free, plan-free:
+    # geometry and data live in the coefficient shards). The validator below
+    # keeps them required for every other path, so existing YAMLs are
+    # unaffected.
+    wavelet: Wavelet | None = None
+    geometry: Geometry | None = None
     physics: PhysicsSpec
     backend: BackendSpec = Field(default_factory=BackendSpec)
 
@@ -1177,10 +1248,25 @@ class FWISpec(BaseTaskSpec):
     init_model: ModelRef | None = None
     init_models: list[ModelRef] | None = None
 
-    obs: ObsSpec
+    obs: ObsSpec | None = None
     optimizer: Optimizer
     scheduler: Scheduler = Field(default_factory=SchedulerConstant)
     loss: LossSpec = Field(default_factory=LossSpec)
+
+    @model_validator(mode="after")
+    def _freqsel_or_conventional(self):
+        freq_on = (self.source_encoding is not None
+                   and self.source_encoding.enabled
+                   and self.source_encoding.mode == "frequency_selection")
+        if not freq_on:
+            missing = [n for n in ("wavelet", "geometry", "obs")
+                       if getattr(self, n) is None]
+            if missing:
+                raise ValueError(
+                    f"fwi: field(s) {missing} are required (they are "
+                    "optional only under source_encoding.mode="
+                    "'frequency_selection')")
+        return self
     epochs: int = Field(ge=1)
     batchsize: int = Field(ge=1, default=1)
     train_shot_batchsize: int | None = None  # default = batchsize (no accumulation)

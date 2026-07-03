@@ -2660,9 +2660,271 @@ class TaskRunner:
         print(f"[wavefield] done in {elapsed:.1f} ms, snapshots {snapshots_np.shape}")
         return artifacts, summary
 
+    # -- fwi (frequency-selection encoded) ---------------------------------
+
+    def _run_fwi_freqsel(self, spec: FWISpec, task_dir: Path):
+        """Frequency-selection (steady-state comb) encoded FWI / iFWI.
+
+        Deterministic zero-crosstalk source encoding (Tromp & Bachmann 2019)
+        on the mode-B super-shot path: node pools rotate deterministically,
+        every pool node emits one exclusive comb bin (permuted per iter),
+        the loss is the per-node complex-cosine GCN on steady-window DFT
+        coefficients — wavelet-free, plan-free, zero per-iter I/O. Obs are
+        pre-extracted coefficient shards (field path) or synthesized from a
+        true model once at setup (test path). Heavy lifting lives in
+        :mod:`sweep_tasks.freqsel`; validated on a field OBN dataset in the low-frequency band
+        (multi-GPU DD).
+        No multi-stage / resume support yet (single band per task).
+        """
+        import json as _json
+        import time as _time
+
+        import numpy as np
+        import torch
+
+        from sweep_tasks import freqsel as fsl
+
+        fspec = spec.source_encoding.frequency
+        dd_on, dd_py, dd_px, dd_rc = _dd_config()
+        rank, world = 0, 1
+        if dd_on:
+            import torch.distributed as dist
+            if not dist.is_initialized():
+                dist.init_process_group("nccl")
+            rank, world = dist.get_rank(), dist.get_world_size()
+            if dd_py * dd_px != world:
+                raise ValueError(
+                    f"SWEEP_DD_PY*PX={dd_py * dd_px} != world={world}")
+            li = int(os.environ.get("LOCAL_RANK", rank)) % max(
+                1, torch.cuda.device_count())
+            torch.cuda.set_device(li)
+            dev = torch.device(f"cuda:{li}")
+        else:
+            dev = _resolve_device(spec.device)
+        _apply_seed(spec.seed)
+
+        comb = fsl.FrequencyComb(
+            dt=float(spec.time.dt), n_p=int(fspec.probe_samples),
+            ks=np.arange(int(fspec.k_lo), int(fspec.k_hi) + 1))
+        nt = int(fspec.steady_samples + fspec.slack_samples
+                 + fspec.probe_samples)
+        if spec.time.nt != nt and rank == 0:
+            print(f"[freqsel] note: time.nt={spec.time.nt} ignored; encoded "
+                  f"record nt={nt} (steady+slack+probe)", flush=True)
+
+        # ---- init model on the TARGET grid (no plan/crop machinery) ------
+        vp0 = np.load(spec.init_model.path).astype(np.float32)
+        gshape = vp0.shape
+        if len(gshape) != 3:
+            raise ValueError("freqsel path is 3-D (use a thin-slab volume "
+                             f"for 2-D tests); init shape {gshape}")
+        nz, ny_, nx_ = gshape
+        nyp = -(-ny_ // dd_py) * dd_py if dd_on else ny_
+        nxp = -(-nx_ // dd_px) * dd_px if dd_on else nx_
+        vp0p = np.pad(vp0, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)),
+                      mode="edge")
+        frozen = vp0p == float(getattr(spec.reparam, "water_vp_m_s", 1500.0)
+                               if spec.reparam else 1500.0)
+        frozen[:, ny_:, :] = True
+        frozen[:, :, nx_:] = True
+        water_t = torch.tensor(frozen, device=dev)
+
+        solver = _build_solver(spec.physics, spec.backend,
+                               (nz, nyp, nxp), float(spec.grid.dh),
+                               float(spec.time.dt), nt, dev)
+        if dd_on:
+            from sweep.parallel import MeshTopology
+            mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
+                                world_size=world, rank=rank)
+            solver = _dd_wrap(solver, mesh)
+
+        # ---- targets: field shards or one-shot synthesis ------------------
+        task_dir.mkdir(parents=True, exist_ok=True)
+        if fspec.synthesize_from_true:
+            if dd_on:
+                raise NotImplementedError(
+                    "synthesize_from_true is a single-device test path")
+            vpt = np.load(fspec.true_model_path).astype(np.float32)
+            if vpt.shape != gshape:
+                raise ValueError("true/init model shapes differ")
+            n_nodes = int(fspec.synth_n_nodes)
+            sx = np.linspace(8, nx_ - 9, n_nodes).astype(np.int64)
+            nodes = np.stack([sx, np.full(n_nodes, ny_ // 2, np.int64),
+                              np.full(n_nodes, fspec.synth_node_z,
+                                      np.int64)], -1)
+            rx = np.arange(4, nx_ - 4, int(fspec.synth_rec_stride))
+            recs = np.stack([rx, np.full(len(rx), ny_ // 2, np.int64),
+                             np.zeros(len(rx), np.int64)], -1)
+            shard = str(task_dir / "freqsel_synth_obs.npz")
+            t = np.arange(nt, dtype=np.float64) * comb.dt
+            f0 = 1.5 * float(np.mean(comb.freqs))
+            a = np.pi * f0 * (t - 0.25)
+            ricker = ((1 - 2 * a * a) * np.exp(-a * a)).astype(np.float32)
+            fsl.synthesize_shard(
+                shard, solver, torch.tensor(
+                    np.pad(vpt, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)),
+                           mode="edge"), device=dev),
+                nodes, recs, comb, ricker, dev, verbose=rank == 0)
+            shards_glob = shard
+        else:
+            shards_glob = fspec.coeff_shards
+        targets = fsl.FreqSelTargets(shards_glob, comb, ny_,
+                                     verbose=rank == 0)
+        sched = fsl.PoolScheduler(targets.node_grid, int(fspec.n_pools),
+                                  comb.n_bins, seed=int(spec.seed) + 17)
+        rec_table = targets.union_xyz[None]
+        if rank == 0:
+            print(f"[freqsel] {targets.n_nodes} nodes, {targets.n_items} "
+                  f"items, {targets.n_union} union cells, "
+                  f"{sched.n_pools} pools, comb {comb.freqs[0]:.4f}-"
+                  f"{comb.freqs[-1]:.4f} Hz, nt={nt}", flush=True)
+
+        # ---- parameterisation: grid vp or reparam INR ---------------------
+        use_reparam = spec.reparam is not None
+        base_t = torch.tensor(vp0p, device=dev)
+        if use_reparam:
+            net = _build_reparam_net(spec.reparam, base_t,
+                                     spec.model_bounds.get("vp"))
+            net = net.to(dev)
+            if dd_on:
+                import torch.distributed as dist
+                for p in net.parameters():
+                    dist.broadcast(p.data, src=0)
+            optimizer = torch.optim.Adam(net.parameters(),
+                                         lr=float(spec.reparam.lr))
+            chunk_rows = int(getattr(spec.reparam, "backward_chunk_rows", 8))
+        else:
+            vp = base_t.clone().requires_grad_(True)
+            optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
+        _b = spec.model_bounds.get("vp") if spec.model_bounds else None
+        vmin = float(_b.min) if _b is not None and _b.min is not None else None
+        vmax = float(_b.max) if _b is not None and _b.max is not None else None
+
+        loss_fn = fsl.SteadyGCNLoss(
+            comb, targets, int(fspec.steady_samples),
+            int(fspec.slack_samples), dev, distributed=dd_on,
+            eps=float(fspec.eps))
+
+        def _leaf():
+            if not use_reparam:
+                return vp
+            with torch.no_grad():
+                m = net.render(chunk_rows=chunk_rows).detach().clone()
+            return m.requires_grad_(True)
+
+        # ---- capture + ownership + steady-state QC ------------------------
+        pool0 = sched.pools[0]
+        bins0 = np.arange(len(pool0))
+        leaf = _leaf()
+        rec0 = solver(
+            fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
+            targets.node_grid[pool0][None].astype(np.int32), rec_table,
+            models=[leaf])
+        own = getattr(solver, "_own_rec_idx", None)
+        targets.bind_ownership(
+            np.arange(targets.n_union) if own is None else own, dev)
+        chk = loss_fn.two_window_check(
+            rec0.detach(), pool0, bins0, int(fspec.steady_samples),
+            int(fspec.slack_samples))
+        print(f"[freqsel][rank{rank}] steady-state two-window check: "
+              f"median rel diff = {chk:.3e}", flush=True)
+        del rec0, leaf
+
+        # ---- inversion loop -----------------------------------------------
+        losses, times, peaks = [], [], []
+        use_cuda = torch.cuda.is_available()
+        epochs = int(spec.epochs)
+        snap_every = max(1, epochs // 10)
+        for it in range(epochs):
+            ti = _time.perf_counter()
+            if use_cuda:
+                torch.cuda.reset_peak_memory_stats()
+            pool, bins = sched.draw(it)
+            optimizer.zero_grad()
+            leaf = _leaf()
+            syn = solver(
+                fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
+                targets.node_grid[pool][None].astype(np.int32), rec_table,
+                models=[leaf])
+            J, npool = loss_fn(syn, pool, bins)
+            J.backward()
+            g = leaf.grad
+            if g is not None:
+                if dd_on:
+                    import torch.distributed as dist
+                    dist.all_reduce(g)
+                g[water_t] = 0.0
+                if use_reparam:
+                    net.backward_velocity_gradient(g, chunk_rows=chunk_rows)
+            optimizer.step()
+            if not use_reparam:
+                with torch.no_grad():
+                    if vmin is not None:
+                        vp.clamp_(vmin, vmax)
+                    vp[water_t] = base_t[water_t]
+            losses.append(float(J.detach()) / npool)
+            times.append(_time.perf_counter() - ti)
+            peaks.append(torch.cuda.max_memory_allocated() / 2 ** 30
+                         if use_cuda else 0.0)
+            if rank == 0 and (it < 30 or it % max(1, epochs // 40) == 0
+                              or it == epochs - 1):
+                print(f"[freqsel] it {it:4d} pool {it % sched.n_pools:2d}  "
+                      f"mean(1-GCN)={losses[-1]:.5f}  "
+                      f"iter_s={times[-1]:.1f}  peak_gb={peaks[-1]:.2f}",
+                      flush=True)
+            if rank == 0 and (it + 1) % snap_every == 0:
+                # no_grad is load-bearing: a bare render builds the autograd
+                # graph for the FULL grid across all chunks (many GB on the
+                # large field INR) and OOMs; _leaf() renders under no_grad too.
+                with torch.no_grad():
+                    m = (net.render(chunk_rows=chunk_rows).detach()
+                         if use_reparam else vp.detach())
+                np.save(task_dir / f"vp_iter{it + 1:04d}.npy",
+                        m[:, :ny_, :nx_].cpu().numpy())
+                np.savez(task_dir / "curves.npz",
+                         losses=np.array(losses), iter_s=np.array(times),
+                         peak_gb=np.array(peaks))
+
+        artifacts, summary = {}, {}
+        if rank == 0:
+            with torch.no_grad():
+                m = (net.render(chunk_rows=chunk_rows).detach()
+                     if use_reparam else vp.detach())
+            final = m[:, :ny_, :nx_].cpu().numpy()
+            np.save(task_dir / "inverted_vp.npy", final)
+            np.savez(task_dir / "curves.npz", losses=np.array(losses),
+                     iter_s=np.array(times), peak_gb=np.array(peaks))
+            summary = {
+                "mode": "frequency_selection",
+                "reparam": bool(use_reparam),
+                "nodes": int(targets.n_nodes),
+                "items": int(targets.n_items),
+                "union_cells": int(targets.n_union),
+                "pools": int(sched.n_pools),
+                "nt": nt,
+                "steady_check": float(chk),
+                "loss_first": losses[0],
+                "loss_last": losses[-1],
+                "mean_iter_s": float(np.mean(times[1:])) if len(times) > 1
+                else float(times[0]),
+            }
+            (task_dir / "summary.json").write_text(
+                _json.dumps(summary, indent=2))
+            artifacts = {"inverted_vp": str(task_dir / "inverted_vp.npy")}
+            print(f"[freqsel] DONE mean(1-GCN) {losses[0]:.4f} -> "
+                  f"{losses[-1]:.4f}", flush=True)
+        return artifacts, summary
+
     # -- fwi ---------------------------------------------------------------
 
     def _run_fwi(self, spec: FWISpec, task_dir: Path):
+        # Dispatch the frequency-selection encoded path first: it is
+        # plan-free (geometry and data live in the coefficient shards) and
+        # shares none of the sampler/prefetch machinery below.
+        if (spec.source_encoding is not None
+                and spec.source_encoding.enabled
+                and spec.source_encoding.mode == "frequency_selection"):
+            return self._run_fwi_freqsel(spec, task_dir)
         # Dispatch the OBN 3-D multisource supershot path early — it has
         # its own per-iter SEG-Y reads + UTM→model rotation + source-
         # encoded loop that don't fit the static-(sources, obs)
