@@ -1295,6 +1295,7 @@ def _accumulate_illumination(solver, sill_sum, rill_sum):
 
 def _apply_illumination_precond(
     grad_tensor, sill_sum, rill_sum, *, eps: float, exponent: float,
+    relative_epsilon: float | None = None,
 ) -> None:
     """Divide ``grad_tensor`` in place by ``(S·R + eps)**exponent``.
 
@@ -1302,12 +1303,24 @@ def _apply_illumination_precond(
     backend to match the unpadded velocity tensor). No-op when either
     buffer is ``None`` (no chunk produced illumination, e.g. all chunks
     were empty on this rank).
+
+    ``relative_epsilon`` (when set) replaces the absolute ``eps`` with a
+    water level ``relative_epsilon * max(S·R)`` recomputed here at every
+    application, capping the maximum boost at ``relative_epsilon**-exponent``.
+    S·R spans many decades on field data and its scale drifts with the
+    stage band/residual, so a fixed absolute eps is either a no-op or a
+    kill-switch; the relative form tracks the scale automatically.
     """
     import torch
 
     if sill_sum is None or rill_sum is None or grad_tensor is None:
         return
-    sr = sill_sum * rill_sum + float(eps)
+    sr_raw = sill_sum * rill_sum
+    if relative_epsilon is not None:
+        eps = float(relative_epsilon) * float(sr_raw.max())
+        if eps <= 0.0:  # all-zero illumination -> nothing to precondition
+            return
+    sr = sr_raw + float(eps)
     if abs(exponent - 1.0) < 1.0e-12:
         scale = 1.0 / sr
     elif abs(exponent - 0.5) < 1.0e-12:
@@ -1654,6 +1667,15 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
         hash_log2_size=int(spec.hash.log2_size),
         hash_base_resolution=int(spec.hash.base_resolution),
         hash_finest_resolution=int(spec.hash.finest_resolution),
+        hash_c2f=bool(getattr(spec.hash, "c2f", None) is not None
+                      and spec.hash.c2f.enabled),
+        hash_c2f_base_levels=int(getattr(getattr(spec.hash, "c2f", None),
+                                         "base_levels", 2) or 2),
+        hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
+                                  "ramp", "cosine") or "cosine"),
+        use_fourier_encoding=bool(getattr(getattr(spec, "fourier", None), "enabled", False)),
+        fourier_levels=int(getattr(getattr(spec, "fourier", None), "levels", 6) or 6),
+        fourier_include_input=bool(getattr(getattr(spec, "fourier", None), "include_input", True)),
         direct_velocity=bool(spec.direct_velocity),
         coord_min=float(spec.coord_min),
         coord_max=float(spec.coord_max),
@@ -2662,21 +2684,22 @@ class TaskRunner:
 
     # -- fwi (frequency-selection encoded) ---------------------------------
 
-    def _run_fwi_freqsel(self, spec: FWISpec, task_dir: Path):
-        """Frequency-selection (steady-state comb) encoded FWI / iFWI.
+    def _freqsel_run_stage(
+        self, spec, stage, si, fspec, dh, dt, dev,
+        dd_on, dd_py, dd_px, rank, world, task_dir,
+        use_reparam, net, optimizer, chunk_rows,
+        vp0_native, native_dh, illum_spec, illum_on,
+        losses, times, peaks, epoch_offset, total_epochs,
+    ):
+        """Run ONE frequency-selection stage on its own (dh, dt) grid.
 
-        Deterministic zero-crosstalk source encoding (Tromp & Bachmann 2019)
-        on the mode-B super-shot path: node pools rotate deterministically,
-        every pool node emits one exclusive comb bin (permuted per iter),
-        the loss is the per-node complex-cosine GCN on steady-window DFT
-        coefficients — wavelet-free, plan-free, zero per-iter I/O. Obs are
-        pre-extracted coefficient shards (field path) or synthesized from a
-        true model once at setup (test path). Heavy lifting lives in
-        :mod:`sweep_tasks.freqsel`; validated on a field OBN dataset in the low-frequency band
-        (multi-GPU DD).
-        No multi-stage / resume support yet (single band per task).
+        Builds this stage's comb / solver / targets / scheduler / loss, carries
+        over the reparam network across stages (resampling its base to the new
+        grid via ``update_base_velocity``; net params + Adam state kept), runs
+        ``stage.epochs`` iterations appending to ``losses/times/peaks``. Returns
+        ``(net, optimizer, ny_, nx_, chk)``. Single-stage runs reduce to the
+        original single-band behaviour bit-for-bit.
         """
-        import json as _json
         import time as _time
 
         import numpy as np
@@ -2684,40 +2707,20 @@ class TaskRunner:
 
         from sweep_tasks import freqsel as fsl
 
-        fspec = spec.source_encoding.frequency
-        dd_on, dd_py, dd_px, dd_rc = _dd_config()
-        rank, world = 0, 1
-        if dd_on:
-            import torch.distributed as dist
-            if not dist.is_initialized():
-                dist.init_process_group("nccl")
-            rank, world = dist.get_rank(), dist.get_world_size()
-            if dd_py * dd_px != world:
-                raise ValueError(
-                    f"SWEEP_DD_PY*PX={dd_py * dd_px} != world={world}")
-            li = int(os.environ.get("LOCAL_RANK", rank)) % max(
-                1, torch.cuda.device_count())
-            torch.cuda.set_device(li)
-            dev = torch.device(f"cuda:{li}")
-        else:
-            dev = _resolve_device(spec.device)
-        _apply_seed(spec.seed)
-
         comb = fsl.FrequencyComb(
-            dt=float(spec.time.dt), n_p=int(fspec.probe_samples),
+            dt=float(dt), n_p=int(fspec.probe_samples),
             ks=np.arange(int(fspec.k_lo), int(fspec.k_hi) + 1))
         nt = int(fspec.steady_samples + fspec.slack_samples
                  + fspec.probe_samples)
-        if spec.time.nt != nt and rank == 0:
-            print(f"[freqsel] note: time.nt={spec.time.nt} ignored; encoded "
-                  f"record nt={nt} (steady+slack+probe)", flush=True)
 
-        # ---- init model on the TARGET grid (no plan/crop machinery) ------
-        vp0 = np.load(spec.init_model.path).astype(np.float32)
+        # ---- init model on THIS stage's grid (resample pristine to dh) ----
+        if abs(float(dh) - float(native_dh)) < 1e-9:
+            vp0 = vp0_native
+        else:
+            new_shape = _shape_for_dh(vp0_native.shape, native_dh, float(dh))
+            vp0 = _resample_vp_tensor(
+                torch.tensor(vp0_native), new_shape).detach().cpu().numpy()
         gshape = vp0.shape
-        if len(gshape) != 3:
-            raise ValueError("freqsel path is 3-D (use a thin-slab volume "
-                             f"for 2-D tests); init shape {gshape}")
         nz, ny_, nx_ = gshape
         nyp = -(-ny_ // dd_py) * dd_py if dd_on else ny_
         nxp = -(-nx_ // dd_px) * dd_px if dd_on else nx_
@@ -2728,18 +2731,30 @@ class TaskRunner:
         frozen[:, ny_:, :] = True
         frozen[:, :, nx_:] = True
         water_t = torch.tensor(frozen, device=dev)
+        base_t = torch.tensor(vp0p, device=dev)
 
         solver = _build_solver(spec.physics, spec.backend,
-                               (nz, nyp, nxp), float(spec.grid.dh),
-                               float(spec.time.dt), nt, dev)
+                               (nz, nyp, nxp), float(dh),
+                               float(dt), nt, dev)
         if dd_on:
             from sweep.parallel import MeshTopology
             mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
                                 world_size=world, rank=rank)
             solver = _dd_wrap(solver, mesh)
 
+        illum_solver = getattr(solver, "prop", solver)
+        if illum_on:
+            try:
+                illum_solver.compute_illumination = True
+            except Exception:
+                pass
+            if rank == 0 and si == 0:
+                print(f"[freqsel] illumination precond ON "
+                      f"(exp={illum_spec.exponent}, eps={illum_spec.epsilon}, "
+                      f"rel_eps={getattr(illum_spec, 'relative_epsilon', None)})",
+                      flush=True)
+
         # ---- targets: field shards or one-shot synthesis ------------------
-        task_dir.mkdir(parents=True, exist_ok=True)
         if fspec.synthesize_from_true:
             if dd_on:
                 raise NotImplementedError(
@@ -2755,7 +2770,7 @@ class TaskRunner:
             rx = np.arange(4, nx_ - 4, int(fspec.synth_rec_stride))
             recs = np.stack([rx, np.full(len(rx), ny_ // 2, np.int64),
                              np.zeros(len(rx), np.int64)], -1)
-            shard = str(task_dir / "freqsel_synth_obs.npz")
+            shard = str(task_dir / f"freqsel_synth_obs_s{si}.npz")
             t = np.arange(nt, dtype=np.float64) * comb.dt
             f0 = 1.5 * float(np.mean(comb.freqs))
             a = np.pi * f0 * (t - 0.25)
@@ -2774,28 +2789,49 @@ class TaskRunner:
                                   comb.n_bins, seed=int(spec.seed) + 17)
         rec_table = targets.union_xyz[None]
         if rank == 0:
-            print(f"[freqsel] {targets.n_nodes} nodes, {targets.n_items} "
-                  f"items, {targets.n_union} union cells, "
+            print(f"[freqsel] stage {si}: {targets.n_nodes} nodes, "
+                  f"{targets.n_items} items, {targets.n_union} union cells, "
                   f"{sched.n_pools} pools, comb {comb.freqs[0]:.4f}-"
-                  f"{comb.freqs[-1]:.4f} Hz, nt={nt}", flush=True)
+                  f"{comb.freqs[-1]:.4f} Hz, nt={nt}, dh={dh}, dt={dt}",
+                  flush=True)
 
         # ---- parameterisation: grid vp or reparam INR ---------------------
-        use_reparam = spec.reparam is not None
-        base_t = torch.tensor(vp0p, device=dev)
-        if use_reparam:
-            net = _build_reparam_net(spec.reparam, base_t,
-                                     spec.model_bounds.get("vp"))
-            net = net.to(dev)
-            if dd_on:
-                import torch.distributed as dist
-                for p in net.parameters():
-                    dist.broadcast(p.data, src=0)
-            optimizer = torch.optim.Adam(net.parameters(),
-                                         lr=float(spec.reparam.lr))
-            chunk_rows = int(getattr(spec.reparam, "backward_chunk_rows", 8))
+        vp = None
+        if si == 0:
+            if use_reparam:
+                net = _build_reparam_net(spec.reparam, base_t,
+                                         spec.model_bounds.get("vp"))
+                net = net.to(dev)
+                if dd_on:
+                    import torch.distributed as dist
+                    for p in net.parameters():
+                        dist.broadcast(p.data, src=0)
+                optimizer = torch.optim.Adam(net.parameters(),
+                                             lr=float(spec.reparam.lr))
+            else:
+                vp = base_t.clone().requires_grad_(True)
+                optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
         else:
-            vp = base_t.clone().requires_grad_(True)
-            optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
+            if use_reparam:
+                # Carry the network across the band: resample only its base to
+                # the new grid, keep hash+SIREN params AND Adam state (the whole
+                # point — the coarse structure learned in prior bands stays).
+                net.update_base_velocity(base_t)
+                if bool(getattr(stage, "optimizer_reset", False)):
+                    optimizer = torch.optim.Adam(net.parameters(),
+                                                 lr=float(spec.reparam.lr))
+            else:
+                # grid-vp mode: Adam state is shape-bound, must rebuild.
+                vp = base_t.clone().requires_grad_(True)
+                optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
+        # per-stage lr scale on the carried optimizer (INR: inr_lr_scale)
+        _scale = (float(stage.inr_lr_scale) if use_reparam
+                  else float(stage.lr_scale))
+        if abs(_scale - 1.0) > 1e-12:
+            for g in optimizer.param_groups:
+                g["lr"] = float(spec.reparam.lr if use_reparam
+                                else spec.optimizer.lr) * _scale
+
         _b = spec.model_bounds.get("vp") if spec.model_bounds else None
         vmin = float(_b.min) if _b is not None and _b.min is not None else None
         vmax = float(_b.max) if _b is not None and _b.max is not None else None
@@ -2826,37 +2862,94 @@ class TaskRunner:
         chk = loss_fn.two_window_check(
             rec0.detach(), pool0, bins0, int(fspec.steady_samples),
             int(fspec.slack_samples))
-        print(f"[freqsel][rank{rank}] steady-state two-window check: "
-              f"median rel diff = {chk:.3e}", flush=True)
+        print(f"[freqsel][rank{rank}] stage {si} steady-state two-window "
+              f"check: median rel diff = {chk:.3e}", flush=True)
         del rec0, leaf
 
-        # ---- inversion loop -----------------------------------------------
-        losses, times, peaks = [], [], []
+        # ---- coarse-to-fine hash schedule (per stage) ---------------------
+        _c2f = getattr(getattr(spec.reparam, "hash", None), "c2f", None)
+        c2f_on = bool(
+            use_reparam and _c2f is not None and bool(_c2f.enabled)
+            and hasattr(getattr(net, "encoder", None), "set_progress"))
+        if c2f_on and rank == 0:
+            print(f"[freqsel] stage {si} c2f: base_levels={_c2f.base_levels} "
+                  f"ramp={_c2f.ramp} warmup={_c2f.warmup} "
+                  f"ramp_end={_c2f.ramp_end} "
+                  f"final_levels={getattr(_c2f, 'final_levels', None)}",
+                  flush=True)
+
+        stage_epochs = int(stage.epochs)
+        snap_every = max(1, stage_epochs // 10)
         use_cuda = torch.cuda.is_available()
-        epochs = int(spec.epochs)
-        snap_every = max(1, epochs // 10)
-        for it in range(epochs):
+        _TPROF = os.environ.get("SWEEP_TASKS_TPROF") == "1"
+        _pf = {"render": 0.0, "fwd": 0.0, "loss": 0.0, "bwd": 0.0,
+               "reparam": 0.0, "step": 0.0}
+
+        def _pf_sync():
+            if _TPROF and use_cuda:
+                torch.cuda.synchronize()
+
+        for it in range(stage_epochs):
+            gi = epoch_offset + it       # global iteration index
             ti = _time.perf_counter()
             if use_cuda:
                 torch.cuda.reset_peak_memory_stats()
             pool, bins = sched.draw(it)
+            if c2f_on:
+                # whole-run progress: single network across all stages, level
+                # mask grows monotonically (never reset per band). Single-stage
+                # (total_epochs==stage_epochs, offset 0) reduces to it/stage.
+                net.encoder.set_progress(
+                    (epoch_offset + it) / max(1, total_epochs - 1),
+                    warmup=float(_c2f.warmup),
+                    ramp_end=float(_c2f.ramp_end),
+                    final_levels=(None if getattr(_c2f, "final_levels", None)
+                                  is None else int(_c2f.final_levels)))
+                if rank == 0 and (it < 3 or it % 10 == 0
+                                  or it == stage_epochs - 1):
+                    print(f"[freqsel] s{si} c2f it {it}: active levels "
+                          f"{net.encoder.n_active_levels:.2f}/{net.encoder.L}",
+                          flush=True)
             optimizer.zero_grad()
+            _pf_sync(); _pa = _time.perf_counter()
             leaf = _leaf()
+            _pf_sync(); _pf["render"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             syn = solver(
                 fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
                 targets.node_grid[pool][None].astype(np.int32), rec_table,
                 models=[leaf])
+            _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             J, npool = loss_fn(syn, pool, bins)
+            _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             J.backward()
+            _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             g = leaf.grad
             if g is not None:
+                sill_sum = rill_sum = None
+                if illum_on:
+                    sill_sum, rill_sum = _accumulate_illumination(
+                        illum_solver, None, None)
                 if dd_on:
                     import torch.distributed as dist
                     dist.all_reduce(g)
+                    if illum_on and sill_sum is not None and rill_sum is not None:
+                        dist.all_reduce(sill_sum)
+                        dist.all_reduce(rill_sum)
+                if illum_on:
+                    _apply_illumination_precond(
+                        g, sill_sum, rill_sum, eps=float(illum_spec.epsilon),
+                        exponent=float(illum_spec.exponent),
+                        relative_epsilon=getattr(illum_spec, "relative_epsilon", None))
+                    if it == 0 and rank == 0 and sill_sum is None:
+                        print("[freqsel] WARN illum on but solver illumination "
+                              "is None (compute_illumination not honored?) — "
+                              "precond is a NO-OP", flush=True)
                 g[water_t] = 0.0
                 if use_reparam:
                     net.backward_velocity_gradient(g, chunk_rows=chunk_rows)
+            _pf_sync(); _pf["reparam"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             optimizer.step()
+            _pf_sync(); _pf["step"] += _time.perf_counter() - _pa
             if not use_reparam:
                 with torch.no_grad():
                     if vmin is not None:
@@ -2866,30 +2959,128 @@ class TaskRunner:
             times.append(_time.perf_counter() - ti)
             peaks.append(torch.cuda.max_memory_allocated() / 2 ** 30
                          if use_cuda else 0.0)
-            if rank == 0 and (it < 30 or it % max(1, epochs // 40) == 0
-                              or it == epochs - 1):
-                print(f"[freqsel] it {it:4d} pool {it % sched.n_pools:2d}  "
-                      f"mean(1-GCN)={losses[-1]:.5f}  "
+            if rank == 0 and (it < 30 or it % max(1, stage_epochs // 40) == 0
+                              or it == stage_epochs - 1):
+                print(f"[freqsel] s{si} it {it:4d} pool {it % sched.n_pools:2d}"
+                      f"  mean(1-GCN)={losses[-1]:.5f}  "
                       f"iter_s={times[-1]:.1f}  peak_gb={peaks[-1]:.2f}",
                       flush=True)
+            if _TPROF and rank == 0:
+                n = it + 1
+                print(f"[tprof] avg/iter ms: render={_pf['render']*1e3/n:5.0f} "
+                      f"fwd={_pf['fwd']*1e3/n:5.0f} loss={_pf['loss']*1e3/n:5.0f} "
+                      f"bwd={_pf['bwd']*1e3/n:5.0f} reparam={_pf['reparam']*1e3/n:5.0f} "
+                      f"step={_pf['step']*1e3/n:5.0f}", flush=True)
             if rank == 0 and (it + 1) % snap_every == 0:
-                # no_grad is load-bearing: a bare render builds the autograd
-                # graph for the FULL grid across all chunks (many GB on the
-                # large field INR) and OOMs; _leaf() renders under no_grad too.
                 with torch.no_grad():
                     m = (net.render(chunk_rows=chunk_rows).detach()
                          if use_reparam else vp.detach())
-                np.save(task_dir / f"vp_iter{it + 1:04d}.npy",
+                np.save(task_dir / f"vp_iter{gi + 1:04d}.npy",
                         m[:, :ny_, :nx_].cpu().numpy())
                 np.savez(task_dir / "curves.npz",
                          losses=np.array(losses), iter_s=np.array(times),
                          peak_gb=np.array(peaks))
 
+        # keep a handle to the final grid-vp so the caller can render output
+        self._freqsel_last_vp = vp
+        self._freqsel_last_chunk_rows = chunk_rows
+        return net, optimizer, ny_, nx_, chk
+
+    def _run_fwi_freqsel(self, spec: FWISpec, task_dir: Path):
+        """Frequency-selection (steady-state comb) encoded FWI / iFWI.
+
+        Deterministic zero-crosstalk source encoding (Tromp & Bachmann 2019)
+        on the mode-B super-shot path: node pools rotate deterministically,
+        every pool node emits one exclusive comb bin (permuted per iter),
+        the loss is the per-node complex-cosine GCN on steady-window DFT
+        coefficients — wavelet-free, plan-free, zero per-iter I/O. Obs are
+        pre-extracted coefficient shards (field path) or synthesized from a
+        true model once at setup (test path). Heavy lifting lives in
+        :mod:`sweep_tasks.freqsel`.
+
+        Multi-stage: when ``spec.stages`` is set, runs each stage in one
+        process — per-stage ``frequency`` sub-spec (comb + coeff_shards) and
+        ``dh_m``/``dt_s`` rebuild the comb/targets/solver, while the reparam
+        network is carried across bands (its base resampled to the new grid,
+        params + Adam state kept). A single-stage run is bit-identical to the
+        original single-band path.
+        """
+        import json as _json
+
+        import numpy as np
+        import torch
+
+        fspec_global = spec.source_encoding.frequency
+        dd_on, dd_py, dd_px, dd_rc = _dd_config()
+        rank, world = 0, 1
+        if dd_on:
+            import torch.distributed as dist
+            if not dist.is_initialized():
+                dist.init_process_group("nccl")
+            rank, world = dist.get_rank(), dist.get_world_size()
+            if dd_py * dd_px != world:
+                raise ValueError(
+                    f"SWEEP_DD_PY*PX={dd_py * dd_px} != world={world}")
+            li = int(os.environ.get("LOCAL_RANK", rank)) % max(
+                1, torch.cuda.device_count())
+            torch.cuda.set_device(li)
+            dev = torch.device(f"cuda:{li}")
+        else:
+            dev = _resolve_device(spec.device)
+        _apply_seed(spec.seed)
+
+        stages = _normalise_stage_list(spec)
+        total_epochs = int(sum(int(s.epochs) for s in stages))
+        use_reparam = spec.reparam is not None
+        chunk_rows = (int(getattr(spec.reparam, "backward_chunk_rows", 8))
+                      if use_reparam else 0)
+        illum_spec = getattr(spec, "illumination_precondition", None)
+        illum_on = bool(illum_spec is not None and illum_spec.enabled)
+        if illum_on and dd_on:
+            # solver illumination is tile-local (per-rank x/y sub-block) while the
+            # reparam leaf grad is the full model; preconditioning would need a
+            # gather/scatter that isn't implemented. Disable rather than crash.
+            if rank == 0:
+                print("[freqsel] WARN illumination_precondition not supported "
+                      "under DD (tile-local illumination vs full-model grad) "
+                      "— DISABLED for this DD run", flush=True)
+            illum_on = False
+
+        vp0_native = np.load(spec.init_model.path).astype(np.float32)
+        if vp0_native.ndim != 3:
+            raise ValueError("freqsel path is 3-D (use a thin-slab volume "
+                             f"for 2-D tests); init shape {vp0_native.shape}")
+        native_dh = float(spec.grid.dh)
+
+        task_dir.mkdir(parents=True, exist_ok=True)
+        net = optimizer = None
+        losses, times, peaks = [], [], []
+        chk_first = None
+        ny_ = nx_ = None
+        for si, stage in enumerate(stages):
+            fspec = getattr(stage, "frequency", None) or fspec_global
+            if fspec is None:
+                raise ValueError(
+                    "frequency_selection: stage has no frequency sub-spec "
+                    "and source_encoding.frequency is unset")
+            dh = float(stage.dh_m) if stage.dh_m else native_dh
+            dt = float(stage.dt_s) if stage.dt_s else float(spec.time.dt)
+            net, optimizer, ny_, nx_, chk = self._freqsel_run_stage(
+                spec, stage, si, fspec, dh, dt, dev,
+                dd_on, dd_py, dd_px, rank, world, task_dir,
+                use_reparam, net, optimizer, chunk_rows,
+                vp0_native, native_dh, illum_spec, illum_on,
+                losses, times, peaks, len(losses), total_epochs)
+            if chk_first is None:
+                chk_first = chk
+
         artifacts, summary = {}, {}
         if rank == 0:
-            with torch.no_grad():
-                m = (net.render(chunk_rows=chunk_rows).detach()
-                     if use_reparam else vp.detach())
+            if use_reparam:
+                with torch.no_grad():
+                    m = net.render(chunk_rows=chunk_rows).detach()
+            else:
+                m = self._freqsel_last_vp.detach()
             final = m[:, :ny_, :nx_].cpu().numpy()
             np.save(task_dir / "inverted_vp.npy", final)
             np.savez(task_dir / "curves.npz", losses=np.array(losses),
@@ -2897,22 +3088,21 @@ class TaskRunner:
             summary = {
                 "mode": "frequency_selection",
                 "reparam": bool(use_reparam),
-                "nodes": int(targets.n_nodes),
-                "items": int(targets.n_items),
-                "union_cells": int(targets.n_union),
-                "pools": int(sched.n_pools),
-                "nt": nt,
-                "steady_check": float(chk),
-                "loss_first": losses[0],
-                "loss_last": losses[-1],
+                "stages": len(stages),
+                "nt": int(times and 0 or 0),
+                "steady_check": float(chk_first)
+                if chk_first is not None else 0.0,
+                "loss_first": losses[0] if losses else None,
+                "loss_last": losses[-1] if losses else None,
                 "mean_iter_s": float(np.mean(times[1:])) if len(times) > 1
-                else float(times[0]),
+                else (float(times[0]) if times else 0.0),
             }
             (task_dir / "summary.json").write_text(
                 _json.dumps(summary, indent=2))
             artifacts = {"inverted_vp": str(task_dir / "inverted_vp.npy")}
-            print(f"[freqsel] DONE mean(1-GCN) {losses[0]:.4f} -> "
-                  f"{losses[-1]:.4f}", flush=True)
+            print(f"[freqsel] DONE ({len(stages)} stage(s)) "
+                  f"mean(1-GCN) {losses[0]:.4f} -> {losses[-1]:.4f}",
+                  flush=True)
         return artifacts, summary
 
     # -- fwi ---------------------------------------------------------------
@@ -3387,6 +3577,19 @@ class TaskRunner:
         qc_dir = task_dir / "qc"
         qc_enabled = spec.qc is not None and spec.qc.every_n_epochs > 0
         stage_epoch_boundaries: list[int] = []  # cumulative epoch indices
+        # coarse-to-fine hash schedule (reparam.hash.c2f): open encoder levels
+        # coarse->fine over the WHOLE run (epoch_global/total_epochs), so a
+        # single-network multi-band run (e.g. ±1 encoding, fixed grid) grows
+        # resolution across bands. No-op when c2f disabled or no CoarseToFine
+        # encoder. Per-stage frequency-band c2f is not needed here: one net,
+        # one continuous schedule.
+        _c2f = (getattr(getattr(spec.reparam, "hash", None), "c2f", None)
+                if spec.reparam is not None else None)
+        _c2f_on = bool(_c2f is not None and bool(_c2f.enabled))
+        if _c2f_on and dist_info.is_root:
+            print(f"[fwi] c2f whole-run: base_levels={_c2f.base_levels} "
+                  f"ramp={_c2f.ramp} warmup={_c2f.warmup} "
+                  f"ramp_end={_c2f.ramp_end} final_levels={_c2f.final_levels}")
 
         # If a signal landed during setup, skip training entirely and
         # fall through to final-outputs (which will write whatever state
@@ -3450,6 +3653,22 @@ class TaskRunner:
                     and getattr(stage_bandpass, "target", "syn") == "wavelet":
                 stage_bandpass = None  # already applied to wavelet
             for _ in range(remaining):
+                # coarse-to-fine: advance the encoder level mask by whole-run
+                # progress before rendering/backprop this epoch (no-op unless
+                # reparam.hash.c2f is on and the encoder is CoarseToFine).
+                if _c2f_on:
+                    _net = state.get("reparam_net")
+                    _enc = getattr(_net, "encoder", None) if _net is not None else None
+                    if _enc is not None and hasattr(_enc, "set_progress"):
+                        _enc.set_progress(
+                            epoch_global / max(1, total_epochs - 1),
+                            warmup=float(_c2f.warmup), ramp_end=float(_c2f.ramp_end),
+                            final_levels=(None if _c2f.final_levels is None
+                                          else int(_c2f.final_levels)))
+                        if dist_info.is_root and (epoch_global < 3
+                                                  or epoch_global % 20 == 0):
+                            print(f"[fwi] c2f epoch {epoch_global}: active levels "
+                                  f"{_enc.n_active_levels:.2f}/{_enc.L}")
                 # Only save the obs/syn snapshot for QC when QC actually fires
                 # this iter. Without this gate every iter pays a ~250 ms D2H
                 # copy of syn+obs_chunk (~300 MB) into a dict that's discarded
@@ -4213,6 +4432,7 @@ class TaskRunner:
                     _apply_illumination_precond(
                         vp_grad, sill_sum, rill_sum,
                         eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                        relative_epsilon=getattr(illum_spec, "relative_epsilon", None),
                     )
             else:
                 _dist.all_reduce_grad_sum(
@@ -4386,6 +4606,7 @@ class TaskRunner:
                 _apply_illumination_precond(
                     v_grad, sill_sum, rill_sum,
                     eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                    relative_epsilon=getattr(illum_spec, "relative_epsilon", None),
                 )
             # Smoothing prior: add ∂(w·TV)/∂v to the (illum-preconditioned)
             # leaf gradient BEFORE pushing it through the network — matches the
@@ -4867,10 +5088,11 @@ class TaskRunner:
         stage_list = _normalise_stage_list(spec)
         for _si, _st in enumerate(stage_list):
             # Multi-resolution: per-stage ``dh_m`` IS supported (coarse grid for
-            # low-freq bands → finer for high). dt/nt are kept FIXED across
-            # stages (a dt valid at the finest grid is conservatively valid at
-            # any coarser grid), so the obs/wavelet time axis never re-samples.
-            _unsup = [_f for _f in ("dt_s", "nt", "wavelet")
+            # low-freq bands → finer for high). Per-stage ``dt_s``/``nt`` are now
+            # ALSO supported: on the stage boundary the wavelet is re-resampled
+            # from the pristine copy and the obs prefetch is re-primed at the new
+            # time axis (the prefetch worker reads effective_dt/effective_nt live).
+            _unsup = [_f for _f in ("wavelet",)
                       if getattr(_st, _f, None) is not None]
             if abs(float(_st.lr_scale) - 1.0) > 1e-12:
                 _unsup.append("lr_scale")
@@ -4880,13 +5102,19 @@ class TaskRunner:
                 _unsup.append("batch_size")
             if _unsup:
                 raise NotImplementedError(
-                    f"stage {_si}: the encoded OBN path supports per stage only "
-                    f"bandpass / epochs / optimizer_reset / dh_m (dt_s/nt fixed); "
+                    f"stage {_si}: the encoded OBN path supports per stage "
+                    f"bandpass / epochs / optimizer_reset / dh_m / dt_s / nt; "
                     f"unsupported here: {_unsup}"
                 )
         stage_epochs = [int(_st.epochs) for _st in stage_list]
         stage_starts = [int(s) for s in np.cumsum([0] + stage_epochs[:-1])]
         wavelet_orig = wavelet_t.detach().clone()  # pristine, pre-bandpass
+        # Pristine wavelet (numpy) + its dt, kept immutable so a per-stage dt
+        # change re-resamples from the ORIGINAL (no cumulative drift). Consumed
+        # in the stage-entry block below when a stage sets dt_s/nt.
+        _wav_pristine_np = wavelet_orig.detach().cpu().numpy().copy()
+        _wav_orig_dt = float(effective_dt)
+        from sweep_preproc.resample import resample_time as _resample_time_wav
 
         def _stage_bandpass(_st):
             return (_st.bandpass if _st.bandpass is not None
@@ -5578,6 +5806,44 @@ class TaskRunner:
                 _si = stage_starts.index(epoch)
                 _st = stage_list[_si]
                 bandpass_spec = _stage_bandpass(_st)
+                # --- per-stage dt/nt: update the time axis BEFORE the wavelet
+                #     bandpass + solver rebuild. The prefetch worker reads
+                #     effective_dt/effective_nt live, so re-priming the in-flight
+                #     future (below) is all the obs side needs. ---
+                _stage_dt = getattr(_st, "dt_s", None)
+                _stage_nt = getattr(_st, "nt", None)
+                _time_changed = False
+                if _stage_dt is not None and abs(float(_stage_dt) - effective_dt) > 1e-12:
+                    effective_dt = float(_stage_dt); _time_changed = True
+                if _stage_nt is not None and int(_stage_nt) != effective_nt:
+                    effective_nt = int(_stage_nt); _time_changed = True
+                if _time_changed:
+                    # re-resample the PRISTINE wavelet to the new dt (the bandpass
+                    # just below consumes wavelet_orig) + recompute the obs
+                    # source-delay prepad at the new dt.
+                    _wav_np = _resample_time_wav(_wav_pristine_np, _wav_orig_dt,
+                                                 effective_dt, axis=-1)
+                    # pad/trim the resampled wavelet to effective_nt so the solver
+                    # runs exactly effective_nt steps → syn length == obs length
+                    # (obs is trimmed to effective_nt in the prefetch worker;
+                    # resample rounding else leaves them off by ~1 sample,
+                    # because effective_nt comes from the record duration while
+                    # the resampler rounds nt_old * dt_old / dt_new).
+                    _cur = _wav_np.shape[-1]
+                    if _cur > effective_nt:
+                        _wav_np = _wav_np[..., :effective_nt]
+                    elif _cur < effective_nt:
+                        _wav_np = np.pad(
+                            _wav_np,
+                            [(0, 0)] * (_wav_np.ndim - 1) + [(0, effective_nt - _cur)])
+                    wavelet_orig = torch.as_tensor(
+                        _wav_np, dtype=torch.float32, device=dev)
+                    obs_prepad_samples = (
+                        int(round(obs_prepad_s / float(effective_dt)))
+                        if obs_prepad_s > 0.0 else 0)
+                    print(f"[crg] stage {_si + 1}: dt -> {effective_dt * 1000:.3f} ms "
+                          f"nt -> {effective_nt} "
+                          f"(record {effective_dt * effective_nt:.2f} s)", flush=True)
                 wavelet_t = (_bandpass_torch_fft(
                     wavelet_orig, lo=float(bandpass_spec.lo_hz),
                     hi=float(bandpass_spec.hi_hz), dt=float(effective_dt),
@@ -5590,12 +5856,21 @@ class TaskRunner:
                 print(f"[crg] === STAGE {_si + 1}/{len(stage_list)} "
                       f"epoch[{epoch}:{epoch + int(_st.epochs)}] "
                       f"bandpass={_bp_txt} ===", flush=True)
-                # Multi-resolution: switch the grid spacing if this stage sets
-                # dh_m (geometry re-projection + vp/water-mask resample + solver
-                # rebuild). Reparam net params + Adam state carry over unchanged.
+                # Multi-resolution: switch grid spacing if this stage sets dh_m
+                # (geometry re-projection + vp/water-mask resample + solver
+                # rebuild). A per-stage dt/nt change ALSO needs the solver rebuilt,
+                # so trigger on either. Reparam net params + Adam state carry over.
                 _stage_dh = getattr(_st, "dh_m", None)
-                if _stage_dh is not None and abs(float(_stage_dh) - _cur_dh) > 1e-9:
-                    _apply_stage_dh(float(_stage_dh), _si)
+                _dh_changed = (_stage_dh is not None
+                               and abs(float(_stage_dh) - _cur_dh) > 1e-9)
+                if _dh_changed or _time_changed:
+                    _apply_stage_dh(
+                        float(_stage_dh) if _stage_dh is not None else _cur_dh, _si)
+                if _time_changed and epoch > 0:
+                    # the in-flight prefetch for THIS iter was loaded at the OLD
+                    # dt/nt; redo it at the new time axis (same seed → same shots).
+                    next_future = prefetch_pool.submit(
+                        _load_iter_payload, _iter_seed(epoch))
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
             t = time.perf_counter()
@@ -5929,6 +6204,7 @@ class TaskRunner:
                     _apply_illumination_precond(
                         target_grad, sill, rill,
                         eps=illum_spec.epsilon, exponent=illum_spec.exponent,
+                        relative_epsilon=getattr(illum_spec, "relative_epsilon", None),
                     )
                     if _DG and epoch == 0:
                         _np.save(_dd + "/grad_precond.npy",
@@ -6073,8 +6349,13 @@ class TaskRunner:
                   f"opt={t_opt:.2f}]{cache_str}{pf_str}{ms_str}", flush=True)
 
             # --- Snapshots + QC.
+            # Also snapshot the LAST iter of each stage (epoch+1 crosses a stage
+            # start) BEFORE the next stage resamples the grid, so each band's
+            # final model is captured on its OWN native grid (matches srprod's
+            # per-band vp_iter snapshots for apples-to-apples comparison).
             snapshot_now = (epoch % spec.show_every == 0
-                            or epoch == total_epochs - 1)
+                            or epoch == total_epochs - 1
+                            or (epoch + 1) in stage_starts)
             if snapshot_now:
                 vp_now = inv_by_name["vp"]
                 np.save(
@@ -7019,6 +7300,14 @@ class TaskRunner:
             chunk_vp_base = vp_base[vp_slice].contiguous()
 
         # ---- Forward + bandpass syn + loss + backward → FWI grad image ------
+        # Opt-in illumination on the new c-core (perf/acoustic-bwd-skip-illum):
+        # RTM ALWAYS needs solver.source/receiver_illumination after backward,
+        # so enable it unconditionally here. Harmless on older cores that
+        # compute illumination regardless.
+        try:
+            chunk_solver.compute_illumination = True
+        except Exception:
+            pass
         # Fresh leaf each batch (we discard grads between batches; the RTM
         # accumulator on the caller side does the summation).
         local_vp = chunk_vp_base.detach().clone().requires_grad_(True)

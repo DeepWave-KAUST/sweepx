@@ -133,6 +133,24 @@ def _maybe_reexec_under_torchrun(args) -> None:
     import os
     import sys
 
+    # --dd-py/--dd-px shortcut: populate the DD env the runner's _dd_config
+    # reads, and auto-derive --nproc-per-node = py*px so the process count
+    # always matches the mesh (else the runner raises SWEEP_DD_PY*PX != world).
+    py = int(getattr(args, "dd_py", 1) or 1)
+    px = int(getattr(args, "dd_px", 1) or 1)
+    if py * px > 1:
+        os.environ["SWEEP_DD_ENABLE"] = "1"
+        os.environ["SWEEP_DD_PY"] = str(py)
+        os.environ["SWEEP_DD_PX"] = str(px)
+        n_dd = py * px
+        n_cli = int(getattr(args, "nproc_per_node", 1) or 1)
+        if n_cli <= 1:
+            args.nproc_per_node = n_dd
+        elif n_cli != n_dd:
+            raise SystemExit(
+                f"--nproc-per-node {n_cli} conflicts with --dd-py*--dd-px = "
+                f"{n_dd}; omit --nproc-per-node or make them match")
+
     n = int(getattr(args, "nproc_per_node", 1) or 1)
     if n <= 1:
         return
@@ -962,6 +980,21 @@ def main(argv: list[str] | None = None) -> int:
             "yourself. The explicit form (`torchrun --nproc_per_node=N -m "
             "sweep_tasks run …`) keeps working unchanged."
         ),
+    )
+    run_parser.add_argument(
+        "--dd-py", "--dd_py", type=int, default=1, metavar="PY", dest="dd_py",
+        help=(
+            "Domain-decomposition tiles along inline/y (model parallel). "
+            "With PY*PX>1 this sets SWEEP_DD_ENABLE=1 / SWEEP_DD_PY / "
+            "SWEEP_DD_PX (what the runner's _dd_config reads) AND auto-derives "
+            "--nproc-per-node = PY*PX — so `sweep-tasks run --dd-py 2 --dd-px 2 "
+            "foo.yaml` is all you need (no manual env export, no torchrun, "
+            "process count always matches the mesh). Default 1 (no DD)."
+        ),
+    )
+    run_parser.add_argument(
+        "--dd-px", "--dd_px", type=int, default=1, metavar="PX", dest="dd_px",
+        help="Domain-decomposition tiles along crossline/x. See --dd-py.",
     )
     run_parser.add_argument(
         "--override", action="append", metavar="KEY=VALUE", default=None,

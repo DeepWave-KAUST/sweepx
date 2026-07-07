@@ -466,6 +466,26 @@ class ModelBounds(_Forbid):
         return self
 
 
+class ReparamHashC2FSpec(_Forbid):
+    """Coarse-to-fine level unfreezing for the hash encoder (BARF-style).
+
+    Only the ``base_levels`` coarsest levels are open at epoch 0; levels
+    unfreeze coarse -> fine over ``[warmup, ramp_end]`` (fractions of the
+    stage's epochs), the frontier level soft-weighted by ``ramp``. See
+    :class:`sweep_nn.coarse_to_fine.CoarseToFineHashGrid`.
+    """
+
+    enabled: bool = False
+    base_levels: int = Field(ge=1, default=2)
+    ramp: Literal["cosine", "linear", "hard"] = "cosine"
+    warmup: float = Field(ge=0.0, lt=1.0, default=0.0)
+    ramp_end: float = Field(gt=0.0, le=1.0, default=1.0)
+    # Cap the stage's unfreeze at this level count (None = all levels).
+    # In a multiscale chain set e.g. 8/10/12/16 per band so the finest
+    # levels stay frozen until the data actually carries high wavenumbers.
+    final_levels: int | None = Field(ge=1, default=None)
+
+
 class ReparamHashSpec(_Forbid):
     """Multi-resolution hash-grid encoder hyperparameters (Instant-NGP)."""
 
@@ -475,6 +495,21 @@ class ReparamHashSpec(_Forbid):
     log2_size: int = Field(ge=1, default=15)
     base_resolution: int = Field(ge=1, default=4)
     finest_resolution: int = Field(ge=1, default=512)
+    c2f: ReparamHashC2FSpec = Field(default_factory=ReparamHashC2FSpec)
+
+
+class ReparamFourierSpec(_Forbid):
+    """NeRF-style Fourier positional encoding (log-spaced sin/cos of coords).
+
+    Mutually exclusive with the hash encoder. ``levels=L`` resolves up to
+    ``2^(L-1)`` half-cycles across the normalized model extent — a smooth,
+    global alternative to the hash grid (no local cells, so no blocky
+    null-space texture; capacity between raw-coord SIREN and hash).
+    """
+
+    enabled: bool = False
+    levels: int = Field(ge=1, default=6)
+    include_input: bool = True
 
 
 class LocalModelWindowSpec(_Forbid):
@@ -681,6 +716,13 @@ class IlluminationPreconditionSpec(_Forbid):
     enabled: bool = False
     epsilon: float = Field(gt=0, default=1.0e-6)
     exponent: float = Field(gt=0, default=0.5)
+    # Relative water level: when set, the additive eps becomes
+    # ``relative_epsilon * max(S*R)`` recomputed at every application and
+    # the absolute ``epsilon`` above is ignored. Bounds the maximum
+    # illumination boost to ``relative_epsilon ** -exponent`` (1e-3 with
+    # exponent 0.5 caps at ~32x). An absolute eps is a silent no-op when
+    # S*R spans many decades and its scale drifts with band/residual.
+    relative_epsilon: float | None = Field(gt=0, default=None)
 
 
 class QCSpec(_Forbid):
@@ -794,6 +836,7 @@ class ReparamSpec(_Forbid):
     water_vp_m_s: float = Field(gt=0, default=1500.0)
     seabed_depth_path: Path | None = None
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
+    fourier: ReparamFourierSpec = Field(default_factory=ReparamFourierSpec)
     # Anisotropic lateral downsampling of the INR render: evaluate the
     # hash+MLP on a grid coarsened by this factor in x/y (full-res in z),
     # then upsample the delta back. lateral_ds**2 fewer coords → much faster
@@ -887,6 +930,14 @@ class StageSpec(_Forbid):
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
     - ``bandpass``: filter obs before this stage runs (uses sweep-preproc)
+    - ``frequency``: per-stage frequency-selection sub-spec (comb + coeff
+      shards). Only used on the ``source_encoding.mode='frequency_selection'``
+      path; overrides the top-level ``source_encoding.frequency`` for this
+      stage so a single run can sweep bands (each with its own coeff_shards,
+      k_lo/k_hi, probe/steady/slack). Pair with ``dh_m``/``dt_s`` to also
+      refine the solver grid per band. The reparam network is carried across
+      stages (its base is resampled to the new grid); only the comb / targets
+      / scheduler / solver are rebuilt.
     """
 
     epochs: int = Field(ge=1)
@@ -899,6 +950,7 @@ class StageSpec(_Forbid):
     nt: int | None = None
     batch_size: int | None = Field(default=None, ge=1)
     bandpass: StageBandpass | None = None
+    frequency: "FreqSelectionSpec | None" = None
 
 
 class OptimizerAdam(_Forbid):
