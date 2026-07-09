@@ -9,8 +9,11 @@ from .siren import SIREN, SirenMLP, SineLayer
 from .dip import DIPReparam
 from .priors import LearnedPrior, SeabedFreezeMask, TVPrior
 from .hash_encoding import MultiResHashGrid
+from .growing_hash_grid import GrowingHashGrid
 from .velocity_inr import VelocityINR
 from .wavelet import SirenWavelet
+from . import diffusion
+from .diffusion import UNet2D, GaussianDiffusion, EMA
 
 __all__ = [
     "Reparameterizer",
@@ -20,9 +23,14 @@ __all__ = [
     "DIPReparam",
     "LearnedPrior",
     "MultiResHashGrid",
+    "GrowingHashGrid",
     "SeabedFreezeMask",
     "TVPrior",
     "VelocityINR",
     "SirenWavelet",
+    "diffusion",
+    "UNet2D",
+    "GaussianDiffusion",
+    "EMA",
     "__version__",
 ]

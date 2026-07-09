@@ -26,6 +26,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .coarse_to_fine import CoarseToFineHashGrid
+from .growing_hash_grid import GrowingHashGrid
 from .hash_encoding import MultiResHashGrid
 from .siren import SirenMLP
 
@@ -55,6 +57,35 @@ def _make_coord_grid(
     return torch.stack(grids, dim=-1).reshape(-1, len(shape))
 
 
+class FourierFeatures(nn.Module):
+    """NeRF-style positional encoding: log-spaced sin/cos of the coordinates.
+
+    ``coords (N, dim)`` -> ``[coords?, sin(2^k * pi * c), cos(2^k * pi * c)]``
+    for ``k = 0..n_levels-1``, flattened to ``(N, n_output_dims)``. With
+    coords normalized to ``[0, 1)`` the finest level resolves ``2^(n_levels-1)``
+    half-cycles across the model extent. Deterministic (no random projection),
+    so the encoding itself is seed-independent.
+    """
+
+    def __init__(self, dim: int, n_levels: int = 6, include_input: bool = True) -> None:
+        super().__init__()
+        import math
+        self.dim = int(dim)
+        self.n_levels = int(n_levels)
+        self.include_input = bool(include_input)
+        freqs = (2.0 ** torch.arange(self.n_levels, dtype=torch.float32)) * math.pi
+        self.register_buffer("freqs", freqs, persistent=False)
+        self.n_output_dims = self.dim * (2 * self.n_levels + (1 if self.include_input else 0))
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        ang = coords.unsqueeze(-1) * self.freqs                    # (N, dim, L)
+        enc = torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)  # (N, dim, 2L)
+        enc = enc.reshape(coords.shape[0], -1)
+        if self.include_input:
+            enc = torch.cat([coords, enc], dim=-1)
+        return enc
+
+
 class VelocityINR(nn.Module):
     """Hash-encoded SIREN representation of a 2-D or 3-D velocity field.
 
@@ -79,6 +110,11 @@ class VelocityINR(nn.Module):
     hash_base_resolution, hash_finest_resolution
         Hash encoder hyperparameters. See :class:`MultiResHashGrid`.
         Defaults match the fwi_workflow-dev production config.
+    hash_c2f, hash_c2f_base_levels, hash_c2f_ramp
+        If ``hash_c2f=True`` build a :class:`CoarseToFineHashGrid` instead:
+        only the ``hash_c2f_base_levels`` coarsest levels are open at init
+        and the training loop drives the unfreeze schedule via
+        ``self.encoder.set_progress(...)``. Same hash hyperparameters.
     hidden_features, hidden_layers, first_omega0, hidden_omega0
         SIREN MLP hyperparameters. See :class:`SirenMLP`.
     direct_velocity
@@ -131,6 +167,13 @@ class VelocityINR(nn.Module):
         hash_log2_size: int = 15,
         hash_base_resolution: int | list[int] = 4,
         hash_finest_resolution: int | list[int] = 512,
+        hash_c2f: bool = False,
+        hash_c2f_base_levels: int = 2,
+        hash_c2f_ramp: str = "cosine",
+        hash_growing: bool = False,
+        use_fourier_encoding: bool = False,
+        fourier_levels: int = 6,
+        fourier_include_input: bool = True,
         direct_velocity: bool = False,
         coord_min: float = 0.0,
         coord_max: float = 1.0,
@@ -191,14 +234,49 @@ class VelocityINR(nn.Module):
         else:
             self.water_mask = None
 
+        self.use_fourier_encoding = bool(use_fourier_encoding)
+        if self.use_hash_encoding and self.use_fourier_encoding:
+            raise ValueError(
+                "use_hash_encoding and use_fourier_encoding are mutually "
+                "exclusive — pick one input encoding."
+            )
         if self.use_hash_encoding:
-            self.encoder = MultiResHashGrid(
-                dim=self.dim,
+            hash_kwargs = dict(
                 n_levels=int(hash_levels),
                 n_features_per_level=int(hash_features_per_level),
                 log2_hashmap_size=int(hash_log2_size),
                 base_resolution=hash_base_resolution,
                 finest_resolution=hash_finest_resolution,
+            )
+            if bool(hash_growing):
+                # On-demand growth: fine levels allocated lazily (saves latent
+                # memory). Grow schedule driven from the training loop via
+                # encoder.grow_to_progress(...); takes precedence over c2f mask.
+                self.encoder = GrowingHashGrid(
+                    dim=self.dim,
+                    max_levels=int(hash_levels),
+                    n_features_per_level=int(hash_features_per_level),
+                    log2_hashmap_size=int(hash_log2_size),
+                    base_resolution=hash_base_resolution,
+                    finest_resolution=hash_finest_resolution,
+                    initial_levels=int(hash_c2f_base_levels),
+                )
+            elif bool(hash_c2f):
+                self.encoder = CoarseToFineHashGrid(
+                    dim=self.dim,
+                    base_levels=int(hash_c2f_base_levels),
+                    ramp=str(hash_c2f_ramp),
+                    **hash_kwargs,
+                )
+            else:
+                self.encoder = MultiResHashGrid(dim=self.dim, **hash_kwargs)
+            self.hash_growing = bool(hash_growing)
+            in_features = int(self.encoder.n_output_dims)
+        elif self.use_fourier_encoding:
+            self.encoder = FourierFeatures(
+                dim=self.dim,
+                n_levels=int(fourier_levels),
+                include_input=bool(fourier_include_input),
             )
             in_features = int(self.encoder.n_output_dims)
         else:
@@ -268,6 +346,7 @@ class VelocityINR(nn.Module):
         else:
             self._coarse_coords = None
         self._zslab_fn = None  # invalidate compiled fn on shape change
+        self._cg_graph = None  # invalidate any captured CUDA graph on shape change
 
     # ------------------------------------------------------------------ #
     # Stage transitions: replace the base velocity (+ shape) but keep    #
@@ -517,6 +596,15 @@ class VelocityINR(nn.Module):
             water_mask_win = self.water_mask[tuple(slices)]
         else:
             water_mask_win = None
+        # coords/base_velocity may live on CPU (to save GPU memory when the
+        # global grid is huge and only per-tile windows are rendered on GPU);
+        # move just this window's slices to the network's compute device.
+        # No-op when they already share the encoder/MLP device.
+        dev = next(self.parameters()).device
+        coords_win = coords_win.to(dev, non_blocking=True)
+        base_win = base_win.to(dev, non_blocking=True)
+        if water_mask_win is not None:
+            water_mask_win = water_mask_win.to(dev, non_blocking=True)
         return self._render_at_coords(
             coords_win, win_shape, base_win, water_mask=water_mask_win,
         )
@@ -557,13 +645,110 @@ class VelocityINR(nn.Module):
         full_shape = tuple(int(s) for s in self.base_velocity.shape)
         rows = max(1, int(chunk_rows))
         nz = full_shape[0]
+        import os as _os
+        _dbg = _os.environ.get("SWEEP_REPARAM_TPROF") == "1"
+        _cuda = self.base_velocity.device.type == "cuda"
+        if _dbg:
+            import time as _time
+            _tr = _tb = 0.0; _n = 0
+            _dev = self.base_velocity.device
+            def _sy():
+                if _cuda: torch.cuda.synchronize(_dev)
+            if _cuda:
+                _ma0 = torch.cuda.memory_allocated(_dev)
+                _mr0 = torch.cuda.memory_reserved(_dev)
+                _tot = torch.cuda.get_device_properties(_dev).total_memory
+                _s0 = torch.cuda.memory_stats(_dev)
+                _retr0 = _s0.get("num_alloc_retries", 0)
+                _ooms0 = _s0.get("num_ooms", 0)
+                _peak0 = torch.cuda.max_memory_allocated(_dev)
         for z0 in range(0, nz, rows):
             z1 = min(nz, z0 + rows)
             # ``_zslab`` is anisotropic-aware (coarse lateral + upsample) and
             # optionally torch.compiled; per-slab .backward keeps peak memory
             # O(rows) regardless of grid size.
-            vp_chunk = self._zslab(z0, z1)
-            vp_chunk.backward(grad[z0:z1], retain_graph=False)
+            if _dbg:
+                _sy(); _t0 = _time.perf_counter()
+                vp_chunk = self._zslab(z0, z1)
+                _sy(); _tr += _time.perf_counter() - _t0; _t0 = _time.perf_counter()
+                vp_chunk.backward(grad[z0:z1], retain_graph=False)
+                _sy(); _tb += _time.perf_counter() - _t0; _n += 1
+            else:
+                vp_chunk = self._zslab(z0, z1)
+                vp_chunk.backward(grad[z0:z1], retain_graph=False)
+        if _dbg:
+            _extra = ""
+            if _cuda:
+                _s1 = torch.cuda.memory_stats(_dev)
+                _dretr = _s1.get("num_alloc_retries", 0) - _retr0
+                _dooms = _s1.get("num_ooms", 0) - _ooms0
+                _peak1 = torch.cuda.max_memory_allocated(_dev)
+                _extra = (f" | gpu alloc={_ma0/1e9:.1f}G reserved={_mr0/1e9:.1f}G "
+                          f"total={_tot/1e9:.1f}G free={(_tot-_mr0)/1e9:.1f}G "
+                          f"peak_in_call={(_peak1-_ma0)/1e9:.2f}G "
+                          f"alloc_retries+={_dretr} ooms+={_dooms}")
+            print(f"[reparam_tprof] chunks={_n} render={_tr:.3f}s backward={_tb:.3f}s "
+                  f"total={_tr+_tb:.3f}s{_extra}", flush=True)
+
+    # ------------------------------------------------------------------ #
+    # CUDA-graphed reparam backward — root-cure for the prefetch-GIL      #
+    # stall. The eager render+backward fires ~500 tiny kernels; under     #
+    # async SEG-Y prefetch (ThreadPoolExecutor in the main process) those #
+    # launches get starved of the GIL and the NN backward inflates ~80x   #
+    # (0.08 s -> 5-9 s). Capturing render(chunk_rows=nz)+backward into a   #
+    # CUDA graph turns the whole thing into ONE host-side replay launch,   #
+    # immune to GIL contention. Numerically equivalent to                 #
+    # backward_velocity_gradient (same math, 1 chunk). Opt-in.            #
+    # ------------------------------------------------------------------ #
+    def backward_velocity_gradient_graphed(self, velocity_grad: torch.Tensor) -> None:
+        dev = self.base_velocity.device
+        if dev.type != "cuda":
+            return self.backward_velocity_gradient(
+                velocity_grad, chunk_rows=int(self.base_velocity.shape[0]))
+        g = torch.as_tensor(velocity_grad, dtype=torch.float32, device=dev)
+        shape = tuple(int(s) for s in g.shape)
+        if getattr(self, "_cg_graph", None) is None or getattr(self, "_cg_shape", None) != shape:
+            self._cg_capture(shape)
+        self._cg_static_vgrad.copy_(g)
+        for sb in self._cg_static_grads:
+            sb.zero_()
+        self._cg_graph.replay()
+        # Expose the captured static grad buffers as the params' .grad so the
+        # optimizer reads them (the runner's zero_grad(set_to_none) may have
+        # nulled .grad between iters; the graph always writes the same buffers).
+        for p, sb in zip(self._cg_params, self._cg_static_grads):
+            p.grad = sb
+
+    def _cg_capture(self, shape) -> None:
+        dev = self.base_velocity.device
+        nz = int(shape[0])
+        self._cg_static_vgrad = torch.zeros(shape, dtype=torch.float32, device=dev)
+        self._cg_params = [p for p in self.parameters() if p.requires_grad]
+        # Warmup in a side stream so the caching allocator sizes the graph pool.
+        s = torch.cuda.Stream(dev)
+        s.wait_stream(torch.cuda.current_stream(dev))
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                for p in self._cg_params:
+                    p.grad = None
+                vp = self.render(chunk_rows=nz)
+                vp.backward(self._cg_static_vgrad)
+        torch.cuda.current_stream(dev).wait_stream(s)
+        for p in self._cg_params:
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+        self._cg_static_grads = [p.grad for p in self._cg_params]
+        for sb in self._cg_static_grads:
+            sb.zero_()
+        self._cg_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self._cg_graph):
+            vp = self.render(chunk_rows=nz)
+            vp.backward(self._cg_static_vgrad)
+        self._cg_shape = shape
+
+    def _cg_invalidate(self) -> None:
+        """Drop any captured graph (call on base-velocity/shape change)."""
+        self._cg_graph = None
 
 
 __all__ = ["VelocityINR"]
