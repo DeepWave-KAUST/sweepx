@@ -1691,6 +1691,38 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
     ).to(base_vp.device)
 
 
+def _render_full_to_cpu_tiled(net, cz: int = 1, cy: int = 294):
+    """Render a VelocityINR's full base grid to a CPU tensor, z+y tiled.
+
+    The DD snapshot render (rank 0 only) reconstructs the GLOBAL model, but
+    a full-lateral z-slab render materializes O(ny*nx * 16 levels * 8 corners)
+    hash vertex positions -> many GB on a large grid, even at
+    chunk_rows=1. On a 32 GB V100 tile the solver working set already fills
+    most of the card, so even the
+    chunk_rows=1 full-lateral render OOM'd rank 0. Tiling BOTH z and y bounds
+    each ``render_window`` to cz*cy*nx points; at (cz=1, cy=294) peak render
+    overhead is about a GB (probed on RTX 6000 Ada), which fits the
+    headroom. Each tile is copied to CPU immediately, so GPU only ever
+    holds one tile's intermediates. 3-D only; callers fall back to
+    ``render(chunk_rows=1)`` for 2-D.
+    """
+    import torch
+    full = tuple(int(s) for s in net.base_velocity.shape)
+    if len(full) != 3:
+        return net.render(chunk_rows=1).detach().to("cpu")
+    nz, ny, nx = full
+    out = torch.empty(full, dtype=torch.float32, device="cpu")
+    for z0 in range(0, nz, cz):
+        z1 = min(nz, z0 + cz)
+        for y0 in range(0, ny, cy):
+            y1 = min(ny, y0 + cy)
+            with torch.no_grad():
+                win = net.render_window(z0, z1, y0, y1, 0, nx)
+            out[z0:z1, y0:y1] = win.detach().to("cpu")
+            del win
+    return out
+
+
 def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
     if n_rows <= 0:
         return
@@ -6322,16 +6354,34 @@ class TaskRunner:
                 if bound is not None:
                     vp_leaf.data.clamp_(min=bound.min, max=bound.max)
             else:
-                with torch.no_grad():
-                    if dd_on:
-                        # chunked (downsample-path) global render for
-                        # snapshots/QC — bounded memory (a bare reparam_net()
-                        # would materialise the full grid + activations and can
-                        # OOM the tile GPUs at production scale).
-                        inv_by_name["vp"] = reparam_net.render(
-                            chunk_rows=dd_rc).detach()
-                    else:
-                        inv_by_name["vp"] = reparam_net().detach()
+                # The global vp render is consumed ONLY by snapshots/QC/final-
+                # save, so render it on THOSE epochs — not every iter. At 3-D
+                # production scale the full-grid render is a large tensor (+
+                # chunked compute); doing it every epoch kept a full-grid vp copy
+                # resident through the next forward for no reason (visible in
+                # SWEEP_MEM_CENSUS as an extra (nz,ny,nx) float32 bucket). The
+                # readers below (snapshot_now / qc) share this exact predicate,
+                # so inv_by_name["vp"] is always freshly rendered when read.
+                _need_vp = (epoch % spec.show_every == 0
+                            or epoch == total_epochs - 1
+                            or (epoch + 1) in stage_starts
+                            or (qc_enabled
+                                and epoch % spec.qc.every_n_epochs == 0))
+                # Root-only: the DD net is replicated, so rank 0's full-grid render
+                # IS the global model. Rendering on all ranks was redundant AND a
+                # full-lateral z-slab render OOM'd 32 GB V100 tiles at 2-16: the
+                # solver working set already fills most of the card, and even
+                # render(chunk_rows=1) needs more than the headroom. The
+                # z+y-tiled CPU render bounds render overhead to about a GB and lands
+                # inv_by_name["vp"] on CPU (its only consumers are snapshot .npy /
+                # well-log QC, both .cpu().numpy()).
+                if _need_vp and dist_info.is_root:
+                    with torch.no_grad():
+                        if dd_on:
+                            inv_by_name["vp"] = _render_full_to_cpu_tiled(
+                                reparam_net, cz=1, cy=294)
+                        else:
+                            inv_by_name["vp"] = reparam_net().detach()
 
             iter_s = time.perf_counter() - t_iter
             cache_str = ""
@@ -6366,6 +6416,30 @@ class TaskRunner:
                 _memstr = (f" memGB={torch.cuda.memory_allocated(dev) / 2**30:.1f}"
                            f"/{torch.cuda.max_memory_allocated(dev) / 2**30:.1f}pk")
                 torch.cuda.reset_peak_memory_stats(dev)   # per-epoch peak trend
+                if os.environ.get("SWEEP_MEM_CENSUS") == "1" and dist_info.is_root:
+                    # Leak hunt: bucket EVERY live CUDA tensor by (shape,dtype,
+                    # requires_grad,has_grad_fn). A bucket whose n grows each
+                    # epoch — or buckets={} steadily climbing (reseed-keyed
+                    # per-iter shapes) — names the retained allocation.
+                    import gc as _gc, collections as _co
+                    _buck = _co.defaultdict(lambda: [0, 0])
+                    for _o in _gc.get_objects():
+                        try:
+                            if torch.is_tensor(_o) and _o.is_cuda:
+                                _k = (tuple(_o.shape), str(_o.dtype),
+                                      bool(_o.requires_grad), _o.grad_fn is not None)
+                                _buck[_k][0] += 1
+                                _buck[_k][1] += _o.element_size() * _o.nelement()
+                        except Exception:
+                            pass
+                    _tot_mb = sum(v[1] for v in _buck.values()) / 2 ** 20
+                    print(f"[memcensus] epoch {epoch:04d} "
+                          f"live_cuda={_tot_mb:.0f}MB buckets={len(_buck)}", flush=True)
+                    for _k, (_c, _b) in sorted(
+                            _buck.items(), key=lambda kv: -kv[1][1])[:12]:
+                        print(f"[memcensus]   n={_c:4d} {_b / 2 ** 20:8.1f}MB "
+                              f"shape={_k[0]} {_k[1]} rg={_k[2]} gf={_k[3]}",
+                              flush=True)
             print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
                   f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}{_memstr}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
@@ -6381,7 +6455,7 @@ class TaskRunner:
             snapshot_now = (epoch % spec.show_every == 0
                             or epoch == total_epochs - 1
                             or (epoch + 1) in stage_starts)
-            if snapshot_now:
+            if snapshot_now and dist_info.is_root:   # DD: only rank 0 holds the rendered vp
                 vp_now = inv_by_name["vp"]
                 np.save(
                     snapshots_dir / f"vp_epoch_{epoch:04d}.npy",
@@ -6562,17 +6636,25 @@ class TaskRunner:
             io_pool.shutdown(wait=False, cancel_futures=True)
         reader.close()
         artifacts: list[Path] = []
-        final_vp_path = out_dir / "inverted_vp.npy"
-        np.save(final_vp_path, inv_by_name["vp"].detach().cpu().numpy())
-        artifacts.append(final_vp_path)
-        loss_path = out_dir / "loss.npy"
-        np.save(loss_path, np.array(losses, dtype=np.float64))
-        artifacts.append(loss_path)
-        try:
-            artifacts.append(_plot_loss_curve(losses, out_dir / "loss.png",
-                                              title="OBN multisource FWI Loss"))
-        except Exception as plot_err:  # noqa: BLE001
-            print(f"[multisource] loss plot skipped: {plot_err}")
+        if dist_info.is_root:   # DD: only rank 0 renders/holds the global vp + writes
+            final_vp_path = out_dir / "inverted_vp.npy"
+            np.save(final_vp_path, inv_by_name["vp"].detach().cpu().numpy())
+            artifacts.append(final_vp_path)
+            loss_path = out_dir / "loss.npy"
+            np.save(loss_path, np.array(losses, dtype=np.float64))
+            artifacts.append(loss_path)
+            try:
+                artifacts.append(_plot_loss_curve(losses, out_dir / "loss.png",
+                                                  title="OBN multisource FWI Loss"))
+            except Exception as plot_err:  # noqa: BLE001
+                print(f"[multisource] loss plot skipped: {plot_err}")
+            # opt-in: dump the reparam net weights so per-level hash features can be
+            # rendered offline (SWEEP_SAVE_REPARAM_NET=1). Off by default (large file).
+            if reparam_net is not None and os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1":
+                net_path = out_dir / "reparam_net.pt"
+                torch.save(reparam_net.state_dict(), net_path)
+                artifacts.append(net_path)
+                print(f"[multisource] saved reparam net -> {net_path}", flush=True)
 
         summary = {
             "epochs": total_epochs,
