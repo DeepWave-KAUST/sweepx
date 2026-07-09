@@ -5875,6 +5875,27 @@ class TaskRunner:
                     # dt/nt; redo it at the new time axis (same seed → same shots).
                     next_future = prefetch_pool.submit(
                         _load_iter_payload, _iter_seed(epoch))
+            # Coarse-to-fine hash: advance the encoder level mask by whole-run
+            # progress each epoch (base_levels -> final_levels over [warmup,
+            # ramp_end], epoch fraction). The multisource path NEVER drove this, so
+            # the hash was frozen at base_levels (=2) the whole run and the fine
+            # levels never activated. Mirrors the _run_fwi / freqsel c2f driving.
+            _c2f_cfg = getattr(getattr(getattr(spec, "reparam", None),
+                                       "hash", None), "c2f", None)
+            if (reparam_net is not None and _c2f_cfg is not None
+                    and getattr(_c2f_cfg, "enabled", False)):
+                _enc = getattr(reparam_net, "encoder", None)
+                if _enc is not None and hasattr(_enc, "set_progress"):
+                    _enc.set_progress(
+                        epoch / max(1, total_epochs - 1),
+                        warmup=float(_c2f_cfg.warmup),
+                        ramp_end=float(_c2f_cfg.ramp_end),
+                        final_levels=(None if _c2f_cfg.final_levels is None
+                                      else int(_c2f_cfg.final_levels)))
+                    if dist_info.is_root and (epoch < 3 or epoch in stage_starts
+                                              or epoch % 20 == 0):
+                        print(f"[crg] c2f epoch {epoch}: active levels "
+                              f"{_enc.n_active_levels:.2f}/{_enc.L}", flush=True)
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
             t = time.perf_counter()
