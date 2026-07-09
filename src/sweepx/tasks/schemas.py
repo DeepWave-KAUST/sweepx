@@ -484,6 +484,12 @@ class ReparamHashC2FSpec(_Forbid):
     # In a multiscale chain set e.g. 8/10/12/16 per band so the finest
     # levels stay frozen until the data actually carries high wavenumbers.
     final_levels: int | None = Field(ge=1, default=None)
+    # Allocate fine levels ON DEMAND (sweep_nn.GrowingHashGrid) instead of
+    # masking a fully-allocated grid — saves latent memory (finest levels
+    # dominate in 3-D). Reuses base_levels -> final_levels over [warmup,
+    # ramp_end] as the grow schedule; ``ramp`` is ignored (growth is
+    # hard-stepped). Requires ``enabled: true``.
+    growing: bool = False
 
 
 class ReparamHashSpec(_Forbid):
@@ -818,6 +824,14 @@ class ReparamSpec(_Forbid):
     """
 
     kind: Literal["velocity_inr"] = "velocity_inr"
+    # Warm-start: path to a saved reparam-net state_dict (a previous run's
+    # ``reparam_net.pt``, dumped with SWEEP_SAVE_REPARAM_NET=1). The runner loads
+    # it into the freshly-built network so a SECOND run continues the SAME net
+    # across processes/bands (e.g. run 2-4Hz, then resume + extend at 2-8Hz).
+    # With ``hash.c2f.growing`` the encoder auto-grows to the checkpoint's level
+    # count on load; the hash config (levels/base/finest/log2/features) must
+    # match the saved run.
+    init_from: str | None = None
     hidden_features: int = Field(ge=1, default=64)
     hidden_layers: int = Field(ge=1, default=3)
     first_omega0: float = Field(gt=0, default=30.0)

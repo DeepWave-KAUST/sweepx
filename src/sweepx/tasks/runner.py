@@ -1652,7 +1652,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
                 f"equal water_vp_m_s={water_vp_val}; mask will be empty.",
                 stacklevel=2,
             )
-    return VelocityINR(
+    net = VelocityINR(
         base_vp.detach(),
         vp_mean=float(spec.vp_mean),
         vp_std=float(spec.vp_std),
@@ -1677,6 +1677,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
                                          "base_levels", 2) or 2),
         hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
                                   "ramp", "cosine") or "cosine"),
+        hash_growing=bool(getattr(getattr(spec.hash, "c2f", None), "growing", False)),
         use_fourier_encoding=bool(getattr(getattr(spec, "fourier", None), "enabled", False)),
         fourier_levels=int(getattr(getattr(spec, "fourier", None), "levels", 6) or 6),
         fourier_include_input=bool(getattr(getattr(spec, "fourier", None), "include_input", True)),
@@ -1689,6 +1690,63 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
         lateral_downsample=getattr(spec, "lateral_downsample", 1),
         compile_render=bool(getattr(spec, "compile_render", False)),
     ).to(base_vp.device)
+    # Warm-start from a saved reparam net (a previous run's ``reparam_net.pt``,
+    # dumped via SWEEP_SAVE_REPARAM_NET=1) — continue the SAME network across
+    # separate processes/bands (e.g. run 2-4Hz, then resume 2-8Hz). A
+    # GrowingHashGrid auto-grows its levels to match the checkpoint on load, so
+    # the second run keeps the first run's latents and grows further. The hash
+    # config (levels/base/finest/log2/features) must match across runs.
+    _init_from = getattr(spec, "init_from", None)
+    if _init_from:
+        sd = torch.load(str(_init_from), map_location=base_vp.device)
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
+        net.load_state_dict(sd)  # strict: mismatched hash config fails loudly
+        print(f"[reparam] init_from: warm-started network <- {_init_from} "
+              f"(encoder levels now {getattr(net.encoder, 'n_active', 'n/a')})",
+              flush=True)
+    return net
+
+
+def _has_hash_schedule(net) -> bool:
+    """True if ``net``'s encoder supports a coarse-to-fine level schedule
+    (either a CoarseToFineHashGrid mask or a GrowingHashGrid lazy allocator)."""
+    enc = getattr(net, "encoder", None)
+    return hasattr(enc, "set_progress") or hasattr(enc, "grow_to_progress")
+
+
+def _advance_hash_schedule(net, progress, c2f_cfg, optimizer):
+    """Advance the hash coarse-to-fine schedule by one epoch (``progress`` in [0,1]).
+
+    Two encoder mechanisms, picked by duck-typing:
+      * ``GrowingHashGrid``      -> allocate fine levels ON DEMAND and register the
+        new latent Parameters with ``optimizer`` (``add_param_group``) so Adam
+        trains them (saves latent memory: fine levels aren't allocated until due).
+      * ``CoarseToFineHashGrid`` -> soft per-level mask (``set_progress``).
+
+    Both read ``base_levels -> final_levels`` over ``[warmup, ramp_end]`` from
+    ``c2f_cfg``. Returns ``(active_levels: float, total_levels: int)`` for logging,
+    or ``None`` if the encoder has no schedulable hash grid.
+    """
+    enc = getattr(net, "encoder", None)
+    if enc is None:
+        return None
+    warmup = float(c2f_cfg.warmup)
+    ramp_end = float(c2f_cfg.ramp_end)
+    final = (None if getattr(c2f_cfg, "final_levels", None) is None
+             else int(c2f_cfg.final_levels))
+    if hasattr(enc, "grow_to_progress"):          # GrowingHashGrid (lazy alloc)
+        base = (None if getattr(c2f_cfg, "base_levels", None) is None
+                else int(c2f_cfg.base_levels))
+        new = enc.grow_to_progress(progress, base_levels=base, final_levels=final,
+                                   warmup=warmup, ramp_end=ramp_end)
+        if new and optimizer is not None:
+            optimizer.add_param_group({"params": new})
+        return float(enc.n_active), int(enc.L)
+    if hasattr(enc, "set_progress"):              # CoarseToFineHashGrid (soft mask)
+        enc.set_progress(progress, warmup=warmup, ramp_end=ramp_end, final_levels=final)
+        return float(enc.n_active_levels), int(enc.L)
+    return None
 
 
 def _render_full_to_cpu_tiled(net, cz: int = 1, cy: int = 294):
@@ -2906,7 +2964,7 @@ class TaskRunner:
         _c2f = getattr(getattr(spec.reparam, "hash", None), "c2f", None)
         c2f_on = bool(
             use_reparam and _c2f is not None and bool(_c2f.enabled)
-            and hasattr(getattr(net, "encoder", None), "set_progress"))
+            and _has_hash_schedule(net))
         if c2f_on and rank == 0:
             print(f"[freqsel] stage {si} c2f: base_levels={_c2f.base_levels} "
                   f"ramp={_c2f.ramp} warmup={_c2f.warmup} "
@@ -2932,20 +2990,16 @@ class TaskRunner:
                 torch.cuda.reset_peak_memory_stats()
             pool, bins = sched.draw(it)
             if c2f_on:
-                # whole-run progress: single network across all stages, level
-                # mask grows monotonically (never reset per band). Single-stage
+                # whole-run progress: single network across all stages, schedule
+                # advances monotonically (never reset per band). Single-stage
                 # (total_epochs==stage_epochs, offset 0) reduces to it/stage.
-                net.encoder.set_progress(
-                    (epoch_offset + it) / max(1, total_epochs - 1),
-                    warmup=float(_c2f.warmup),
-                    ramp_end=float(_c2f.ramp_end),
-                    final_levels=(None if getattr(_c2f, "final_levels", None)
-                                  is None else int(_c2f.final_levels)))
-                if rank == 0 and (it < 3 or it % 10 == 0
-                                  or it == stage_epochs - 1):
+                _act = _advance_hash_schedule(
+                    net, (epoch_offset + it) / max(1, total_epochs - 1),
+                    _c2f, optimizer)
+                if _act is not None and rank == 0 and (
+                        it < 3 or it % 10 == 0 or it == stage_epochs - 1):
                     print(f"[freqsel] s{si} c2f it {it}: active levels "
-                          f"{net.encoder.n_active_levels:.2f}/{net.encoder.L}",
-                          flush=True)
+                          f"{_act[0]:.2f}/{_act[1]}", flush=True)
             optimizer.zero_grad()
             _pf_sync(); _pa = _time.perf_counter()
             leaf = _leaf()
@@ -3694,17 +3748,14 @@ class TaskRunner:
                 # reparam.hash.c2f is on and the encoder is CoarseToFine).
                 if _c2f_on:
                     _net = state.get("reparam_net")
-                    _enc = getattr(_net, "encoder", None) if _net is not None else None
-                    if _enc is not None and hasattr(_enc, "set_progress"):
-                        _enc.set_progress(
-                            epoch_global / max(1, total_epochs - 1),
-                            warmup=float(_c2f.warmup), ramp_end=float(_c2f.ramp_end),
-                            final_levels=(None if _c2f.final_levels is None
-                                          else int(_c2f.final_levels)))
-                        if dist_info.is_root and (epoch_global < 3
-                                                  or epoch_global % 20 == 0):
+                    if _has_hash_schedule(_net):
+                        _act = _advance_hash_schedule(
+                            _net, epoch_global / max(1, total_epochs - 1),
+                            _c2f, state.get("optimizer"))
+                        if _act is not None and dist_info.is_root and (
+                                epoch_global < 3 or epoch_global % 20 == 0):
                             print(f"[fwi] c2f epoch {epoch_global}: active levels "
-                                  f"{_enc.n_active_levels:.2f}/{_enc.L}")
+                                  f"{_act[0]:.2f}/{_act[1]}")
                 # Only save the obs/syn snapshot for QC when QC actually fires
                 # this iter. Without this gate every iter pays a ~250 ms D2H
                 # copy of syn+obs_chunk (~300 MB) into a dict that's discarded
@@ -5916,18 +5967,14 @@ class TaskRunner:
                                        "hash", None), "c2f", None)
             if (reparam_net is not None and _c2f_cfg is not None
                     and getattr(_c2f_cfg, "enabled", False)):
-                _enc = getattr(reparam_net, "encoder", None)
-                if _enc is not None and hasattr(_enc, "set_progress"):
-                    _enc.set_progress(
-                        epoch / max(1, total_epochs - 1),
-                        warmup=float(_c2f_cfg.warmup),
-                        ramp_end=float(_c2f_cfg.ramp_end),
-                        final_levels=(None if _c2f_cfg.final_levels is None
-                                      else int(_c2f_cfg.final_levels)))
-                    if dist_info.is_root and (epoch < 3 or epoch in stage_starts
-                                              or epoch % 20 == 0):
+                if _has_hash_schedule(reparam_net):
+                    _act = _advance_hash_schedule(
+                        reparam_net, epoch / max(1, total_epochs - 1),
+                        _c2f_cfg, optimizer)
+                    if _act is not None and dist_info.is_root and (
+                            epoch < 3 or epoch in stage_starts or epoch % 20 == 0):
                         print(f"[crg] c2f epoch {epoch}: active levels "
-                              f"{_enc.n_active_levels:.2f}/{_enc.L}", flush=True)
+                              f"{_act[0]:.2f}/{_act[1]}", flush=True)
             t_iter = time.perf_counter()
             # Wait for the prefetched iter's payload (already in flight).
             t = time.perf_counter()
