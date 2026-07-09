@@ -493,9 +493,24 @@ class ReparamHashSpec(_Forbid):
     levels: int = Field(ge=1, default=16)
     features_per_level: int = Field(ge=1, default=2)
     log2_size: int = Field(ge=1, default=15)
-    base_resolution: int = Field(ge=1, default=4)
-    finest_resolution: int = Field(ge=1, default=512)
+    # Scalar (isotropic) OR a per-axis list [n_z, n_y, n_x] (3-D) / [n_z, n_x]
+    # (2-D) for an ANISOTROPIC hash — set proportional to each axis' physical
+    # extent so every level resolves the same physical scale on all axes.
+    # sweep_nn.MultiResHashGrid natively supports the per-axis list.
+    base_resolution: int | list[int] = 4
+    finest_resolution: int | list[int] = 512
     c2f: ReparamHashC2FSpec = Field(default_factory=ReparamHashC2FSpec)
+
+    @field_validator("base_resolution", "finest_resolution")
+    @classmethod
+    def _resolution_positive(cls, v):
+        vals = v if isinstance(v, list) else [v]
+        if any(int(x) < 1 for x in vals):
+            raise ValueError("base_resolution/finest_resolution entries must be >= 1")
+        if isinstance(v, list) and len(v) not in (2, 3):
+            raise ValueError(
+                "per-axis base/finest_resolution must have 2 (2-D) or 3 (3-D) entries")
+        return v
 
 
 class ReparamFourierSpec(_Forbid):

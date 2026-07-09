@@ -1665,8 +1665,12 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
         hash_levels=int(spec.hash.levels),
         hash_features_per_level=int(spec.hash.features_per_level),
         hash_log2_size=int(spec.hash.log2_size),
-        hash_base_resolution=int(spec.hash.base_resolution),
-        hash_finest_resolution=int(spec.hash.finest_resolution),
+        hash_base_resolution=(list(spec.hash.base_resolution)
+                              if isinstance(spec.hash.base_resolution, list)
+                              else int(spec.hash.base_resolution)),
+        hash_finest_resolution=(list(spec.hash.finest_resolution)
+                                if isinstance(spec.hash.finest_resolution, list)
+                                else int(spec.hash.finest_resolution)),
         hash_c2f=bool(getattr(spec.hash, "c2f", None) is not None
                       and spec.hash.c2f.enabled),
         hash_c2f_base_levels=int(getattr(getattr(spec.hash, "c2f", None),
