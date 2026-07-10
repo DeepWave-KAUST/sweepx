@@ -825,13 +825,19 @@ class ReparamSpec(_Forbid):
 
     kind: Literal["velocity_inr"] = "velocity_inr"
     # Warm-start: path to a saved reparam-net state_dict (a previous run's
-    # ``reparam_net.pt``, dumped with SWEEP_SAVE_REPARAM_NET=1). The runner loads
-    # it into the freshly-built network so a SECOND run continues the SAME net
-    # across processes/bands (e.g. run 2-4Hz, then resume + extend at 2-8Hz).
-    # With ``hash.c2f.growing`` the encoder auto-grows to the checkpoint's level
-    # count on load; the hash config (levels/base/finest/log2/features) must
+    # ``reparam_net.pt``, dumped with ``save_net: true`` or SWEEP_SAVE_REPARAM_NET=1).
+    # The runner loads it into the freshly-built network so a SECOND run continues
+    # the SAME net across processes/bands (e.g. run 2-4Hz, then resume + extend at
+    # 2-8Hz). With ``hash.c2f.growing`` the encoder auto-grows to the checkpoint's
+    # level count on load; the hash config (levels/base/finest/log2/features) must
     # match the saved run.
     init_from: str | None = None
+    # Dump the trained reparam-net state_dict to ``<task_dir>/reparam_net.pt`` at
+    # the end of the run (declarative counterpart to ``init_from``): for offline
+    # hash-feature analysis or warm-starting a later run. Honored by both the
+    # freqsel and multisource paths. The env var SWEEP_SAVE_REPARAM_NET=1 forces it
+    # on regardless (backward compat). Off by default (large file).
+    save_net: bool = False
     hidden_features: int = Field(ge=1, default=64)
     hidden_layers: int = Field(ge=1, default=3)
     first_omega0: float = Field(gt=0, default=30.0)

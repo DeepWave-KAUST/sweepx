@@ -3190,6 +3190,18 @@ class TaskRunner:
             (task_dir / "summary.json").write_text(
                 _json.dumps(summary, indent=2))
             artifacts = {"inverted_vp": str(task_dir / "inverted_vp.npy")}
+            # opt-in: dump the reparam net weights (reparam.save_net or the
+            # SWEEP_SAVE_REPARAM_NET=1 env override) so per-level hash features can
+            # be rendered offline. Off by default (large file). Mirrors the
+            # multisource path; freqsel writes to task_dir root (alongside
+            # inverted_vp.npy), not task_dir/output.
+            if (use_reparam and net is not None
+                    and (spec.reparam.save_net
+                         or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1")):
+                net_path = task_dir / "reparam_net.pt"
+                torch.save(net.state_dict(), net_path)
+                artifacts["reparam_net"] = str(net_path)
+                print(f"[freqsel] saved reparam net -> {net_path}", flush=True)
             print(f"[freqsel] DONE ({len(stages)} stage(s)) "
                   f"mean(1-GCN) {losses[0]:.4f} -> {losses[-1]:.4f}",
                   flush=True)
@@ -6696,8 +6708,11 @@ class TaskRunner:
             except Exception as plot_err:  # noqa: BLE001
                 print(f"[multisource] loss plot skipped: {plot_err}")
             # opt-in: dump the reparam net weights so per-level hash features can be
-            # rendered offline (SWEEP_SAVE_REPARAM_NET=1). Off by default (large file).
-            if reparam_net is not None and os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1":
+            # rendered offline (reparam.save_net or SWEEP_SAVE_REPARAM_NET=1 env
+            # override). Off by default (large file).
+            if reparam_net is not None and (
+                    spec.reparam.save_net
+                    or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
                 net_path = out_dir / "reparam_net.pt"
                 torch.save(reparam_net.state_dict(), net_path)
                 artifacts.append(net_path)
