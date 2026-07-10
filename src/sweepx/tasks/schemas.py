@@ -505,6 +505,10 @@ class ReparamHashSpec(_Forbid):
     # sweep_nn.MultiResHashGrid natively supports the per-axis list.
     base_resolution: int | list[int] = 4
     finest_resolution: int | list[int] = 512
+    # "triton": fused GPU kernels (sweep_nn.triton_hash_encoding) — numerically
+    # matches "pytorch" (cos≈1) with ~10-20x less encoder memory at large batch.
+    # Requires triton + CUDA; incompatible with c2f.growing (lazy ParameterList).
+    backend: Literal["pytorch", "triton"] = "pytorch"
     c2f: ReparamHashC2FSpec = Field(default_factory=ReparamHashC2FSpec)
 
     @field_validator("base_resolution", "finest_resolution")
@@ -517,6 +521,15 @@ class ReparamHashSpec(_Forbid):
             raise ValueError(
                 "per-axis base/finest_resolution must have 2 (2-D) or 3 (3-D) entries")
         return v
+
+    @model_validator(mode="after")
+    def _triton_incompatible_with_growing(self):
+        if self.backend == "triton" and self.c2f.growing:
+            raise ValueError(
+                "hash.backend='triton' is incompatible with hash.c2f.growing=true "
+                "(GrowingHashGrid's lazy per-level tables cannot be indexed by the "
+                "fused kernel); use the c2f mask without growing, or backend='pytorch'")
+        return self
 
 
 class ReparamFourierSpec(_Forbid):

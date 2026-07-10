@@ -1678,6 +1678,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
         hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
                                   "ramp", "cosine") or "cosine"),
         hash_growing=bool(getattr(getattr(spec.hash, "c2f", None), "growing", False)),
+        hash_backend=str(getattr(spec.hash, "backend", "pytorch") or "pytorch"),
         use_fourier_encoding=bool(getattr(getattr(spec, "fourier", None), "enabled", False)),
         fourier_levels=int(getattr(getattr(spec, "fourier", None), "levels", 6) or 6),
         fourier_include_input=bool(getattr(getattr(spec, "fourier", None), "include_input", True)),
