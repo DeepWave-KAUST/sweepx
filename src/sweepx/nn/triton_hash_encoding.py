@@ -173,6 +173,33 @@ if _HAVE_TRITON:
             return None, glat, None, None, None, None, None, None, None, None
 
 
+_KERNELS_WARMED = False
+
+
+def _warmup_kernels(latents, scales, strides, offsets, is_dense, T, D, F, BLOCK):
+    """Compile the fwd+bwd Triton kernels once, synchronously, before any real work.
+
+    The first launch of each kernel JIT-compiles it — a burst of CUDA *driver* calls
+    (module load, etc.). If those overlap a concurrent host allocation on another
+    thread/stream — e.g. the sweep C++ solver's pinned boundary buffers
+    (``torch.zeros(..., pin_memory=True)`` = cudaHostAlloc) — CUDA raises a spurious
+    ``invalid argument``. It only bites under async execution (``CUDA_LAUNCH_BLOCKING``
+    hides it) and only with the Triton backend (the PyTorch path has no JIT). Doing
+    the compile here, followed by a device sync, serialises it out of the hot loop.
+    """
+    global _KERNELS_WARMED
+    if _KERNELS_WARMED:
+        return
+    with torch.enable_grad():
+        p = torch.rand(min(int(BLOCK), 8), int(D), device=latents.device)
+        lat = latents.detach().clone().requires_grad_(True)
+        out = _TritonHashFn.apply(p, lat, scales, strides, offsets, is_dense,
+                                  int(T), int(D), int(F), int(BLOCK))
+        out.sum().backward()
+    torch.cuda.synchronize()
+    _KERNELS_WARMED = True
+
+
 def triton_encode(pos, latents, scales, strides, offsets, is_dense, T, D, F, BLOCK=256):
     """Fused Triton multi-resolution hash encoding. Returns ``(N, L*F)`` level-major.
 
@@ -194,9 +221,12 @@ def triton_encode(pos, latents, scales, strides, offsets, is_dense, T, D, F, BLO
         )
     if not pos.is_cuda:
         raise RuntimeError("The Triton hash backend requires CUDA tensors.")
+    scales, strides = scales.contiguous(), strides.contiguous()
+    offsets, is_dense = offsets.contiguous(), is_dense.contiguous()
+    _warmup_kernels(latents, scales, strides, offsets, is_dense, T, D, F, BLOCK)
     return _TritonHashFn.apply(
-        pos.contiguous(), latents, scales.contiguous(), strides.contiguous(),
-        offsets.contiguous(), is_dense.contiguous(), int(T), int(D), int(F), int(BLOCK),
+        pos.contiguous(), latents, scales, strides,
+        offsets, is_dense, int(T), int(D), int(F), int(BLOCK),
     )
 
 
