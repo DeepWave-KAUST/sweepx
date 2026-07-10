@@ -9,6 +9,7 @@ from .siren import SIREN, SirenMLP, SineLayer
 from .dip import DIPReparam
 from .priors import LearnedPrior, SeabedFreezeMask, TVPrior
 from .hash_encoding import MultiResHashGrid
+from .triton_hash_encoding import have_triton
 from .growing_hash_grid import GrowingHashGrid
 from .velocity_inr import VelocityINR
 from .wavelet import SirenWavelet
@@ -23,6 +24,7 @@ __all__ = [
     "DIPReparam",
     "LearnedPrior",
     "MultiResHashGrid",
+    "have_triton",
     "GrowingHashGrid",
     "SeabedFreezeMask",
     "TVPrior",

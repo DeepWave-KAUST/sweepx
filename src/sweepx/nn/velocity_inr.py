@@ -171,6 +171,7 @@ class VelocityINR(nn.Module):
         hash_c2f_base_levels: int = 2,
         hash_c2f_ramp: str = "cosine",
         hash_growing: bool = False,
+        hash_backend: str = "pytorch",
         use_fourier_encoding: bool = False,
         fourier_levels: int = 6,
         fourier_include_input: bool = True,
@@ -247,8 +248,15 @@ class VelocityINR(nn.Module):
                 log2_hashmap_size=int(hash_log2_size),
                 base_resolution=hash_base_resolution,
                 finest_resolution=hash_finest_resolution,
+                backend=str(hash_backend),
             )
             if bool(hash_growing):
+                if str(hash_backend) == "triton":
+                    raise ValueError(
+                        "hash_backend='triton' is not supported with hash_growing=True "
+                        "(GrowingHashGrid uses a lazy per-level ParameterList, which the "
+                        "fused kernel cannot index). Use hash_growing=False."
+                    )
                 # On-demand growth: fine levels allocated lazily (saves latent
                 # memory). Grow schedule driven from the training loop via
                 # encoder.grow_to_progress(...); takes precedence over c2f mask.

@@ -42,10 +42,14 @@ class MultiResHashGrid(nn.Module):
         base_resolution: int | List[int] = 2,
         finest_resolution: int | List[int] = 16,
         dtype: torch.dtype = torch.float32,
+        backend: str = "pytorch",
     ) -> None:
         super().__init__()
         if int(dim) not in (2, 3):
             raise ValueError(f"dim must be 2 or 3; got {dim}")
+        if str(backend) not in ("pytorch", "triton"):
+            raise ValueError(f"backend must be 'pytorch' or 'triton'; got {backend!r}")
+        self.backend = str(backend)
 
         self.dim = int(dim)
         self.L = int(n_levels)
@@ -121,6 +125,13 @@ class MultiResHashGrid(nn.Module):
             ]
         self.register_buffer("cell_offsets", torch.tensor(cell_offsets, dtype=torch.float32))
 
+        # Buffers the fused Triton backend reads (cheap; harmless for the PyTorch path).
+        # is_dense[i] = 1 for tiled (dense) levels, 0 for hashed; offsets_head = offsets[:-1].
+        is_dense = torch.zeros(self.L, dtype=torch.int32)
+        is_dense[: self.first_hash_level] = 1
+        self.register_buffer("is_dense", is_dense, persistent=False)
+        self.register_buffer("offsets_head", torch.tensor(offsets[:-1], dtype=torch.int64), persistent=False)
+
     def _make_vert_pos(self, pos_scaled: torch.Tensor) -> torch.Tensor:
         pos_floored = torch.floor(pos_scaled)
         vert_pos = pos_floored.unsqueeze(-2) + self.cell_offsets.view(1, 1, -1, self.dim)
@@ -168,6 +179,16 @@ class MultiResHashGrid(nn.Module):
         """Encode normalized coords ``(..., dim)`` -> features ``(..., L*F)``."""
         shape = pos.shape[:-1]
         pos = pos.reshape(-1, self.dim)
+        if self.backend == "triton":
+            # Fused GPU path: numerically matches the PyTorch branch (cos=1.0) with
+            # ~7-20x less encoder memory. See sweep_nn.triton_hash_encoding.
+            from .triton_hash_encoding import triton_encode
+
+            out = triton_encode(
+                pos, self.latents, self.scales, self.strides,
+                self.offsets_head, self.is_dense, self.T, self.dim, self.F,
+            )
+            return out.reshape(*shape, -1)
         n_samples = int(pos.shape[0])
         # Broadcast: (L, n_samples, dim)
         pos_scaled = pos[None, :, :] * self.scales[:, None, :]
