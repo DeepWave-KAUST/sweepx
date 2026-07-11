@@ -2936,9 +2936,17 @@ class TaskRunner:
             int(fspec.slack_samples), dev, distributed=dd_on,
             eps=float(fspec.eps))
 
+        _dd_rc = _dd_config()[3] if dd_on else 0
+
         def _leaf():
             if not use_reparam:
                 return vp
+            if dd_on:
+                # Mirror the multisource DD path (_dd_render_tile): render ONLY
+                # this rank's solver tile so the reparam render divides across
+                # tiles, instead of every rank rendering the full grid each
+                # iteration (the dominant per-iter cost at fine grids).
+                return _dd_render_tile(net, _dd_tile_bounds(solver), _dd_rc)
             with torch.no_grad():
                 m = net.render(chunk_rows=chunk_rows).detach().clone()
             return m.requires_grad_(True)
@@ -3015,7 +3023,21 @@ class TaskRunner:
             J.backward()
             _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             g = leaf.grad
-            if g is not None:
+            if dd_on and use_reparam:
+                # Tile-grad path (mirrors multisource _dd_backward_tile): g
+                # covers only this rank's tile window; zero the water inside
+                # the window, push it through the net tile-locally, and let
+                # _dd_backward_tile all_reduce the PARAM grads. Called
+                # UNCONDITIONALLY (zero-filling when g is None) so the
+                # collective stays consistent across ranks. This replaces the
+                # full-grid grad all_reduce + redundant full-model reparam
+                # backward on every rank. illumination is force-disabled
+                # under DD, so that branch is moot here.
+                _tb = _dd_tile_bounds(solver)
+                if g is not None:
+                    g[water_t[_tb[0]:_tb[1], _tb[2]:_tb[3], _tb[4]:_tb[5]]] = 0.0
+                _dd_backward_tile(net, leaf, _tb, _dd_rc)
+            elif g is not None:
                 sill_sum = rill_sum = None
                 if illum_on:
                     sill_sum, rill_sum = _accumulate_illumination(
@@ -3107,7 +3129,14 @@ class TaskRunner:
         if dd_on:
             import torch.distributed as dist
             if not dist.is_initialized():
-                dist.init_process_group("nccl")
+                # NCCL watchdog default is 600 s; freqsel's iteration 0 at fine
+                # grids runs ~520 s of one-time warmup (first adjoint launch,
+                # boundary buffer allocs), so the default is one bad node away
+                # from a spurious SIGABRT (observed at 2-16Hz with 12 c2f
+                # levels). 1800 s default, env-overridable.
+                from datetime import timedelta
+                dist.init_process_group("nccl", timeout=timedelta(seconds=int(
+                    os.environ.get("SWEEP_DD_NCCL_TIMEOUT_S", "1800"))))
             rank, world = dist.get_rank(), dist.get_world_size()
             if dd_py * dd_px != world:
                 raise ValueError(
