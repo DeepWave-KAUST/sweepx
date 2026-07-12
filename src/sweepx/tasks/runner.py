@@ -2911,7 +2911,16 @@ class TaskRunner:
                 # Carry the network across the band: resample only its base to
                 # the new grid, keep hash+SIREN params AND Adam state (the whole
                 # point — the coarse structure learned in prior bands stays).
-                net.update_base_velocity(base_t)
+                # Rebuild the water-pin mask on the new grid (same base==water_vp
+                # basis as the si=0 build) and hand it to update_base_velocity —
+                # a grid (shape) change otherwise DROPS the stale render pin
+                # (VelocityINR.update_base_velocity), so water would un-pin at
+                # the 2-8 band. Mirrors the random/CRG path (passes new_mask).
+                _wvp = float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
+                _wm = ((base_t.detach() == _wvp)
+                       if bool(getattr(spec.reparam, "mask_water_layer", False))
+                       else None)
+                net.update_base_velocity(base_t, water_mask=_wm)
                 if bool(getattr(stage, "optimizer_reset", False)):
                     optimizer = torch.optim.Adam(net.parameters(),
                                                  lr=float(spec.reparam.lr))
