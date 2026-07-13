@@ -671,6 +671,10 @@ class FreqSelectionSpec(_Forbid):
     ramp_s: float = Field(gt=0, default=0.5)
     n_pools: int = Field(gt=0, default=14)
     eps: float = Field(gt=0, default=1.0e-12)
+    # When set, ignore the fixed interleaved pools and fire a fresh RANDOM
+    # subset of this many nodes each iteration (matches the random ±1 path's
+    # per-iter resampling). Must be <= number of comb bins (k_hi-k_lo+1).
+    random_batch: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _one_source(self):

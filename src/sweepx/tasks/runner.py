@@ -2570,6 +2570,15 @@ class TaskRunner:
         )
         if dist_info.is_root:
             status.write(task_dir / "status.json")
+            # Persist the resolved config UP-FRONT so every run dir — for ANY
+            # task_type (forward/wavefield/fwi/rtm/lsrtm/introspect) — has
+            # config_resolved.yaml + run_meta.json, even if the run crashes
+            # before the task-specific dump. FWI paths re-dump later with
+            # runtime extras (shape/origin/net_params/…), enriching this.
+            try:
+                _dump_run_metadata(spec, task_dir)
+            except Exception as _meta_err:  # noqa: BLE001  (never let meta break the run)
+                print(f"[run-meta] early config dump failed: {_meta_err}")
 
         dispatcher = {
             "introspect": self._run_introspect,
@@ -2881,7 +2890,8 @@ class TaskRunner:
         targets = fsl.FreqSelTargets(shards_glob, comb, ny_,
                                      verbose=rank == 0)
         sched = fsl.PoolScheduler(targets.node_grid, int(fspec.n_pools),
-                                  comb.n_bins, seed=int(spec.seed) + 17)
+                                  comb.n_bins, seed=int(spec.seed) + 17,
+                                  random_batch=getattr(fspec, "random_batch", None))
         rec_table = targets.union_xyz[None]
         if rank == 0:
             print(f"[freqsel] stage {si}: {targets.n_nodes} nodes, "
@@ -2969,6 +2979,20 @@ class TaskRunner:
             targets.node_grid[pool0][None].astype(np.int32), rec_table,
             models=[leaf])
         own = getattr(solver, "_own_rec_idx", None)
+        # Debug: audit receiver ownership across ranks (SWEEP_FREQSEL_OWN_AUDIT=1).
+        # Duplicated/dropped receivers at tile cut planes would bias the GCN loss.
+        if os.environ.get("SWEEP_FREQSEL_OWN_AUDIT") == "1" and dd_on:
+            import torch.distributed as dist
+            _cnt = torch.zeros(int(targets.n_union), device=dev)
+            _idx = (np.arange(targets.n_union) if own is None
+                    else np.asarray(own))
+            _cnt[torch.as_tensor(_idx, device=dev, dtype=torch.long)] = 1.0
+            dist.all_reduce(_cnt)
+            _dup = int((_cnt > 1.5).sum()); _drop = int((_cnt < 0.5).sum())
+            if rank == 0:
+                print(f"[freqsel][own-audit] n_union={targets.n_union} "
+                      f"duplicated={_dup} dropped={_drop} "
+                      f"(sum_owned={int(_cnt.sum())})", flush=True)
         targets.bind_ownership(
             np.arange(targets.n_union) if own is None else own, dev)
         chk = loss_fn.two_window_check(
@@ -2991,7 +3015,8 @@ class TaskRunner:
                   flush=True)
 
         stage_epochs = int(stage.epochs)
-        snap_every = max(1, stage_epochs // 10)
+        snap_every = int(os.environ.get("SWEEP_SNAP_EVERY",
+                                        str(max(1, stage_epochs // 10))))
         use_cuda = torch.cuda.is_available()
         _TPROF = os.environ.get("SWEEP_TASKS_TPROF") == "1"
         _pf = {"render": 0.0, "fwd": 0.0, "loss": 0.0, "bwd": 0.0,
@@ -3027,11 +3052,40 @@ class TaskRunner:
                 targets.node_grid[pool][None].astype(np.int32), rec_table,
                 models=[leaf])
             _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+            # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
+            # + owned receiver indices — localizes DD-vs-single divergence to
+            # receivers/onset times. Diagnostic only.
+            _rdump = os.environ.get("SWEEP_FREQSEL_DUMP_REC")
+            if _rdump and it < int(os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
+                os.makedirs(_rdump, exist_ok=True)
+                _own_i = getattr(solver, "_own_rec_idx", None)
+                np.savez(os.path.join(
+                    _rdump, f"rec_s{si}_it{it}_r{rank}.npz"),
+                    syn=syn.detach().cpu().numpy(),
+                    own=(np.arange(targets.n_union) if _own_i is None
+                         else np.asarray(_own_i)),
+                    pool=np.asarray(pool), bins=np.asarray(bins))
             J, npool = loss_fn(syn, pool, bins)
             _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             J.backward()
             _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             g = leaf.grad
+            # Debug: dump the raw velocity gradient of selected iters for
+            # DD-vs-single parity checks (SWEEP_FREQSEL_DUMP_GRAD=<dir>).
+            # DD dumps this rank's TILE grad + its global bounds; single dumps
+            # the full-grid grad. Diagnostic only, no effect on the update.
+            _gdump = os.environ.get("SWEEP_FREQSEL_DUMP_GRAD")
+            if _gdump and g is not None and it < int(
+                    os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
+                os.makedirs(_gdump, exist_ok=True)
+                if dd_on:
+                    _tb = _dd_tile_bounds(solver)
+                    np.savez(os.path.join(_gdump, f"grad_s{si}_it{it}_rank{rank}.npz"),
+                             g=g.detach().cpu().numpy(),
+                             bounds=np.asarray(_tb, dtype=np.int64))
+                else:
+                    np.savez(os.path.join(_gdump, f"grad_s{si}_it{it}_single.npz"),
+                             g=g.detach().cpu().numpy())
             if dd_on and use_reparam:
                 # Tile-grad path (mirrors multisource _dd_backward_tile): g
                 # covers only this rank's tile window; zero the water inside
@@ -3099,6 +3153,10 @@ class TaskRunner:
                          if use_reparam else vp.detach())
                 np.save(task_dir / f"vp_iter{gi + 1:04d}.npy",
                         m[:, :ny_, :nx_].cpu().numpy())
+                if use_reparam and (spec.reparam.save_net
+                                    or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
+                    torch.save(net.state_dict(),
+                               task_dir / f"reparam_net_iter{gi + 1:04d}.pt")
                 np.savez(task_dir / "curves.npz",
                          losses=np.array(losses), iter_s=np.array(times),
                          peak_gb=np.array(peaks))

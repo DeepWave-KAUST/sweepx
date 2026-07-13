@@ -256,33 +256,56 @@ class FreqSelTargets:
 
 @dataclass
 class PoolScheduler:
-    """Deterministic node-pool rotation + per-iteration frequency permutation.
+    """Node batching + per-iteration frequency permutation.
 
-    Pools are spatially interleaved (nodes sorted by model-y, strided), so
-    every pool spans the whole array and near-field footprints average out
-    over the rotation. Frequencies are drawn WITHOUT replacement inside the
-    pool every iteration — the permutation is the method's one mandatory
-    stochastic ingredient (a fixed assignment overfits its 48 spectral
-    lines; see the V3 experiment in the project notes).
+    Two node-selection modes:
+      * ``random_batch=None`` (default): deterministic pool rotation. Nodes are
+        spatially interleaved (sorted by model-y, strided) into ``n_pools``
+        pools, so every pool spans the whole array; iteration ``i`` fires pool
+        ``i % n_pools``. Guaranteed uniform coverage every iteration.
+      * ``random_batch=k``: fire a FRESH random subset of ``k`` nodes each
+        iteration (drawn without replacement within the iteration), matching
+        the random ±1 path's per-iter resampling. The fixed pools are still
+        built (sized ~k) but only for the one-time capture / steady-state QC.
+
+    Either way, frequencies are drawn WITHOUT replacement each iteration — the
+    permutation is the method's one mandatory stochastic ingredient (a fixed
+    assignment overfits its spectral lines; see the V3 experiment in the notes).
+    ``k`` (or the max pool size) must not exceed ``n_bins`` comb frequencies.
     """
 
     node_grid: np.ndarray
     n_pools: int
     n_bins: int
     seed: int
+    random_batch: int | None = None
     pools: list = field(init=False)
 
     def __post_init__(self):
         order = np.argsort(self.node_grid[:, 1], kind="stable")
-        self.pools = [np.sort(order[p::self.n_pools]) for p in range(self.n_pools)]
-        if max(len(p) for p in self.pools) > self.n_bins:
+        npool = self.n_pools
+        if self.random_batch:
+            # size the fixed interleaved pools to the random batch (used only
+            # for the one-time geometry capture / steady-state QC); draw()
+            # ignores them and samples a fresh random subset each iteration.
+            npool = max(1, -(-len(order) // int(self.random_batch)))
+        self.pools = [np.sort(order[p::npool]) for p in range(npool)]
+        self.n_pools = npool
+        bs = (int(self.random_batch) if self.random_batch
+              else max(len(p) for p in self.pools))
+        if bs > self.n_bins:
             raise ValueError(
-                f"pool size {max(len(p) for p in self.pools)} exceeds "
-                f"{self.n_bins} comb bins; increase n_pools or n_p")
+                f"batch size {bs} exceeds {self.n_bins} comb bins; "
+                "raise n_pools, lower random_batch, or widen the comb")
+        self._n_nodes = len(order)
         self._rng = np.random.default_rng(self.seed)
 
     def draw(self, iteration: int):
-        pool = self.pools[iteration % self.n_pools]
+        if self.random_batch:
+            pool = np.sort(self._rng.choice(
+                self._n_nodes, size=int(self.random_batch), replace=False))
+        else:
+            pool = self.pools[iteration % self.n_pools]
         bins = self._rng.permutation(self.n_bins)[:len(pool)]
         return pool, bins
 
