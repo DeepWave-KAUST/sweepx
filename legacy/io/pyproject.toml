@@ -28,6 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.20",
+    "scipy>=1.8",   # sweep_io._resample (DataPlan.dt_target_s polyphase resample)
 ]
 
 [project.optional-dependencies]

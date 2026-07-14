@@ -12,8 +12,10 @@ Both classes are plain dataclasses — the matching Pydantic schemas live in
 ``sweep-tasks`` and translate to these at task-build time.
 
 Signal-processing knobs (bandpass / mute / wavelet estimation) deliberately
-stay in ``sweep-preproc`` so a DataPlan is *only* about selection and
-sampling. Compose them at the caller.
+stay in ``sweep_tasks.preproc`` so a DataPlan is *only* about selection and
+sampling. Compose them at the caller. The one exception — time-axis resampling
+for ``dt_target_s`` — is inlined as ``sweep_io._resample`` so sweep-io needs no
+sweep-tasks import (which would be a dependency cycle).
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ class DataPlan:
         Treat offsets as absolute values when comparing to the window.
     dt_target_s
         Time-resample the observed data to this dt (delegates to
-        ``sweep_preproc.resample.resample_time``). Mutually exclusive with
+        ``sweep_io._resample.resample_time``). Mutually exclusive with
         ``time_decimate``.
     time_decimate
         Keep every ``K``-th time sample (no anti-alias filtering — that's
@@ -151,13 +153,7 @@ def _resample_time(plan: DataPlan, obs: np.ndarray, dt: float, time_axis: int) -
         slicer[time_axis] = slice(None, None, plan.time_decimate)
         return obs[tuple(slicer)], dt * plan.time_decimate
     if plan.dt_target_s is not None and abs(plan.dt_target_s - dt) > 1e-12:
-        try:
-            from sweep_preproc.resample import resample_time
-        except ImportError as e:
-            raise ImportError(
-                "DataPlan.dt_target_s requires `sweep_preproc`. "
-                "Install with `pip install sweep-preproc`."
-            ) from e
+        from sweep_io._resample import resample_time
         return resample_time(obs, dt, plan.dt_target_s, axis=time_axis), plan.dt_target_s
     return obs, dt
 
