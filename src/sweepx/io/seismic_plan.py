@@ -1112,6 +1112,125 @@ def sample_shared_shots_from_plan(
     )
 
 
+@dataclass
+class PerCRGBatch:
+    """One iteration's per-CRG independent-coverage sample (NO intersection).
+
+    Companion to :class:`SharedShotBatch`. For the per-shot (non-encoded)
+    FWI path every CRG node is a SEPARATE forward solve, so the shared-shot
+    intersection that source encoding needs is unnecessary — and, on
+    partial-coverage OBN data, actively harmful: the intersection keeps only
+    shots recorded by EVERY node in the batch, discarding exactly the
+    wide-offset diving-wave shots that just a few nearby nodes recorded.
+    This batch instead gives each node its OWN sub-sampled rows, so
+    ``rows_per_group`` is RAGGED (per-node length in ``per_group_counts``).
+
+    ``valid_mask`` / ``recv_rows_padded`` are filled by the runner after it
+    reads + grid-dedups + zero-pads the ragged traces into a dense
+    ``(B, max_nrec, nt)`` batch (the padded tail is masked out of the loss).
+
+    Attributes
+    ----------
+    group_indices : (B,) int64 — plan groups (virtual sources / OBN nodes).
+    rows_per_group : length-B list of int64 arrays (RAGGED) — each group's
+        own sub-sampled plan-row indices.
+    source_xyz_m : (B, 3) float64 — virtual-source (node) positions.
+    per_group_counts : (B,) int64 — ``rows_per_group[i].size``.
+    """
+
+    group_indices: np.ndarray
+    rows_per_group: list
+    source_xyz_m: np.ndarray
+    per_group_counts: np.ndarray
+    valid_mask: np.ndarray | None = None        # (B, max_nrec) bool, runner-filled
+    recv_rows_padded: np.ndarray | None = None  # (B, max_nrec) int64, runner-filled
+    n_shared: int = 0                           # = max_nrec (padded width), runner-filled
+
+
+def sample_percrg_independent(
+    plan: SeismicPlan,
+    rng: np.random.Generator,
+    *,
+    batch_size: int,
+    source_lines_per_group: int = 0,
+    max_traces_per_sourceline: int = 0,
+    min_coverage: int = 0,
+    eligible_groups: np.ndarray | None = None,
+) -> PerCRGBatch:
+    """Pick ``batch_size`` CRG groups; each keeps its OWN sub-sampled rows.
+
+    Unlike :func:`sample_shared_shots_from_plan`, this does NOT intersect the
+    groups' shot sets — there is no shared receiver geometry. The sub-sampling
+    knobs (``source_lines_per_group`` → keep that many random source-line
+    ``file_id``s; ``max_traces_per_sourceline`` → that many random shots per
+    kept line) are applied PER GROUP on that group's own recorded shots. Use
+    for the per-shot (non-encoded) FWI path so each CRG node inverts its full
+    aperture; over iterations the stochastic per-node draw sweeps each node's
+    entire coverage.
+
+    Grid-cell dedup of the receivers is deliberately left to the caller — it
+    needs the model frame / grid origin this plan-space sampler is agnostic to.
+    """
+    if plan.grouping != "crg":
+        raise ValueError(
+            f"sample_percrg_independent: requires grouping='crg', "
+            f"got {plan.grouping!r}."
+        )
+    n_groups = int(plan.n_groups)
+    if eligible_groups is None:
+        if min_coverage > 0:
+            counts = plan.per_group_row_counts()
+            eligible = np.flatnonzero(counts >= int(min_coverage))
+            if eligible.size == 0:
+                eligible = np.arange(n_groups, dtype=np.int64)
+        else:
+            eligible = np.arange(n_groups, dtype=np.int64)
+    else:
+        eligible = np.asarray(eligible_groups, dtype=np.int64).reshape(-1)
+    bs = max(1, min(int(batch_size), int(eligible.size)))
+    K = int(source_lines_per_group) if source_lines_per_group and int(source_lines_per_group) > 0 else 0
+    M = int(max_traces_per_sourceline) if max_traces_per_sourceline and int(max_traces_per_sourceline) > 0 else 0
+
+    group_indices = np.sort(
+        rng.choice(eligible, size=bs, replace=False)
+    ).astype(np.int64)
+
+    rows_per_group: list[np.ndarray] = []
+    for g in group_indices:
+        sl = plan.group_slice(int(g))
+        start = int(sl.start)
+        fids = plan.row_file_id[sl].astype(np.int64)
+        local_idx = np.arange(fids.size, dtype=np.int64)
+        # (line level) keep K random source-line file_ids
+        if K > 0:
+            uf = np.unique(fids)
+            if uf.size > K:
+                keep_fids = rng.choice(uf, size=K, replace=False)
+                m = np.isin(fids, keep_fids)
+                local_idx = local_idx[m]
+                fids = fids[m]
+        # (trace level) keep M random shots per kept line
+        if M > 0:
+            kept: list[np.ndarray] = []
+            for f in np.unique(fids):
+                f_idx = local_idx[fids == f]
+                if f_idx.size > M:
+                    f_idx = rng.choice(f_idx, size=M, replace=False)
+                kept.append(f_idx)
+            local_idx = (np.sort(np.concatenate(kept))
+                         if kept else np.empty(0, dtype=np.int64))
+        rows_per_group.append((local_idx + start).astype(np.int64))
+
+    per_group_counts = np.array([r.size for r in rows_per_group], dtype=np.int64)
+    source_xyz = plan.group_xyz[group_indices].astype(np.float64)
+    return PerCRGBatch(
+        group_indices=group_indices,
+        rows_per_group=rows_per_group,
+        source_xyz_m=source_xyz,
+        per_group_counts=per_group_counts,
+    )
+
+
 def build_shotkey_to_nodes_index(
     plan: SeismicPlan,
     *,
