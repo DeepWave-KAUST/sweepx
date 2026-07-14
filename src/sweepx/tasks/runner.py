@@ -60,6 +60,11 @@ from sweep_tasks._helpers.loss import (
     _loss_sum,
     _mask_chunk,
 )
+from sweep_tasks._helpers.metadata import _dump_run_metadata
+from sweep_tasks._helpers.wavelet import (
+    _build_wavelet,
+    _get_wavelet_source_delay_s,
+)
 
 
 # ---------- result + status containers -----------------------------------
@@ -726,85 +731,6 @@ def _from_file_geometry_arrays(geometry) -> tuple["np.ndarray", "np.ndarray"]:
     return sources, receivers
 
 
-def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
-                   override_nt: int | None = None) -> "np.ndarray":
-    """Dispatch on wavelet.kind. Returned array has length nt.
-
-    ``override_dt`` / ``override_nt`` let the runner pass in effective
-    values when DataPlan / per-stage dt-sync changes the solver grid.
-    """
-
-    nt = int(override_nt) if override_nt is not None else int(time_spec.nt)
-    dt = float(override_dt) if override_dt is not None else float(time_spec.dt)
-    kind = getattr(wavelet_spec, "kind", None)
-    if kind == "ricker":
-        t = np.arange(nt, dtype=np.float32) * dt
-        wave = ricker(t - float(wavelet_spec.delay), f=float(wavelet_spec.fm)).astype(np.float32)
-        return float(wavelet_spec.scale) * wave
-    if kind == "from_npy":
-        arr = np.load(wavelet_spec.path).astype(np.float32)
-        if arr.ndim != 1:
-            raise ValueError(
-                f"FromNpyWavelet expects a 1D array, got shape {arr.shape}."
-            )
-        if arr.shape[0] != nt:
-            raise ValueError(
-                f"FromNpyWavelet length {arr.shape[0]} != time.nt {nt}."
-            )
-        return float(wavelet_spec.scale) * arr
-    if kind == "siren_pipeline_npz":
-        from sweep_io.wavelet import load_wavelet_npz
-        loaded = load_wavelet_npz(
-            wavelet_spec.path, explicit_key=wavelet_spec.explicit_key,
-        )
-        samples = loaded.samples
-        # Note: the SIREN-pipeline npz also reports ``source_delay_s``
-        # (the zero-prepad applied during SIREN training); consumers
-        # that need to align obs to the wavelet's frame should call
-        # :func:`_get_wavelet_source_delay_s` and left-shift obs by
-        # the same amount.
-        # Resample to solver dt when the wavelet was sampled at a different
-        # rate (typical for SIREN wavelets fit at SEG-Y dt while the solver
-        # runs at a finer step). Uses sweep_preproc.resample_time.
-        if abs(loaded.dt_s - dt) > 1.0e-12:
-            from sweep_preproc.resample import resample_time
-            samples = resample_time(
-                samples.astype(np.float32), loaded.dt_s, dt, axis=0,
-            ).astype(np.float32)
-        # Length-align: truncate excess samples, zero-pad short tails.
-        if samples.shape[0] > nt:
-            samples = samples[:nt]
-        elif samples.shape[0] < nt:
-            samples = np.concatenate(
-                [samples, np.zeros(nt - samples.shape[0], dtype=np.float32)]
-            )
-        return float(wavelet_spec.scale) * samples.astype(np.float32, copy=False)
-    raise ValueError(f"Unknown wavelet.kind '{kind}'.")
-
-
-def _get_wavelet_source_delay_s(wavelet_spec) -> float:
-    """Return the wavelet's zero-prepad delay in seconds, or 0.0.
-
-    Only the SIREN-pipeline npz format carries this metadata
-    (``source_delay_s`` scalar). Consumers should left-shift observed
-    traces by ``int(round(source_delay_s / dt_obs))`` samples so the
-    main wavelet bang lines up with the actual event in obs — without
-    this, syn and obs are off by the prepad (a systematic
-    cycle-skip).
-
-    For any other wavelet kind returns ``0.0``.
-    """
-    kind = getattr(wavelet_spec, "kind", None)
-    if kind != "siren_pipeline_npz":
-        return 0.0
-    from sweep_io.wavelet import load_wavelet_npz
-    loaded = load_wavelet_npz(
-        wavelet_spec.path,
-        explicit_key=getattr(wavelet_spec, "explicit_key", None),
-    )
-    return float(loaded.source_delay_s or 0.0)
-
-
 def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, shape):
     """If spec.modeling_override is set, build wavelet/geometry overrides used only
     for the obs-synthesis forward pass. Validates shot/receiver count compatibility.
@@ -1338,144 +1264,6 @@ def _rebase_geometry_to_window(sources_chunk, receivers_chunk, z0, x0, *, y0=Non
         s[:, 0] -= int(x0); s[:, 1] -= int(y0); s[:, 2] -= int(z0)
         r[..., 0] -= int(x0); r[..., 1] -= int(y0); r[..., 2] -= int(z0)
     return s, r
-
-
-def _dump_run_metadata(
-    spec,
-    task_dir,
-    *,
-    extras: dict | None = None,
-) -> None:
-    """Write the resolved YAML + a runtime metadata json to ``task_dir``.
-
-    Captures everything a reader of the run dir 6 months from now needs
-    to reproduce / interpret the result:
-
-    * ``config_resolved.yaml`` — the post-pydantic-validation spec with
-      ALL fields explicit (defaults expanded). Diffing this against any
-      hand-written YAML shows exactly what fields the pipeline saw.
-    * ``run_meta.json`` — host, time, CUDA device, conda env path, key
-      package versions (sweep-tasks, sweep-nn, sweep-io, sweep,
-      sweep-loss, sweep-preproc, torch, numpy), git SHA / dirty-flag
-      for each editable package (best-effort), plus any caller-supplied
-      ``extras`` (typically the runner's derived setup quantities like
-      ``shape``, ``origin``, ``n_groups``, ``net_params``, ...).
-    """
-    import json
-    import os
-    import socket
-    import subprocess
-    import sys
-    from datetime import datetime, timezone
-
-    import yaml
-
-    task_dir = Path(task_dir)
-    task_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---- 1) Resolved config (full pydantic dump, JSON-mode for paths
-    # and enums → str). ``mode='json'`` makes the dict yaml.safe_dump-able.
-    try:
-        cfg = spec.model_dump(mode="json")
-    except Exception:  # pydantic v1 fallback
-        cfg = spec.dict()
-    try:
-        (task_dir / "config_resolved.yaml").write_text(
-            yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-        )
-    except Exception as err:  # noqa: BLE001
-        # Yaml dump can hit unrepresentable objects; fall back to json.
-        (task_dir / "config_resolved.json").write_text(
-            json.dumps(cfg, default=str, indent=2)
-        )
-        print(f"[run-meta] yaml dump failed ({err}); wrote config_resolved.json")
-
-    # ---- 2) Package versions + git SHAs (best-effort).
-    def _pkg_version(name: str) -> str | None:
-        try:
-            mod = __import__(name)
-            return getattr(mod, "__version__", None)
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _git_meta(pkg_name: str) -> dict | None:
-        try:
-            mod = __import__(pkg_name)
-        except Exception:  # noqa: BLE001
-            return None
-        path = Path(getattr(mod, "__file__", "") or "").resolve().parent
-        for _ in range(6):  # walk up looking for .git
-            if (path / ".git").exists():
-                break
-            if path.parent == path:
-                return None
-            path = path.parent
-        else:
-            return None
-        try:
-            sha = subprocess.check_output(
-                ["git", "-C", str(path), "rev-parse", "HEAD"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip()
-            dirty = bool(subprocess.check_output(
-                ["git", "-C", str(path), "status", "--porcelain"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip())
-            return {"path": str(path), "sha": sha, "dirty": dirty}
-        except Exception:  # noqa: BLE001
-            return None
-
-    pkgs = [
-        "sweep_tasks", "sweep_nn", "sweep_io", "sweep",
-        "sweep_loss", "sweep_preproc", "sweep_viz",
-        "torch", "numpy",
-    ]
-    versions = {n: _pkg_version(n) for n in pkgs}
-    git = {n: _git_meta(n) for n in pkgs if _git_meta(n) is not None}
-
-    # ---- 3) Host + CUDA snapshot.
-    cuda_info: dict = {"available": False}
-    try:
-        import torch
-        cuda_info["available"] = bool(torch.cuda.is_available())
-        if cuda_info["available"]:
-            cuda_info["device_count"] = int(torch.cuda.device_count())
-            cuda_info["devices"] = [
-                {
-                    "index": i, "name": torch.cuda.get_device_name(i),
-                    "total_mem_gb": round(
-                        torch.cuda.get_device_properties(i).total_memory / 1e9, 2,
-                    ),
-                }
-                for i in range(int(torch.cuda.device_count()))
-            ]
-            cuda_info["torch_cuda"] = torch.version.cuda
-    except Exception:  # noqa: BLE001
-        pass
-
-    meta = {
-        "task_id": getattr(spec, "task_id", None),
-        "task_type": getattr(spec, "task_type", None),
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "host": socket.gethostname(),
-        "user": os.environ.get("USER"),
-        "cwd": os.getcwd(),
-        "python": sys.version.split()[0],
-        "conda_prefix": os.environ.get("CONDA_PREFIX"),
-        "argv": list(sys.argv),
-        "cuda": cuda_info,
-        "package_versions": versions,
-        "git_repos": git,
-        "env_vars_of_interest": {
-            k: os.environ.get(k) for k in (
-                "FWI_SEGY_ROOT", "PYTORCH_CUDA_ALLOC_CONF", "CUDA_VISIBLE_DEVICES",
-                "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-            )
-        },
-    }
-    if extras:
-        meta["runtime"] = extras
-    (task_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, default=str))
 
 
 def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
