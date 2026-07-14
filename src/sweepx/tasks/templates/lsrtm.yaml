@@ -62,13 +62,14 @@ geometry:
 # ═══ Wave-equation physics ════════════════════════════════════════════════════
 
 physics:
-  equation: Acoustic
+  equation: AcousticLSRTM            # LSRTM foreground solver (NOT plain Acoustic);
+                                     # the runner derives the Acoustic background from it
   spatial_order: 8
   abcn: 20
   free_surface: false
   pml_type: cpmlr
   source_type: [h1]
-  receiver_type: [h1]
+  receiver_type: [sh1]               # LSRTM records the scattered field
 
 # ═══ Compute backend ══════════════════════════════════════════════════════════
 # impl: eager (portable, slow) | c (CUDA kernels, production)

@@ -123,32 +123,6 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
         "task_type": "introspect",
         "action": "list_equations",
     },
-    "forward": {
-        "task_type": "forward",
-        "output_dir": "./sweep_runs",
-        "device": "auto",
-        "grid": {"dh": 5.0},
-        "time": {"dt": 0.001, "nt": 500},
-        "wavelet": {"kind": "ricker", "fm": 18.0, "delay": 0.12, "scale": 1.0e6},
-        "geometry": {
-            "kind": "line",
-            "sources": {"step": 1, "depth": 4, "start": 90, "stop": 91},
-            "receivers": {"step": 1, "depth": 8, "start": 8, "stop": None},
-        },
-        "physics": {
-            "equation": "Acoustic",
-            "spatial_order": 8,
-            "abcn": 20,
-            "free_surface": False,
-            "pml_type": "cpmlr",
-            "source_type": ["h1"],
-            "receiver_type": ["h1"],
-        },
-        "backend": {"impl": "eager", "use_ckpt": False},
-        "models": [
-            {"name": "vp", "constant": 2200.0, "shape": [120, 180]},
-        ],
-    },
     "wavefield": {
         "task_type": "wavefield",
         "output_dir": "./sweep_runs",
@@ -177,117 +151,21 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
         "snapshot_times": [150, 250, 380],
         "plot": True,
     },
-    "fwi": {
-        "task_type": "fwi",
-        "output_dir": "./sweep_runs",
-        "device": "auto",
-        "grid": {"dh": 25.0},
-        "time": {"dt": 0.002, "nt": 2500},
-        "wavelet": {"kind": "ricker", "fm": 5.0, "delay": 0.256, "scale": 1.0},
-        "geometry": {
-            "kind": "line",
-            "sources": {"step": 2, "depth": 1},
-            "receivers": {"step": 1, "depth": 18},
-        },
-        "physics": {
-            "equation": "Acoustic",
-            "spatial_order": 8,
-            "abcn": 20,
-            "free_surface": False,
-            "pml_type": "cpmlr",
-            "source_type": ["h1"],
-            "receiver_type": ["h1"],
-        },
-        "backend": {"impl": "eager", "use_ckpt": False},
-        "init_model": {"name": "vp", "path": "models/marmousi/smooth.npy"},
-        "obs": {"synthetic_from": {"name": "vp", "path": "models/marmousi/true.npy"}},
-        "optimizer": {"kind": "adam", "lr": 25.0, "eps": 1.0e-22},
-        "epochs": 101,
-        "batchsize": 8,
-        "show_every": 10,
-    },
-    "rtm": {
-        "task_type": "rtm",
-        "output_dir": "./sweep_runs",
-        "device": "auto",
-        "grid": {"dh": 12.5, "shape": [401, 2305]},
-        "time": {"dt": 0.001, "nt": 6000},
-        "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.18, "scale": 1.0},
-        "geometry": {
-            "kind": "from_plan",
-            "plan_path": "/path/to/plan.npz",
-            "dedupe": True,
-        },
-        "obs": {
-            "plan": {
-                "plan_path": "/path/to/plan.npz",
-                "cache_all": True,
-            },
-        },
-        "physics": {
-            "equation": "Acoustic",
-            "spatial_order": 8,
-            "abcn": 20,
-            "free_surface": True,
-            "pml_type": "cpmlr",
-            "source_type": ["h1"],
-            "receiver_type": ["h1"],
-        },
-        "backend": {
-            "impl": "c",
-            "use_ckpt": False,
-            "cuda_options": {"memory": {"strategy": "boundary",
-                                          "boundary": {"storage": "gpu"}}},
-        },
-        "velocity_model": {
-            "name": "vp",
-            "path": "/path/to/inverted_vp.npy",
-        },
-        "loss": {"kind": "trace_cosine", "trace_cosine_demean": True},
-        "imaging": {
-            "shots_per_batch": 1,
-            "filter_lowcut_hz": 3.0,
-            "filter_highcut_hz": 25.0,
-            "filter_order": 4,
-            "filter_padtype": "odd",
-            "illumination_epsilon": 1.0e-6,
-            "normalize_by_illumination": True,
-            "save_per_shot": False,
-            "live_update_every_batches": 10,
-            "loss_kind": "trace_cosine",
-            "trace_cosine_demean": True,
-        },
-    },
-    "lsrtm": {
-        "task_type": "lsrtm",
-        "output_dir": "./sweep_runs",
-        "device": "auto",
-        "grid": {"dh": 25.0},
-        "time": {"dt": 0.002, "nt": 2500},
-        "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.256, "scale": 1.0},
-        "geometry": {
-            "kind": "line",
-            "sources": {"step": 2, "depth": 1},
-            "receivers": {"step": 1, "depth": 18},
-        },
-        "physics": {
-            "equation": "AcousticLSRTM",
-            "spatial_order": 8,
-            "abcn": 20,
-            "free_surface": False,
-            "pml_type": "cpmlr",
-            "source_type": ["h1"],
-            "receiver_type": ["sh1"],
-        },
-        "backend": {"impl": "eager", "use_ckpt": False},
-        "background_model": {"name": "vp", "path": "models/marmousi/smooth.npy"},
-        "true_model": {"name": "vp", "path": "models/marmousi/true.npy"},
-        "optimizer": {"kind": "adam", "lr": 0.01, "eps": 1.0e-22},
-        "epochs": 101,
-        "batchsize": 8,
-        "show_every": 10,
-    },
 }
+
+
+# Task types whose ``new_template`` / ``sweep-tasks new`` output is sourced from
+# the bundled annotated ``templates/<task_type>.yaml`` reference — the SAME file
+# `sweep-tasks init` ships, so the two commands never drift. Types not listed
+# here (introspect, wavefield) have no bundled file and use ``_TEMPLATES`` above.
+_FILE_TEMPLATES: tuple[str, ...] = ("forward", "fwi", "rtm", "lsrtm")
+
+
+def _read_bundled_template(task_type: str) -> str:
+    """Raw text of the bundled ``templates/<task_type>.yaml`` annotated reference."""
+    import importlib.resources as ir
+
+    return ir.files("sweep_tasks").joinpath(f"templates/{task_type}.yaml").read_text()
 
 
 def new_template(
@@ -301,6 +179,12 @@ def new_template(
 ) -> dict[str, Any]:
     """Return a YAML-ready dict template for the given task type.
 
+    forward / fwi / rtm / lsrtm are parsed from the bundled annotated
+    ``templates/<task_type>.yaml`` reference (the same file ``sweep-tasks init``
+    ships), so this dict never drifts from it. Comments are dropped by the dict
+    path — ``sweep-tasks new`` serves the raw annotated text instead. introspect
+    and wavefield have no bundled file and come from the built-in ``_TEMPLATES``.
+
     Optional kwargs scaffold the backend block:
       backend: 'eager' | 'c'                    (default: 'eager')
       memory:  'full' | 'boundary' | 'ckpt'     (only valid when backend='c'; default: 'full')
@@ -310,13 +194,22 @@ def new_template(
     The introspect template has no backend block, so backend kwargs are ignored there.
     """
 
-    if task_type not in _TEMPLATES:
+    known = set(_TEMPLATES) | set(_FILE_TEMPLATES)
+    if task_type not in known:
         raise KeyError(
-            f"Unknown task_type '{task_type}'. Known: {sorted(_TEMPLATES)}"
+            f"Unknown task_type '{task_type}'. Known: {sorted(known)}"
         )
     _validate_backend_kwargs(backend, memory, storage, compile)
 
-    template = _deep_copy_dict(_TEMPLATES[task_type])
+    if task_type in _FILE_TEMPLATES:
+        # Single source of truth: parse the bundled annotated reference (the
+        # same file `sweep-tasks init` ships). Comments are dropped by the dict
+        # path; `sweep-tasks new` serves the raw text so they survive there.
+        import yaml as _yaml
+
+        template = _yaml.safe_load(_read_bundled_template(task_type))
+    else:
+        template = _deep_copy_dict(_TEMPLATES[task_type])
     if equation is not None and "physics" in template:
         template["physics"]["equation"] = equation
     if "backend" in template:

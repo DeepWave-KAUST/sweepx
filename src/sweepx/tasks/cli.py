@@ -324,23 +324,52 @@ def _cmd_init(args) -> int:
 
 
 def _cmd_new(args) -> int:
+    import re
+    import sys
+
     import yaml
 
     from sweep_tasks import new_template
+    from sweep_tasks.yaml_io import _FILE_TEMPLATES, _read_bundled_template
 
-    try:
-        template = new_template(
-            args.task_type,
-            equation=args.equation,
-            backend=args.backend,
-            memory=args.memory,
-            storage=args.storage,
-            compile=args.compile,
-        )
-    except ValueError as exc:
-        print(f"error: {exc}")
-        return 2
-    text = yaml.safe_dump(template, sort_keys=False)
+    if args.task_type in _FILE_TEMPLATES:
+        # Emit the annotated reference verbatim — the SAME file `sweep-tasks
+        # init` ships — so every field mode and how to switch it stays visible
+        # (a dict dump would strip the comments). `--equation` retargets the
+        # active physics line; the backend flags are documented inline in the
+        # `backend:` block, so we point the user there instead of rewriting it.
+        text = _read_bundled_template(args.task_type)
+        if args.equation:
+            text = re.sub(
+                r"(?m)^(\s*equation:\s*)\S+",
+                lambda m: f"{m.group(1)}{args.equation}",
+                text,
+                count=1,
+            )
+        if (args.backend != "eager" or args.memory != "full"
+                or args.storage != "gpu" or args.compile):
+            print(
+                "note: --backend/--memory/--storage/--compile are documented "
+                "inline in the emitted `backend:` block (all modes shown) — "
+                "edit there; the flags do not rewrite the annotated template.",
+                file=sys.stderr,
+            )
+    else:
+        # introspect / wavefield: no annotated file → programmatic dict template.
+        try:
+            template = new_template(
+                args.task_type,
+                equation=args.equation,
+                backend=args.backend,
+                memory=args.memory,
+                storage=args.storage,
+                compile=args.compile,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+        text = yaml.safe_dump(template, sort_keys=False)
+
     if args.output:
         with open(args.output, "w") as fh:
             fh.write(text)
