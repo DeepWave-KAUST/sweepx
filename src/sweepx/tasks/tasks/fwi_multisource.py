@@ -44,7 +44,7 @@ from sweep_tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
 )
-from sweep_tasks._helpers.wavelet import (
+from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )

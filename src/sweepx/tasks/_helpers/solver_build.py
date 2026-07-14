@@ -12,7 +12,7 @@ from sweep_tasks._helpers.model import (
     _load_model_tensor,
     _model_names_for_equation,
 )
-from sweep_tasks._helpers.wavelet import _build_wavelet
+from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, shape):
     """If spec.modeling_override is set, build wavelet/geometry overrides used only

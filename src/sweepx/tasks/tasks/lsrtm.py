@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 from sweep_tasks.schemas import LSRTMSpec, PhysicsSpec
 from sweep_tasks._helpers.bounds import _apply_bounds
-from sweep_tasks._helpers.checkpoint import (
+from sweep_tasks._helpers.run_checkpoint import (
     _load_checkpoint,
     _save_checkpoint,
     _zero_top_rows,
@@ -36,7 +36,7 @@ from sweep_tasks._helpers.solver_build import (
 from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet import _build_wavelet
+from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 
 class LSRTMRunnerMixin:

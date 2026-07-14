@@ -1,12 +1,13 @@
-"""Signal processing for seismic FWI — bandpass filtering, muting, trace
-normalization, time-axis resampling, source-wavelet estimation.
+"""Signal processing for seismic FWI — bandpass filtering + time-axis resampling.
 
-Absorbed verbatim from the standalone ``sweep-preproc`` package (now retired).
-Import paths moved ``sweep_preproc.<mod>`` -> ``sweep_tasks.preproc.<mod>``.
+The ``filter`` and ``resample`` modules were absorbed from the retired
+``sweep-preproc`` package (the only ones sweep-tasks consumes). The unused
+``mute`` / ``normalize`` / ``wavelet`` modules were dropped; they remain in the
+archived ``sweep-preproc`` repo if ever needed.
 """
 
 from __future__ import annotations
 
-from . import filter, mute, normalize, resample, wavelet
+from . import filter, resample
 
-__all__ = ["filter", "mute", "normalize", "resample", "wavelet"]
+__all__ = ["filter", "resample"]

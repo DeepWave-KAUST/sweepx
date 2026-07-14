@@ -677,7 +677,7 @@ def _cmd_build_index(args) -> int:
 
     if not bool(getattr(args, "no_qc_png", False)):
         try:
-            from sweep_tasks.qc_plots import plot_index_qc
+            from sweep_tasks.qc.data_prep import plot_index_qc
             qc_path = out.with_name(out.stem + "_qc.png")
             plot_index_qc(index, qc_path)
             print(f"[build-index] QC PNG -> {qc_path}")
@@ -978,7 +978,7 @@ def _cmd_build_plan(args) -> int:
 
     if not bool(getattr(args, "no_qc_png", False)):
         try:
-            from sweep_tasks.qc_plots import plot_plan_qc
+            from sweep_tasks.qc.data_prep import plot_plan_qc
             qc_path = out.with_name(out.stem + "_qc.png")
             plot_plan_qc(plan, qc_path, parent_index=index)
             print(f"[build-plan]  QC PNG -> {qc_path}")

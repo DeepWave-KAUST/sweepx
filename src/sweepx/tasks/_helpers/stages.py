@@ -12,7 +12,7 @@ from sweep_tasks._helpers.optimizer import (
 )
 from sweep_tasks._helpers.solver_build import _build_solver
 from sweep_tasks._helpers.util import _is_cuda_dev
-from sweep_tasks._helpers.wavelet import _build_wavelet
+from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 def _normalise_stage_list(spec) -> list:
     """Return the effective stage list (single-stage fallback when spec.stages is None)."""

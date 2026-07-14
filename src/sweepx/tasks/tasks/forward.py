@@ -20,7 +20,7 @@ from sweep_tasks._helpers.model import (
 from sweep_tasks._helpers.plotting import _plot_wavefield_snapshots
 from sweep_tasks._helpers.solver_build import _build_solver, _solver_models_in_order
 from sweep_tasks._helpers.util import _apply_seed, _resolve_device
-from sweep_tasks._helpers.wavelet import _build_wavelet
+from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 
 class ForwardRunnerMixin:

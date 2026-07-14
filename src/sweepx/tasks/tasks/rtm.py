@@ -29,7 +29,7 @@ from sweep_tasks._helpers.stages import (
     _trim_or_pad_time,
 )
 from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet import _build_wavelet
+from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 
 class RTMRunnerMixin:

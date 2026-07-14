@@ -111,7 +111,7 @@ from sweep_tasks._helpers.solver_build import (
     _solver_models_in_order,
     _validate_single_model,
 )
-from sweep_tasks._helpers.checkpoint import (
+from sweep_tasks._helpers.run_checkpoint import (
     _load_checkpoint,
     _save_checkpoint,
     _zero_top_rows,
@@ -157,7 +157,7 @@ from sweep_tasks._helpers.optimizer import (
     _build_scheduler,
     _remember_initial_lrs,
 )
-from sweep_tasks._helpers.wavelet import (
+from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )

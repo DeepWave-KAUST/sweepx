@@ -7,7 +7,7 @@ from sweep_tasks._helpers.bounds import (
     _apply_bounds,
     _effective_bound,
 )
-from sweep_tasks._helpers.checkpoint import (
+from sweep_tasks._helpers.run_checkpoint import (
     _load_checkpoint,
     _save_checkpoint,
     _zero_top_rows,
@@ -72,7 +72,7 @@ from sweep_tasks._helpers.stages import (
 )
 from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet import (
+from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
