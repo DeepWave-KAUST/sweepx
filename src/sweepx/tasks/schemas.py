@@ -397,6 +397,23 @@ class LossSpec(_Forbid):
     # data misfit is multiplied by it (window outside -> excluded); None = off
     # (the FWI/LSRTM misfit then runs exactly as before).
     data_mask_path: str | None = None
+    # Diving-wave time window computed ON-THE-FLY per batch from a per-node
+    # first-arrival LUT (``diving_window_db`` npz: node_rec[Nn,3] + per-node
+    # asinh moveout params node_asinh[Nn,3]=(t0,v0,k), from pick3d/FATT picks).
+    # For each trace: center=asinh(offset), window=[center-pre, off/water_vel]
+    # (bottom hugs the water direct), min width minwin, cosine taper. Offsets
+    # come from the batch source/receiver grid geometry (CRG reciprocity: the
+    # solver "shot" is the OBN node, its "receivers" are the sources).  When set
+    # with kind="trace_cosine" the window is applied MUTE-THEN-CORRELATE (syn &
+    # obs muted BEFORE the cosine) so it is a true window, not a per-trace
+    # weight.  ``diving_obs_delay_s`` is added to the window times to align the
+    # physical arrival axis with the recorded obs sample axis.  None = off.
+    diving_window_db: str | None = None
+    diving_pre_s: float = 0.30
+    diving_minwin_s: float = 0.50
+    diving_taper_s: float = 0.16
+    diving_water_vel: float = 1500.0
+    diving_obs_delay_s: float = 0.0
 
 
 class DataPlanSpec(_Forbid):
@@ -1167,6 +1184,14 @@ class PlanSamplingConfig(_Forbid):
     receiver_first: bool = False
     receiver_first_max_retries: int = Field(ge=1, default=20)
     trace_cache_bytes: int = 0
+    # Per-CRG independent coverage (per-shot / non-encoded path only). When
+    # True, each iter draws B random nodes and gives EACH its own sub-sampled
+    # rows (``sweep_io.seismic_plan.sample_percrg_independent``) instead of the
+    # shared-shot intersection. Drops the wide-offset diving-wave bias of the
+    # intersection; requires source encoding OFF (each node is a separate
+    # solve). Ragged rows are zero-padded to (B, max_nrec) and the pad is
+    # masked out of the loss. No effect when source_encoding is enabled.
+    per_crg_independent: bool = False
 
 
 class ObsPlanConfig(_Forbid):

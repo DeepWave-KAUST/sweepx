@@ -191,6 +191,37 @@ def _model_names_for_equation(equation_cls: type) -> list[str]:
     return _read_class_property(equation_cls, "models") or []
 
 
+# --- AcousticVRZ option-A coupling: z (impedance) = Gardner(vp); network stays vp-only ---
+_VRZ_EQUATIONS = ("AcousticVRZ", "AcousticVRZ3D")
+
+
+def _gardner_z(vp, water_thr=1505.0, coeff=0.31, exp=0.25):
+    """Acoustic impedance z (MRayl) coupled to vp via a water-aware Gardner law.
+
+    z = rho[g/cm3] * vp[km/s]; water (vp <= water_thr) uses rho = 1.0, sediment uses
+    Gardner rho = coeff * vp**exp.  Differentiable in ``vp`` so dL/dvp carries the
+    density-coupling term — the reparam network predicts ONLY vp (no 2-parameter
+    scale mismatch); z is recomputed from the current rendered vp every solver call.
+    """
+    import torch
+    rho = torch.where(vp <= water_thr, torch.ones_like(vp),
+                      coeff * vp.clamp_min(1.0) ** exp)
+    return rho * (vp / 1000.0)
+
+
+def _solver_models(leaf, spec):
+    """Model list for a solver forward. Non-VRZ equations: ``[vp]`` (unchanged).
+    AcousticVRZ/3D (option A): ``[vp, Gardner-z(vp)]``, z coupled to the current vp."""
+    if getattr(getattr(spec, "physics", None), "equation", None) in _VRZ_EQUATIONS:
+        wthr = 1505.0
+        wv = (getattr(spec.reparam, "water_vp_m_s", None)
+              if getattr(spec, "reparam", None) else None)
+        if wv:
+            wthr = float(wv) + 5.0
+        return [leaf, _gardner_z(leaf, water_thr=wthr)]
+    return [leaf]
+
+
 def _wavefield_names_for_equation(equation_cls: type) -> list[str]:
     specs = getattr(equation_cls, "FIELD_SPECS", None)
     if specs:
@@ -1149,13 +1180,76 @@ def _compute_loss(syn, obs, loss_spec):
     raise ValueError(f"Unknown loss kind '{kind}'.")
 
 
-def _loss_sum(syn, obs_chunk, loss_spec, mask_chunk=None):
+def _loss_sum(syn, obs_chunk, loss_spec, mask_chunk=None, *, window_mode=False):
     """Pointwise misfit summed, optionally weighted by a per-sample data mask.
-    ``mask_chunk=None`` is bit-identical to the legacy ``_compute_loss(...).sum()``."""
+    ``mask_chunk=None`` is bit-identical to the legacy ``_compute_loss(...).sum()``.
+
+    ``window_mode=True`` applies the mask MUTE-THEN-MISFIT: syn & obs are
+    multiplied by the mask BEFORE the misfit. For ``trace_cosine`` this makes the
+    cosine a true windowed correlation (over the kept samples) instead of a
+    per-trace weight applied AFTER the full-trace correlation (which only
+    reweights and never windows). Used by the diving-wave window."""
+    if window_mode and mask_chunk is not None:
+        return _compute_loss(syn * mask_chunk, obs_chunk * mask_chunk, loss_spec).sum()
     pw = _compute_loss(syn, obs_chunk, loss_spec)
     if mask_chunk is not None:
         pw = pw * mask_chunk
     return pw.sum()
+
+
+def _diving_window_mask(chunk_src, chunk_rec, node_asinh, nt, dt, dh, loss_spec, dev):
+    """On-the-fly diving-wave mute mask for one shot-chunk.
+
+    CRG reciprocity: ``chunk_src`` is the OBN node ("shot"), ``chunk_rec`` are
+    the survey sources acting as the solver's receivers. For every (shot,
+    receiver) pair the horizontal+depth offset is read from the grid geometry
+    and the window is ``[asinh(off)-pre, off/water_vel]`` (bottom hugs the water
+    direct), min width ``minwin``, cosine ``taper``, shifted by ``obs_delay``.
+
+    Args:
+      chunk_src: (nsh, npts, ndim) int grid indices of the shot node(s).
+      chunk_rec: (nsh, nrec, ndim) int grid indices of the receivers (sources).
+      node_asinh: (nsh, 3) float32 per-shot moveout params (t0, v0, k) matched
+                  to this chunk's nodes; NaN row -> that shot gets an all-ones
+                  (no-op) mask so it is not silently muted.
+      nt, dt: time samples / step (s) of the syn/obs axis.
+    Returns float32 mask (nsh, nt, nrec, 1) on ``dev``.
+    """
+    import torch
+
+    pre = float(loss_spec.diving_pre_s)
+    minwin = float(loss_spec.diving_minwin_s)
+    taper = max(float(loss_spec.diving_taper_s), dt)
+    vw = float(loss_spec.diving_water_vel)
+    delay = float(loss_spec.diving_obs_delay_s)
+    dh = float(dh)
+
+    src = torch.as_tensor(np.asarray(chunk_src), dtype=torch.float64)   # (nsh,npts,ndim)
+    rec = torch.as_tensor(np.asarray(chunk_rec), dtype=torch.float64)   # (nsh,nrec,ndim)
+    nsh, nrec = rec.shape[0], rec.shape[1]
+    # node position = mean of the shot points (single-point shot -> itself)
+    node = src.mean(dim=1, keepdim=True)                               # (nsh,1,ndim)
+    off = torch.linalg.norm((rec - node), dim=2) * dh                  # (nsh,nrec) metres
+    par = torch.as_tensor(np.asarray(node_asinh), dtype=torch.float64) # (nsh,3)
+    ok = torch.isfinite(par).all(dim=1)                               # (nsh,) valid rows
+    # Replace NaN/invalid rows with a finite dummy BEFORE the math so 0*NaN
+    # can't poison the taper; the NaN shots are overridden to all-ones below.
+    par = torch.where(ok.view(nsh, 1), par, torch.tensor([0.1, 1800.0, 0.8], dtype=torch.float64))
+    t0 = par[:, 0:1]; v0 = par[:, 1:2].clamp(min=1.0); k = par[:, 2:3].clamp(min=1e-3)
+    center = t0 + (2.0 / k) * torch.arcsinh(k * off / (2.0 * v0))      # (nsh,nrec)
+    twd = off / vw
+    ttop = center - pre + delay
+    tbot = torch.maximum(twd, center + minwin) + delay
+    t = (torch.arange(int(nt), dtype=torch.float64) * dt)             # (nt,)
+    tt = t.view(1, int(nt), 1)
+    a = ttop.view(nsh, 1, nrec); b = tbot.view(nsh, 1, nrec)
+    core = ((tt >= a) & (tt <= b)).to(torch.float64)
+    up = ((tt >= a - taper) & (tt < a)).to(torch.float64)
+    core = core + up * 0.5 * (1 - torch.cos(np.pi * (tt - (a - taper)) / taper))
+    dn = ((tt > b) & (tt <= b + taper)).to(torch.float64)
+    core = core + dn * 0.5 * (1 + torch.cos(np.pi * (tt - b) / taper))
+    core = torch.where(ok.view(nsh, 1, 1), core, torch.ones_like(core))  # NaN-param shot -> all ones (no-op)
+    return core.to(torch.float32).unsqueeze(-1).to(dev)               # (nsh,nt,nrec,1)
 
 
 def _mask_chunk(data_mask, chunk, dev):
@@ -2977,7 +3071,7 @@ class TaskRunner:
         rec0 = solver(
             fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
             targets.node_grid[pool0][None].astype(np.int32), rec_table,
-            models=[leaf])
+            models=_solver_models(leaf, spec))
         own = getattr(solver, "_own_rec_idx", None)
         # Debug: audit receiver ownership across ranks (SWEEP_FREQSEL_OWN_AUDIT=1).
         # Duplicated/dropped receivers at tile cut planes would bias the GCN loss.
@@ -3050,7 +3144,7 @@ class TaskRunner:
             syn = solver(
                 fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
                 targets.node_grid[pool][None].astype(np.int32), rec_table,
-                models=[leaf])
+                models=_solver_models(leaf, spec))
             _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
             # + owned receiver indices — localizes DD-vs-single divergence to
@@ -3233,7 +3327,10 @@ class TaskRunner:
                       "— DISABLED for this DD run", flush=True)
             illum_on = False
 
-        vp0_native = np.load(spec.init_model.path).astype(np.float32)
+        _init_refs = _normalize_fwi_init_models(spec)
+        _vp_ref = next((m for m in _init_refs
+                        if getattr(m, "name", None) == "vp"), _init_refs[0])
+        vp0_native = np.load(_vp_ref.path).astype(np.float32)
         if vp0_native.ndim != 3:
             raise ValueError("freqsel path is 3-D (use a thin-slab volume "
                              f"for 2-D tests); init shape {vp0_native.shape}")
@@ -4789,6 +4886,23 @@ class TaskRunner:
             # leaf.grad now holds the full-grid FWI gradient ∂L/∂v.
             # Push it through the network in a second pass.
             v_grad = base_leaf.grad
+            # Debug: dump the RAW velocity gradient dL/dvp on the FIRST outer
+            # step (= init model), before illum/smooth. SWEEP_DUMP_GRAD=1.
+            # v_grad here is this rank's partial (the leaf all-reduce happens
+            # implicitly via the network backward), so sum across ranks first.
+            if (os.environ.get("SWEEP_DUMP_GRAD") == "1"
+                    and not getattr(self, "_csg_grad_dumped", False)
+                    and v_grad is not None):
+                _gd = v_grad.detach().clone()
+                if dist_info.is_distributed:
+                    _dist.all_reduce_sum_inplace(_gd, dist_info)
+                if dist_info.is_root:
+                    import numpy as _np
+                    _dd = os.environ.get("SWEEP_DUMP_DIR", "/tmp")
+                    _np.save(_dd + "/grad_raw.npy", _gd.detach().cpu().numpy())
+                    print(f"[dump] raw dL/dvp -> {_dd}/grad_raw.npy "
+                          f"shape={tuple(_gd.shape)}", flush=True)
+                self._csg_grad_dumped = True
             # Illumination precondition the leaf gradient BEFORE the
             # network backward so the network sees the preconditioned
             # velocity gradient. The all-reduce of the leaf gradient
@@ -4902,6 +5016,7 @@ class TaskRunner:
             SeismicPlan,
             build_shotkey_to_nodes_index,
             precompute_group_unique_keys,
+            sample_percrg_independent,
             sample_shared_shots_from_plan,
             sample_shared_shots_receiver_first,
         )
@@ -4998,6 +5113,18 @@ class TaskRunner:
         min_cov = int(sampling_cfg.min_coverage)
         if encoding_spec is not None:
             min_cov = max(min_cov, int(encoding_spec.min_coverage))
+        # Per-CRG independent coverage: each iter gives every node its OWN
+        # sub-sampled rows (no shared-shot intersection). Only meaningful on
+        # the per-shot (non-encoded) path — the encoded supershot NEEDS a
+        # shared receiver grid to sum ``Σ sign_i·obs_i``. See PerCRGBatch.
+        per_crg_independent = (
+            bool(getattr(sampling_cfg, "per_crg_independent", False))
+            and not encoding_on
+        )
+        if per_crg_independent and dist_info.is_root:
+            print("[multisource] per_crg_independent=ON — each node inverts its "
+                  "own aperture (ragged rows, padded+masked; no shared "
+                  "intersection).", flush=True)
         # NOTE: we do NOT pre-filter the plan by min_coverage at this point.
         # `sample_shared_shots_from_plan` accepts min_coverage as a sampling
         # parameter and applies it as a cheap per-group-row-counts mask
@@ -5728,7 +5855,19 @@ class TaskRunner:
             else:
                 _elig_iter = eligible_groups
                 _bs_iter = int(spec.batchsize)
-            if shotkey_to_nodes is not None and _bs_iter > 1:
+            _percrg_iter = bool(per_crg_independent and _bs_iter > 1)
+            if _percrg_iter:
+                # Per-CRG independent: B random nodes, each keeps its OWN
+                # sub-sampled rows (no shared-shot intersection). Ragged.
+                b = sample_percrg_independent(
+                    plan, local_rng,
+                    batch_size=_bs_iter,
+                    source_lines_per_group=int(sampling_cfg.source_lines_per_group),
+                    max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
+                    min_coverage=int(min_cov),
+                    eligible_groups=_elig_iter,
+                )
+            elif shotkey_to_nodes is not None and _bs_iter > 1:
                 # Receiver-first: pick a target shot then the nodes that
                 # recorded it, so the per-iter supershot sweeps the whole
                 # survey. Falls back internally to the random sampler if no
@@ -5761,24 +5900,80 @@ class TaskRunner:
             tstats["sample"] = time.perf_counter() - t_sample0
             t_alloc0 = time.perf_counter()
             B = int(b.group_indices.size)
-            n_shared = int(b.n_shared)
-            t_np = np.empty(
-                (B, n_shared, plan.samples_per_trace), dtype=np.float32,
-            )
-            tstats["alloc"] = time.perf_counter() - t_alloc0
 
-            def _read_one(i):
-                # b.rows_per_group[i] holds ABSOLUTE plan-row indices —
-                # PlanReader.read_rows takes those directly.
-                t_np[i] = reader.read_rows(b.rows_per_group[i])
+            if _percrg_iter:
+                # Ragged read → per-node grid-cell dedup → zero-pad to a dense
+                # (B, max_nrec, nt) batch. Each node keeps its own receiver
+                # geometry (``recv_rows_padded``); the padded tail is flagged
+                # in ``valid_mask`` and masked out of the loss. Padding the
+                # receiver rows with row 0 keeps every padded receiver on a
+                # valid grid cell (its residual is zeroed by the mask anyway).
+                _obs_list: list = [None] * B
+                _rows_list: list = [None] * B
 
-            t_read0 = time.perf_counter()
-            if io_pool is None:
+                def _read_dedup(i):
+                    # Dedup rows to unique receiver cells BEFORE reading, so
+                    # full-coverage nodes (many raw rows, several shots per cell)
+                    # only pay the SEG-Y read for the ~unique-cell subset.
+                    rows_i = b.rows_per_group[i]
+                    cells_i = plan_grid_xyz[rows_i]               # (nrec_i, 3)
+                    _, keep = np.unique(cells_i, axis=0, return_index=True)
+                    keep = np.sort(keep)
+                    rows_kept = rows_i[keep]
+                    _rows_list[i] = rows_kept
+                    _obs_list[i] = reader.read_rows(rows_kept)    # read deduped only
+
+                tstats["alloc"] = time.perf_counter() - t_alloc0
+                t_read0 = time.perf_counter()
+                if io_pool is None:
+                    for i in range(B):
+                        _read_dedup(i)
+                else:
+                    list(io_pool.map(_read_dedup, range(B)))
+                _counts = np.array([r.size for r in _rows_list], dtype=np.int64)
+                n_shared = int(_counts.max())
+                if dist_info.is_root:
+                    print(f"[per-crg] nrec (distinct cells): min={int(_counts.min())} "
+                          f"max={n_shared} median={int(np.median(_counts))} "
+                          f"total={int(_counts.sum())} | padded obs "
+                          f"{24 * n_shared * plan.samples_per_trace * 4 / 2**30:.1f} GB",
+                          flush=True)
+                t_np = np.zeros(
+                    (B, n_shared, plan.samples_per_trace), dtype=np.float32,
+                )
+                _vmask = np.zeros((B, n_shared), dtype=bool)
+                _rrows = np.zeros((B, n_shared), dtype=np.int64)
                 for i in range(B):
-                    _read_one(i)
+                    ni = int(_counts[i])
+                    t_np[i, :ni] = _obs_list[i]
+                    _vmask[i, :ni] = True
+                    _rrows[i, :ni] = _rows_list[i]
+                    if ni < n_shared:
+                        _rrows[i, ni:] = _rows_list[i][0]
+                b.rows_per_group = _rows_list      # dedup'd (ragged)
+                b.valid_mask = _vmask
+                b.recv_rows_padded = _rrows
+                b.n_shared = n_shared
+                tstats["read"] = time.perf_counter() - t_read0
             else:
-                list(io_pool.map(_read_one, range(B)))
-            tstats["read"] = time.perf_counter() - t_read0
+                n_shared = int(b.n_shared)
+                t_np = np.empty(
+                    (B, n_shared, plan.samples_per_trace), dtype=np.float32,
+                )
+                tstats["alloc"] = time.perf_counter() - t_alloc0
+
+                def _read_one(i):
+                    # b.rows_per_group[i] holds ABSOLUTE plan-row indices —
+                    # PlanReader.read_rows takes those directly.
+                    t_np[i] = reader.read_rows(b.rows_per_group[i])
+
+                t_read0 = time.perf_counter()
+                if io_pool is None:
+                    for i in range(B):
+                        _read_one(i)
+                else:
+                    list(io_pool.map(_read_one, range(B)))
+                tstats["read"] = time.perf_counter() - t_read0
 
             t_resample0 = time.perf_counter()
             # Resample obs time axis on the prefetcher thread too so the
@@ -6097,8 +6292,19 @@ class TaskRunner:
                 )
             B = int(batch.group_indices.size)
             n_shared = int(batch.n_shared)
+            # Per-CRG independent batch: each node has its OWN receiver
+            # geometry (padded to n_shared) + a validity mask on the padded
+            # tail. ``valid_mask``/``recv_rows_padded`` are set by the
+            # prefetch worker; absent (None) on the shared-shot path.
+            _percrg = getattr(batch, "valid_mask", None) is not None
             t = time.perf_counter()
-            obs_t = torch.as_tensor(traces_per_group, dtype=torch.float32, device=dev)
+            # Per-CRG uses an on-demand per-node solve loop, so keep the full
+            # (B, max_nrec, nt) obs on the HOST — only one node's slice is
+            # moved to the GPU at a time (all traces at once would not fit).
+            obs_t = torch.as_tensor(
+                traces_per_group, dtype=torch.float32,
+                device=("cpu" if _percrg else dev),
+            )
             # SIREN-frame alignment: shift obs forward in time by the
             # wavelet's ``source_delay_s`` (computed once at setup) so
             # the main wavelet bang at sample ``obs_prepad_samples`` in
@@ -6117,11 +6323,18 @@ class TaskRunner:
 
             # Grid-indexed sources / receivers for this iter.
             sources_grid = src_grid_xyz[batch.group_indices]  # (B, 3)
-            recv_grid = plan_grid_xyz[batch.rows_per_group[0]]  # (n_shared, 3)
-            # Track the post-dedup plan-row indices in lock-step with
-            # obs_t / recv_grid so downstream QC can join back to the
-            # plan (file_id, sx_utm, etc.) for sorting / labelling.
-            rows0_used = batch.rows_per_group[0]
+            if _percrg:
+                # No shared receiver grid — each node's geometry is built
+                # per-shot below from batch.recv_rows_padded. rows0 (for QC)
+                # is node 0's own (padded) rows.
+                recv_grid = None
+                rows0_used = batch.recv_rows_padded[0]
+            else:
+                recv_grid = plan_grid_xyz[batch.rows_per_group[0]]  # (n_shared, 3)
+                # Track the post-dedup plan-row indices in lock-step with
+                # obs_t / recv_grid so downstream QC can join back to the
+                # plan (file_id, sx_utm, etc.) for sorting / labelling.
+                rows0_used = batch.rows_per_group[0]
 
             # Optional per-iter dedupe: collapse duplicate (gx,gy,gz) cells.
             # ``"first"`` keeps the first hit; ``"nearest"`` keeps the
@@ -6130,7 +6343,7 @@ class TaskRunner:
             # all groups so the encoded supershot stays receiver-consistent.
             dedup_mode = getattr(sampling_cfg, "dedup_mode", "none")
             _msync(); _t_de = time.perf_counter()
-            if dedup_mode != "none" and n_shared > 1:
+            if (not _percrg) and dedup_mode != "none" and n_shared > 1:
                 if dedup_mode == "first":
                     _, keep_idx = np.unique(
                         recv_grid, axis=0, return_index=True,
@@ -6173,6 +6386,7 @@ class TaskRunner:
                     n_shared = int(keep_idx.size)
             _msync(); t_dedup = time.perf_counter() - _t_de
             _msync(); _t_ob = time.perf_counter()
+            valid_mask_local = None  # set in the per-shot per-CRG branch below
             if encoding_on:
                 # ----- encoded supershot path (1 GPU, B=1) -----
                 # source-encoding (sweep IO contract geophyai 24e91c9): sources
@@ -6228,9 +6442,19 @@ class TaskRunner:
                 # 2-D sources (nshots, ndim) + 2-D per-shot wavelet (nshots, nt);
                 # 3-D (1, nsrc, ndim) is reserved for source-encoding mode.
                 sources_super = sources_local                                      # (B_local, 3)
-                receivers_super = np.broadcast_to(
-                    recv_grid[None, :, :], (B_local, n_shared, 3),
-                ).astype(np.int64).copy()                                          # (B_local, n_shared, 3)
+                if _percrg:
+                    # Per-node receiver geometry (each node's own aperture),
+                    # padded to n_shared; padded tail masked out of the loss.
+                    receivers_super = plan_grid_xyz[
+                        batch.recv_rows_padded[local_start:local_end]
+                    ].astype(np.int64)                                             # (B_local, n_shared, 3)
+                    valid_mask_local = torch.as_tensor(
+                        batch.valid_mask[local_start:local_end], device=dev,
+                    )                                                              # (B_local, n_shared) bool
+                else:
+                    receivers_super = np.broadcast_to(
+                        recv_grid[None, :, :], (B_local, n_shared, 3),
+                    ).astype(np.int64).copy()                                      # (B_local, n_shared, 3)
                 wavelet_super = (
                     wavelet_t[None, :].expand(B_local, -1).contiguous()
                 )                                                                  # (B_local, nt)
@@ -6261,8 +6485,11 @@ class TaskRunner:
                 models = [reparam_net()]
                 v_leaf_for_illum = None  # net params; illum precond no-op
             else:
+                # Chunk the forward render (bit-identical, pointwise) so the
+                # single-GPU hash-render peak stays bounded — same knob the DD
+                # tile render uses (SWEEP_DD_RENDER_CHUNK -> dd_rc, default 8).
                 with torch.no_grad():
-                    base_leaf = reparam_net().detach().clone()
+                    base_leaf = reparam_net.render(chunk_rows=dd_rc).detach().clone()
                 base_leaf = base_leaf.requires_grad_(True)
                 models = [base_leaf]
                 v_leaf_for_illum = base_leaf
@@ -6288,6 +6515,33 @@ class TaskRunner:
                 # source_encoding kwarg was removed from the core API.
                 syn = solver(wavelet_super, sources_super, receivers_super,
                              models=models)
+            elif _percrg:
+                # On-demand per-node loop: move each node's obs to the GPU,
+                # solve, backward, free — so only ONE node's obs+syn
+                # is resident, not all B (tens of GB at full coverage). Each node's
+                # backward accumulates into base_leaf.grad; global_norm counts
+                # valid elements across the whole batch (set before the loop).
+                _nrec_j = valid_mask_local.sum(dim=1).to(torch.int64).cpu().numpy()
+                _nt_p = int(obs_t.shape[-1])
+                global_norm = float(int(valid_mask_local.sum().item()) * _nt_p) or 1.0
+                loss_t = torch.zeros((), device=dev)
+                syn = None
+                _B_loc = local_end - local_start
+                for _j in range(_B_loc):
+                    _nij = int(_nrec_j[_j])
+                    _recv_j = receivers_super[_j, :_nij][None]                  # (1,nij,3)
+                    _obs_j = obs_t[local_start + _j, :_nij].to(dev)[None]       # (1,nij,nt)
+                    _syn_j = solver(
+                        wavelet_super[_j:_j + 1], sources_super[_j:_j + 1],
+                        _recv_j, models=models, source_encoding=False,
+                    )
+                    _loss_j = loss_fn(
+                        _syn_j, _obs_j.permute(0, 2, 1).unsqueeze(-1)).sum()
+                    (_loss_j / global_norm).backward()
+                    loss_t = loss_t + _loss_j.detach()
+                    if _j == _B_loc - 1:
+                        syn = _syn_j.detach()
+                        obs_super = _obs_j
             else:
                 syn = solver(
                     wavelet_super, sources_super, receivers_super,
@@ -6301,9 +6555,13 @@ class TaskRunner:
             # ``obs_super`` from the CRG prefetcher is (n, nrec, nt), so we
             # always permute + unsqueeze. After geophyai 21041c5 both
             # backends emit syn as 4-D canonical, so this is unconditional.
-            obs_match = obs_super.permute(0, 2, 1).unsqueeze(-1).contiguous()
+            # Per-CRG did its loss+backward inside the per-node loop above.
+            obs_match = (None if _percrg
+                         else obs_super.permute(0, 2, 1).unsqueeze(-1).contiguous())
             t = time.perf_counter()
-            if dd_on:
+            if _percrg:
+                pass  # loss + backward already done in the on-demand loop
+            elif dd_on:
                 # ModelParallel returns a 3-D record (ns, nrec, nt); make it
                 # canonical 4-D (ns, nt, nrec, 1) to match the single-domain
                 # backends and obs_match (already 4-D) before the loss.
@@ -6336,8 +6594,17 @@ class TaskRunner:
                 _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
                 (loss_t / global_norm).backward()
             else:
-                loss_t = loss_fn(syn, obs_match).sum()
-                global_norm = float(syn.numel())
+                if valid_mask_local is not None:
+                    # Per-CRG ragged batch: zero the padded-receiver tail in
+                    # BOTH syn and obs so it drops out of the (L2/L1/Huber)
+                    # misfit, and normalise by the VALID element count only.
+                    _m = valid_mask_local[:, None, :, None].to(syn.dtype)      # (n,1,nrec,1)
+                    loss_t = loss_fn(syn * _m, obs_match * _m).sum()
+                    global_norm = float(syn.numel()) * max(
+                        float(valid_mask_local.float().mean()), 1.0e-6)
+                else:
+                    loss_t = loss_fn(syn, obs_match).sum()
+                    global_norm = float(syn.numel())
                 # Dummy-slice ranks contribute zero loss / zero grad so the
                 # all_reduce stays consistent across ranks; non-dummy ranks
                 # use their full per-rank loss.
@@ -6363,6 +6630,21 @@ class TaskRunner:
                     if isinstance(_ill, torch.Tensor):
                         _td.all_reduce(_ill, op=_td.ReduceOp.SUM)
             losses.append(float(loss_t.detach().cpu()) / global_norm)
+
+            # Raw dL/dvp dump when illum precond is OFF (the illum branch below
+            # already dumps the pre-precond grad when on). SWEEP_DUMP_GRAD=1,
+            # epoch 0, root only. base_leaf.grad still intact here (the reparam
+            # backward that consumes it runs after the illum block).
+            if (os.environ.get("SWEEP_DUMP_GRAD") == "1" and not illum_on
+                    and dist_info.is_root and epoch == 0
+                    and v_leaf_for_illum is not None
+                    and v_leaf_for_illum.grad is not None):
+                import numpy as _np
+                _dd = os.environ.get("SWEEP_DUMP_DIR", "/tmp")
+                _np.save(_dd + "/grad_raw.npy",
+                         v_leaf_for_illum.grad.detach().cpu().numpy())
+                print(f"[dump] raw dL/dvp -> {_dd}/grad_raw.npy "
+                      f"shape={tuple(v_leaf_for_illum.grad.shape)}", flush=True)
 
             # --- Illumination precond (single_step + grid; or two_pass leaf).
             # DD v1: disabled (ModelParallel exposes no illum tensors; v_leaf is
@@ -6646,6 +6928,10 @@ class TaskRunner:
                 # ``picked_group_model_xy`` from ``batch.group_indices``).
                 _qc_dump_panel = (
                     bool(getattr(spec.qc, "supershot_panel", True))
+                    # Per-CRG has no shared supershot geometry (each node its
+                    # own ragged receivers); the supershot panel joins on a
+                    # single rows0 vector, so skip it here.
+                    and not _percrg
                     and (encoding_on
                          or not dist_info.is_distributed
                          or int(dist_info.rank) == 0)
