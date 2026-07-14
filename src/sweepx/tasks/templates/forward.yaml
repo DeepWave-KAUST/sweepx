@@ -1,122 +1,115 @@
-# sweep-tasks Forward task YAML — annotated template.
+# sweep-tasks FORWARD task YAML — COMPLETE annotated reference.
 #
 # Generate with:    sweep-tasks init forward -o my_forward.yaml
 # Run with:         sweep-tasks run my_forward.yaml
 # Multi-GPU:        sweep-tasks run my_forward.yaml --nproc-per-node 4
 #
-# Forward modelling = generate synthetic seismic records by propagating
-# a wavelet through a velocity model. Use to:
-#  - build synthetic obs for FWI testing (see `examples/tasks/marmousi_*.yaml`)
-#  - debug acquisition geometry before kicking off a long FWI
-#  - explore wave-propagation behaviour for a paper figure
+# Forward modelling = propagate a wavelet through a velocity model to make
+# synthetic shot records (build FWI test obs, debug geometry, paper figures).
 #
-# Defaults below match a basic Marmousi-style 2-D acoustic forward
-# (12.5 m grid, 1 ms dt, 4 s record, sources along the top, receivers
-# at z=18). Adjust grid / model path / geometry for your own setup.
+# ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
+# │ • UNCOMMENTED = active example (Marmousi 2-D acoustic).                 │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes. To switch, comment the      │
+# │   active variant and uncomment the one you want.                        │
+# │ • Schema is `extra="forbid"` — a mistyped key fails loudly at load.     │
+# └────────────────────────────────────────────────────────────────────────┘
 
-# ─── Identity ───────────────────────────────────────────────────────────────
+# ═══ Identity ════════════════════════════════════════════════════════════════
 
-# Selects the runner backend; must be "forward" for synthetic shot records.
-task_type: forward
-
-# Output directory. Creates a sub-dir `<task_id>/` with the shot npz +
-# QC PNGs + run_summary.json.
-output_dir: ./sweep_runs
-
-# Descriptive ID for this run; subdirectory name under output_dir.
+task_type: forward                  # fixed: selects the forward runner
+output_dir: ./sweep_runs            # run dir = <output_dir>/<task_id>/
 task_id: marmousi_forward
-
 seed: 0
-device: auto
+device: auto                        # "auto" | "<cuda index>" | "cpu"
 
-# ─── Grid + time axis ───────────────────────────────────────────────────────
+# ═══ Grid + time axis ═════════════════════════════════════════════════════════
 
 grid:
-  # Horizontal & vertical grid spacing in meters. Same value for x and z.
-  # For Marmousi the embedded model is on a 12.5 m grid.
-  dh: 12.5
-  # `shape` is inferred from `models[0].path`'s npy header when omitted.
-  # Uncomment + override only if you have no model file backing the run.
-  # shape: [281, 1361]   # Marmousi default
+  dh: 12.5                          # cell size [m]
+  # shape ([nz,nx] | [nz,ny,nx]) inferred from models[0].path npy when omitted.
+  # shape: [281, 1361]
 
 time:
-  # Time step in seconds. Obey CFL: dt < dh / (v_max * sqrt(ndim)).
-  # Marmousi v_max ≈ 4700 m/s → max safe dt ≈ 1.9e-3, so 1e-3 is safe.
-  dt: 0.001
-  # Number of time samples. tmax = dt × nt. 4000 × 1e-3 = 4 s — enough
-  # to cover the deepest reflectors in Marmousi at this v_max.
-  nt: 4000
+  dt: 0.001                         # [s]; CFL: dt < dh/(v_max·√ndim)
+  nt: 4000                          # samples; t_max = dt·nt = 4.0 s
 
-# ─── Source wavelet ─────────────────────────────────────────────────────────
+# ═══ Source wavelet ═══════════════════════════════════════════════════════════
+# Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
 
 wavelet:
-  # ricker             — synthesised at runtime; pick a centre frequency
-  # from_npy           — load a length-nt npy at the same dt as `time.dt`
-  # siren_pipeline_npz — load the output of `sweep-tasks estimate-wavelet`
-  kind: ricker
-  # Peak (dominant) frequency of the Ricker wavelet (Hz). Should satisfy
-  # ≥ 4 pts/wavelength: dh × fm × 4 ≤ v_min. For Marmousi dh=12.5 m,
-  # v_min ≈ 1500 m/s → fm ≤ 30 Hz; we pick 8 Hz for a wide-band signal.
-  fm: 8.0
-  # Peak-time delay of the Ricker (s). Pick ≥ 1/fm so the wavelet is
-  # zero at t=0 (causal). 0.125 s = 1/fm.
-  delay: 0.125
-  # Multiplicative scale on the wavelet amplitude.
+  kind: ricker                      # analytic; needs fm
+  fm: 8.0                           # peak frequency [Hz]  (required)
+  delay: 0.125                      # peak time [s] (≈1/fm keeps it causal)
   scale: 1.0
+# ── ALTERNATIVES ──
+# wavelet: {kind: from_npy, path: /path/w.npy, scale: 1.0}          # length == nt
+# wavelet: {kind: siren_pipeline_npz, path: /path/estimated_wavelet.npz}
 
-# ─── Acquisition geometry ───────────────────────────────────────────────────
+# ═══ Acquisition geometry ═════════════════════════════════════════════════════
+# Discriminated on `kind`: line | explicit | from_file | from_segy_headers |
+#                          from_segy_index | from_plan
 
 geometry:
-  # Three resolver kinds:
-  #   line       — auto-generate evenly-spaced sources / receivers
-  #   explicit   — hard-coded source / receiver coordinate lists
-  #   from_plan  — load a SeismicPlan npz (used for field data)
-  kind: line
-  # Sources at z=1 grid cell from the top; one every 50 cells in x.
-  sources:
-    step: 50
-    depth: 1
-  # Receivers at z=18 cells (~225 m for Marmousi dh=12.5); every cell.
-  receivers:
-    step: 1
-    depth: 18
+  kind: line                        # auto-generated regular line
+  sources:   {step: 50, depth: 1}   # start=0, stop=nx by default
+  receivers: {step: 1,  depth: 18}
+# ── ALTERNATIVES ──
+# geometry:
+#   kind: explicit                  # hard-coded lists ([z, x] per point)
+#   sources:   [[1, 100], [1, 500]]
+#   receivers: [[18, 0], [18, 1], [18, 2]]
+# geometry: {kind: from_file, sources_file: /p/s.npy, receivers_file: /p/r.npy}
+# geometry:
+#   kind: from_segy_headers         # read a SEG-Y file's trace headers
+#   path: /p/line.segy
+#   byte_map: {sx: 73, sy: 77, gx: 81, gy: 85}
+# geometry: {kind: from_segy_index, index_path: /p/index.npz, shot_ids: null}
+# geometry:                         # sweep_io SeismicPlan (field data)
+#   kind: from_plan
+#   plan_path: /p/plan.npz
+#   dedupe: true
+#   dedup_method: nearest           # "nearest" | "first"
+#   # 3-D: rotation_metadata / dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells
 
-# ─── Wave-equation physics ──────────────────────────────────────────────────
+# ═══ Wave-equation physics ════════════════════════════════════════════════════
 
 physics:
-  # Solver. "Acoustic" = constant-density acoustic wave equation.
-  equation: Acoustic
-  # FD spatial order (2/4/6/8). Higher → more accurate, more memory.
-  spatial_order: 8
-  # PML thickness in grid cells. 20–40 is typical.
-  abcn: 20
-  # Free-surface at z=0. Set true for marine surveys (with sea surface),
-  # false for synthetic underground / no-free-surface experiments.
-  free_surface: false
-  # PML kind. cpmlr is the C-backend's high-quality complex-frequency variant.
+  equation: Acoustic                # constant-density acoustic
+  spatial_order: 8                  # FD order 2/4/6/8
+  abcn: 20                          # PML thickness [cells]
+  free_surface: false               # true for marine (z=0 free surface)
   pml_type: cpmlr
-  # Source / receiver directional sensitivity. "h1" = horizontal-stress
-  # component (hydrophone-like).
-  source_type: [h1]
+  source_type: [h1]                 # pressure / hydrophone component
   receiver_type: [h1]
+  # topography: /path/surface_row.npy   # curvilinear free-surface topo
 
-# ─── Compute backend ────────────────────────────────────────────────────────
+# ═══ Compute backend ══════════════════════════════════════════════════════════
+# impl: eager (portable, slow, debug) | c (CUDA kernels, production)
 
 backend:
-  # "eager" = pure-torch autograd (slow but architecture-independent)
-  # "c"     = sweep CUDA C kernels (fast; requires sweep_cuda build)
   impl: eager
   use_ckpt: false
+  # ---- production CUDA + low-memory boundary saving ----
+  # impl: c
+  # cuda_options:
+  #   memory:
+  #     strategy: boundary            # null(store-all) | boundary | ckpt
+  #     boundary: {storage: gpu, storage_dtype: fp32}  # storage gpu|cpu|disk;
+  #                                                     # dtype fp32|fp16|bf16|int8
+  #     # OR: memory: {strategy: ckpt, ckpt: {mode: chunk, chunks: 100}}  # mode: chunk|recursive
+  # ---- eager tuning ----
+  # eager_options: {use_compile: false, store_last_wavefield: false}
 
-# ─── Velocity (and other physical-property) models ──────────────────────────
-#
-# `models:` is a list because some equations need multiple fields
-# (Elastic: vp + vs + rho; Acoustic: just vp). Each entry has a `name`
-# matching the equation's MODEL_SPECS, plus EITHER `path` (npy) OR
-# `constant` + `shape` (for synthetic constants).
+# ═══ Physical-property models ═════════════════════════════════════════════════
+# `models:` is a LIST — one entry per field the equation declares in
+# MODEL_SPECS. Acoustic → [vp]; elastic → [vp, vs, rho]. Each entry gives
+# a `name` plus EITHER `path` (npy) OR `constant` (+ `shape` for a homogeneous
+# field with no init_model backing).
 
 models:
-  - name: vp
-    # Replace with the path to your velocity model on disk (a 2-D npy of
-    # shape (nz, nx) on the same dh grid).
-    path: ./vp_true.npy
+  - {name: vp, path: ./vp_true.npy}
+# ── multi-parameter (e.g. elastic) ──
+# models:
+#   - {name: vp,  path: ./vp.npy}
+#   - {name: vs,  path: ./vs.npy}
+#   - {name: rho, constant: 1000.0, shape: [281, 1361]}

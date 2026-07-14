@@ -1,238 +1,379 @@
-# sweep-tasks FWI task YAML — annotated template.
+# sweep-tasks FWI task YAML — COMPLETE annotated reference.
 #
 # Generate with:    sweep-tasks init fwi -o my_fwi.yaml
 # Run with:         sweep-tasks run my_fwi.yaml
 # Multi-GPU:        sweep-tasks run my_fwi.yaml --nproc-per-node 4
 #
-# Defaults shown below match the Viking 2-D 6-stage / 30 Hz production
-# reference run. Adjust paths, grid shape, optimizer LR, and the
-# multiscale `stages:` ladder for your own dataset.
+# ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
+# │ • UNCOMMENTED lines = the active example (Viking 2-D 6-stage / 30 Hz    │
+# │   production baseline). It loads + runs as-is once paths point at data. │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes or OPTIONAL features. To     │
+# │   switch a mode, comment out the active variant and uncomment the one   │
+# │   you want. Every mode / Literal choice the schema accepts is shown.    │
+# │ • Unknown keys are REJECTED (schema is `extra="forbid"`), so a typo     │
+# │   fails loudly at load — not silently.                                  │
+# │ • `$VAR` / `${VAR}` in string values expand against the environment.    │
+# └────────────────────────────────────────────────────────────────────────┘
 
-# ─── Identity ───────────────────────────────────────────────────────────────
+# ═══ Identity ════════════════════════════════════════════════════════════════
 
-# Which runner backend handles this YAML. Must be "fwi" for FWI tasks.
-task_type: fwi
+task_type: fwi                      # fixed: selects the FWI runner
+output_dir: ${VIKING_HOME}/run/viking_fwi   # run dir = <output_dir>/<task_id>/
+task_id: viking_fwi_6stage_v1       # subdir name + id in status/logs
+seed: 2026                          # RNG seed (batching, SIREN init, sign draws)
+device: auto                        # "auto" | "<cuda index>" | "cpu"
 
-# Where outputs land. The runner creates a sub-directory `<task_id>/` under
-# this with `output/`, `figures/`, `gradients/`, `qc/`, `run_summary.json`.
-output_dir: ${VIKING_HOME}/run/viking_fwi
-
-# Unique tag for this run; used as the subdirectory name under output_dir
-# and as the task ID in status / log files. Pick something descriptive.
-task_id: viking_fwi_6stage_v1
-
-# RNG seed — affects shot batching, SIREN init, dropout, etc. Pin for
-# reproducibility.
-seed: 2026
-
-# GPU selection. "auto" picks the first visible CUDA device. Set to a
-# specific index (e.g. 0) or "cpu" for CPU-only debugging.
-device: auto
-
-# ─── Grid + time axis ───────────────────────────────────────────────────────
+# ═══ Grid + time axis ═════════════════════════════════════════════════════════
 
 grid:
-  # Horizontal & vertical grid spacing in meters. Should satisfy
-  # ≥ 4 pts/wavelength at the highest frequency of your `stages:` ladder
-  # given v_min. For Viking with v_min=1500 m/s and max 30 Hz:
-  # 1500 / (30 × 4) = 12.5 m.
-  dh: 12.5
-  # `shape` (= [nz, nx] in 2-D or [nz, ny, nx] in 3-D) is **inferred from
-  # init_model.path's npy header** when omitted, which is what you usually
-  # want. Only set it explicitly when you have no init_model file (e.g.
-  # pure-constant starting model with no .npy backing) or you want to
-  # crop / extend the grid relative to the model.
-  # shape: [401, 2305]   # Viking grid 28.8 km × 5 km @ dh=12.5 m
+  dh: 12.5                          # cell size [m]; ≥4 pts/λ at f_max given v_min
+  # shape (= [nz,nx] 2-D | [nz,ny,nx] 3-D) is INFERRED from init_model's npy
+  # header when omitted. Set explicitly only with no init_model npy, or to
+  # crop/extend the grid vs the model.
+  # shape: [401, 2305]
 
 time:
-  # Time step in seconds. Must satisfy CFL: dt < dh / (v_max * sqrt(ndim)).
-  # For Viking @ dh=12.5, v_max=5500: max safe dt ≈ 1.6e-3, so 1e-3 is safe.
-  dt: 0.001
-  # Number of time samples. tmax_s = dt × nt. Viking: 6000 × 1e-3 = 6.0 s.
-  nt: 6000
+  dt: 0.001                         # [s]; must satisfy CFL dt < dh/(v_max·√ndim)
+  nt: 6000                          # samples; t_max = dt·nt = 6.0 s
 
-# ─── Source wavelet ─────────────────────────────────────────────────────────
+# ═══ Source wavelet ═══════════════════════════════════════════════════════════
+# Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
 
 wavelet:
-  # Loader kind:
-  #   ricker            — generated; needs `frequency_hz` and `delay_s`
-  #   siren_pipeline_npz — load from npz with `wavelet` / `time_s` arrays
-  #                        (what `sweep-tasks estimate-wavelet` writes)
-  #   raw_npy            — 1-D float npy at the same dt as `time.dt`
-  kind: siren_pipeline_npz
+  kind: siren_pipeline_npz          # npz written by `sweep-tasks estimate-wavelet`
   path: ${VIKING_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
-  # Multiplicative scale; bump up if forward syn amplitude is too small
-  # against obs. Typically 1.0 when the wavelet was estimated from data.
-  scale: 1.0
+  # explicit_key: wavelet           # which array in the npz (default auto)
+  scale: 1.0                        # multiplicative amplitude scale
+# ── ALTERNATIVES ──
+# wavelet:
+#   kind: ricker                    # analytic Ricker (synthetic / quick start)
+#   fm: 8.0                         # peak frequency [Hz]  (required)
+#   delay: 0.15                     # time shift [s]
+#   scale: 1.0
+# wavelet:
+#   kind: from_npy                  # raw 1-D float .npy, length == time.nt
+#   path: /path/wavelet.npy
+#   scale: 1.0
 
-# ─── Acquisition geometry ───────────────────────────────────────────────────
+# ═══ Acquisition geometry ═════════════════════════════════════════════════════
+# Discriminated on `kind`: line | explicit | from_file | from_segy_headers |
+#                          from_segy_index | from_plan
 
 geometry:
-  # Three resolver kinds:
-  #   from_plan          — sweep_io SeismicPlan (preferred; from `build-plan`)
-  #   from_segy_headers  — read directly from a SEG-Y file's trace headers
-  #   explicit           — hard-coded source/receiver lists (small synthetic)
-  kind: from_plan
+  kind: from_plan                   # sweep_io SeismicPlan (from `build-plan`)
   plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
-  # When True, snap source/receiver positions to the FWI grid and drop
-  # duplicates within the same grid cell (typical for streamer geometry).
-  dedupe: true
+  dedupe: true                      # snap to grid + drop same-cell duplicates
+  dedup_method: nearest             # "nearest" | "first"
+  # 3-D OBN plan extras (UTM→model-grid rotation, spacing, origin):
+  # rotation_metadata: ${SURVEY_HOME}/metadata/rotation_metadata.json
+  # dh_xyz_m: [18.75, 18.75, 18.75]
+  # grid_origin_xyz_m: [0.0, 0.0, 0.0]
+  # auto_origin_pad_cells: [0, 0, 0]
+# ── ALTERNATIVES ──
+# geometry:
+#   kind: line                      # regular synthetic line
+#   sources:   {start: 0, stop: 2305, step: 40, depth: 1}
+#   receivers: {start: 0, stop: 2305, step: 1,  depth: 1}
+# geometry:
+#   kind: explicit                  # hard-coded coordinate lists (tiny cases)
+#   sources:   [[1, 100], [1, 500]]         # [z, x] per source
+#   receivers: [[1, 0], [1, 1], [1, 2]]     # shared across shots
+# geometry:
+#   kind: from_file                 # sources_file / receivers_file .npy
+#   sources_file: /path/src.npy
+#   receivers_file: /path/rec.npy
+# geometry:
+#   kind: from_segy_headers         # single SEG-Y file's trace headers
+#   path: /path/line.segy
+#   byte_map: {sx: 73, sy: 77, gx: 81, gy: 85}
+#   dedupe: true
+#   dedup_method: nearest
+# geometry:
+#   kind: from_segy_index           # pre-built sweep_io.SEGYIndex (multi-file)
+#   index_path: /path/index.npz
+#   shot_ids: null                  # null = all shots, or [0, 5, 9, ...]
 
-# Observed data — must match `geometry`. For `from_plan` use `obs.plan`.
+# ═══ Observed data ════════════════════════════════════════════════════════════
+# Pick EXACTLY ONE source. Must be consistent with `geometry`.
+
 obs:
-  plan:
+  plan:                             # unified plan loader (pairs with from_plan)
     plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
-    # cache_all=true: load every selected trace into RAM at task start.
-    # 2-D Viking (~660 MB) fits easily; for 3-D OBN set false (per-iter read).
-    cache_all: true
+    cache_all: true                 # true: all traces to RAM at start (2-D ok);
+                                    # false: per-iter read (3-D OBN)
+    # ---- static-obs receiver selection (CSG path) ----
+    # n_receivers_per_shot: null    # cap receivers/shot (null = all)
+    # receiver_select: nearest      # "nearest" | "random" | "all"
+    # max_shots: null               # cap number of shots
+    # min_receivers: 8              # drop shots with fewer live receivers
+    #
+    # ---- OBN supershot / CRG sampler (see `source_encoding` below) ----
+    # Presence of `sampling:` routes to the multisource supershot loop.
+    # sampling:
+    #   shared_shots_per_iter: 20000  # >0 ⇒ per-iter shared-shot supershot
+    #   min_coverage: 0               # drop groups covering < N shared shots
+    #   source_lines_per_group: 0     # 0 = all source lines per CRG
+    #   max_traces_per_sourceline: 0  # 0 = all traces per source line
+    #   dedup_mode: nearest           # "none" | "first" | "nearest"
+    #   receiver_first: false         # receiver-first sampling (OBN in-window)
+    #   per_crg_independent: false    # true ⇒ each CRG keeps its OWN traces
+    #                                 #  (no shared intersection; pairs with
+    #                                 #   source_encoding.enabled=false)
+    #   num_workers: 4
+    #   prefetch_factor: 2
+    #   persistent_workers: true
+# ── ALTERNATIVES (other obs sources) ──
+# obs:
+#   synthetic_from_models: [{name: vp, path: /path/true_vp.npy}]  # gen obs from a true model
+# obs:
+#   synthetic_from: {name: vp, path: /path/true_vp.npy}           # single-model form
+# obs:
+#   npy_path: /path/obs.npy         # pre-computed (nshot, nrec, nt) array
+# obs:
+#   segy: {path: /path/obs.segy, byte_map: {sx: 73, gx: 81}}      # single SEG-Y
+# obs:
+#   segy_index: {index_path: /path/index.npz, lazy: true}         # multi-file lazy
 
-# ─── Wave-equation physics ──────────────────────────────────────────────────
+# ═══ Wave-equation physics ════════════════════════════════════════════════════
 
 physics:
-  # Solver. Currently "Acoustic" (constant-density acoustic).
-  equation: Acoustic
-  # FD spatial order (2/4/6/8). Higher → more accurate per cell, more memory.
-  # 6 is the typical sweet spot.
-  spatial_order: 6
-  # PML thickness in grid cells. 20–40 is normal; thicker for low frequencies.
-  abcn: 20
-  # Free-surface at z=0 (typical for marine streamer data).
-  free_surface: true
-  # PML kind. cpmlr is the C-backend's high-quality complex-frequency variant.
-  pml_type: cpmlr
-  # Source/receiver type for the directional sensitivity calculation. "h1"
-  # is the horizontal-stress component for streamer / OBN hydrophones.
-  source_type: ["h1"]
+  equation: Acoustic                # constant-density acoustic (see sweep.equations)
+  spatial_order: 6                  # FD order 2/4/6/8 (6 = sweet spot)
+  abcn: 20                          # PML thickness [cells]
+  free_surface: true                # z=0 free surface (marine)
+  pml_type: cpmlr                   # C-backend complex-frequency PML
+  source_type: ["h1"]               # hydrophone / pressure component
   receiver_type: ["h1"]
+  # topography: /path/surface_row.npy   # curvilinear free-surface topo (optional)
 
-# ─── Compute backend ────────────────────────────────────────────────────────
+# ═══ Compute backend ══════════════════════════════════════════════════════════
+# impl: eager (portable, slow, debug) | c (CUDA kernels, production)
 
 backend:
-  # "c"     — CUDA C kernels (production, fastest, requires sweep_cuda build)
-  # "eager" — torch eager (slow, GPU-architecture-independent, good for debug)
   impl: c
-  use_ckpt: false
-  cuda_options:
+  use_ckpt: false                   # gradient checkpointing on the outer loop
+  # ckpt_chunks: 100
+  cuda_options:                     # only read when impl == c
     memory:
-      # boundary checkpointing keeps only the PML boundary at every time
-      # step (memory-light, recomputes interior at backward); "full" stores
-      # every wavefield (fastest backward, biggest memory); "ckpt" is the
-      # custom user-defined chunk schedule.
-      strategy: boundary
+      # strategy: null(=store-all, fastest, biggest VRAM) | boundary | ckpt
+      strategy: boundary            # store only PML boundary; recompute interior
       boundary:
-        # Where to stash boundary tensors. "gpu" is fastest; "cpu" trades
-        # PCIe bandwidth for VRAM headroom.
-        storage: gpu
+        storage: gpu                # "gpu" | "cpu" | "disk"
+        storage_dtype: fp32         # "fp32" | "fp16" | "bf16" | "int8"
+        # transfer_interval: null
+        # disk_dir: /scratch/bnd    # required when storage: disk
+        # disk_async_read: false
+    # ---- OR custom checkpoint schedule instead of boundary ----
+    # memory:
+    #   strategy: ckpt
+    #   ckpt: {mode: chunk, chunks: 100, storage: gpu}   # mode: chunk|recursive
+  # ---- eager backend tuning (only read when impl == eager) ----
+  # eager_options:
+  #   use_compile: false            # torch.compile the step
+  #   compile_mode: default         # default | reduce-overhead | max-autotune
+  #   store_last_wavefield: false
 
-# ─── Starting velocity model ────────────────────────────────────────────────
+# ═══ Starting velocity model ══════════════════════════════════════════════════
+# Use init_model (single) OR init_models (multi-parameter equations).
 
 init_model:
-  # Which physical parameter the npy holds (vp for acoustic).
   name: vp
-  # Path to an (nz, nx) float npy. Must be on the same grid as `grid.shape`.
   path: ${VIKING_HOME}/run/models/viking_initial_model_12.5m.npy
+  # constant: 1500.0               # OR a homogeneous start (no npy); needs shape
+# init_models:                     # multi-model equations (e.g. elastic vp/vs/rho)
+#   - {name: vp, path: /path/vp.npy}
+#   - {name: vs, path: /path/vs.npy}
 
-# ─── Optimization ──────────────────────────────────────────────────────────
+# ═══ Optimizer ════════════════════════════════════════════════════════════════
+# Discriminated on `kind`: adam | sgd | lbfgs
 
 optimizer:
-  # adam / sgd / lbfgs / nadam (Adam recommended for FWI).
   kind: adam
-  # Learning rate — the most important hyperparameter to tune. For grid-mode
-  # FWI on vp scale 1500–5500 m/s, lr in 5–50 m/s is typical. For SIREN
-  # reparam (below), lr is normalized by `reparam.vp_std` so use ~1e-4.
-  lr: 25.0
-  # Numerical stability epsilon. 1e-16 forces tight Adam behaviour;
-  # default 1e-8 is fine for most cases.
+  lr: 25.0                          # grid-mode vp: 5–50 m/s; reparam: ~1e-4
   eps: 1.0e-16
+  # betas: [0.9, 0.999]
+  # lr can also be per-parameter: {vp: 20.0, vs: 5.0}
+# ── ALTERNATIVES ──
+# optimizer: {kind: sgd, lr: 10.0, momentum: 0.9, nesterov: false}
+# optimizer: {kind: lbfgs, lr: 1.0, max_iter: 20, history_size: 10,
+#             line_search_fn: strong_wolfe}   # single-GPU only (not under torchrun)
+
+# ═══ LR scheduler ═════════════════════════════════════════════════════════════
+# Discriminated on `kind`: constant | step | exp | cosine
 
 scheduler:
-  # constant / cosine / step / polynomial. Constant is fine for FWI;
-  # cosine helps when running > 100 iter/stage.
   kind: constant
+# ── ALTERNATIVES ──
+# scheduler: {kind: step, step_size: 50, gamma: 0.5}
+# scheduler: {kind: exp, gamma: 0.98}
+# scheduler: {kind: cosine, t_max: 100, eta_min: 0.0}
 
-# ─── Loss ──────────────────────────────────────────────────────────────────
+# ═══ Loss / misfit ════════════════════════════════════════════════════════════
+# kind: mse | l1 | huber | trace_cosine
 
 loss:
-  # mse           — L2 amplitude+phase
-  # trace_cosine  — per-trace normalized cosine; robust to amplitude
-  #                 imbalance, recommended for field data
-  # wasserstein   — optimal transport, helps with cycle-skip but expensive
-  kind: trace_cosine
-  # Subtract each trace's mean before cosine — kills DC drift.
-  trace_cosine_demean: true
+  kind: trace_cosine                # per-trace normalized cosine (field-data robust)
+  trace_cosine_demean: true         # subtract per-trace mean (kills DC)
+  # trace_cosine_eps: 1.0e-8
+  # huber_delta: 1.0                # only for kind: huber
+  # data_mask_path: /path/mask.npy  # (nshot,nrec[,nt]) multiplicative mask
+  # ---- diving-wave first-arrival window (mute-then-correlate) ----
+  # diving_window_db: /path/eikonal_first_arrivals.npz
+  # diving_pre_s: 0.3
+  # diving_minwin_s: 0.5
+  # diving_taper_s: 0.16
+  # diving_water_vel: 1500.0
+  # diving_obs_delay_s: 0.0
 
-# ─── Hard bounds on the velocity update ─────────────────────────────────────
+# ═══ Hard model bounds (in-place clamp after each step) ═══════════════════════
 
 model_bounds:
   vp:
-    # Hard clip applied after every optimizer step. Pick from your initial
-    # model's range + a 10–20% safety margin.
+    enabled: true
     min: 1450.0
     max: 5500.0
 
-# ─── Optional: SIREN + hash reparameterization (recommended for FWI) ────────
-#
-# Reparameterizes vp(x,z) as a small MLP with multi-resolution hash encoding
-# (an INR). Massively reduces the null-space and stabilizes the gradient
-# without restricting the model class. Comment out the whole block to
-# fall back to plain grid-space optimization.
+# ═══ Water-layer / shallow handling ═══════════════════════════════════════════
+
+freeze_top_n_rows: 0               # zero the gradient in the top N rows
+# freeze_water_layer:              # mask gradient above a per-trace seabed
+#   enabled: true
+#   seabed_depth_path: /path/seabed_depth_cells.npy
+#   buffer_cells: 0
+
+# ═══ Neural reparameterization (SIREN + hash INR) — optional, recommended ═════
+# Reparameterizes vp(x,z) as an INR (SIREN MLP + multi-res hash). Shrinks the
+# null-space and stabilizes the gradient. Comment the whole block for plain
+# grid-space optimization.
 
 reparam:
   kind: velocity_inr
-  # SIREN MLP topology.
-  hidden_features: 128
-  hidden_layers: 2
-  first_omega0: 10.0
+  # init_from: /path/prev_net.pt    # warm-start from a saved net
+  save_net: false                   # dump the trained net (feedback: prefer true)
+  hidden_features: 128              # SIREN width
+  hidden_layers: 2                  # SIREN depth
+  first_omega0: 10.0                # SIREN input freq (iFWI baseline ~10)
   hidden_omega0: 10.0
   use_bias: false
-  # SIREN outputs are scaled by vp_std and added to vp_mean. Tune vp_std to
-  # the expected range of perturbations you want the network to express.
-  vp_mean: 0.0
-  vp_std: 400.0
-  # When False, the INR predicts a residual on top of init_model.
-  direct_velocity: false
+  vp_mean: 0.0                      # output = vp_mean + vp_std·net  (residual)
+  vp_std: 400.0                     # from-scratch: use true mean/std, not wide
+  direct_velocity: false            # true ⇒ predict absolute vp (not residual)
   lr: 1.0e-4
-  # Backward strategy for the INR. two_pass_full is the canonical choice
-  # (one forward → one backward on the wave-equation, one full backward on
-  # the network).
+  # backward_mode: two_pass_full | two_pass_chunked | single_step
   backward_mode: two_pass_full
-  # Multi-resolution hash encoding (the "hash" in "SIREN+hash"). Provides
-  # local feature resolution that the global SIREN can't, accelerating
-  # convergence on small-scale features (faults, salt).
-  hash:
+  # backward_chunk_rows: 64         # rows/chunk for two_pass_chunked (VRAM knob)
+  # mask_water_layer: false         # hold water column at water_vp_m_s
+  # water_vp_m_s: 1500.0
+  # lateral_downsample: 1           # coarsen the render laterally (int or [y,x])
+  # compile_render: false           # torch.compile the INR render (default off)
+  hash:                             # multi-resolution hash encoder (Instant-NGP)
     enabled: true
     levels: 16
     features_per_level: 1
     log2_size: 18
-    base_resolution: 16
+    base_resolution: 16             # int, or per-axis list [z,x] / [z,y,x]
     finest_resolution: 512
+    backend: pytorch                # "pytorch" | "triton" (fused GPU kernels)
+    # c2f:                          # coarse-to-fine level unfreezing (BARF-style)
+    #   enabled: true
+    #   base_levels: 2
+    #   ramp: cosine                # "cosine" | "linear" | "hard"
+    #   warmup: 0.0
+    #   ramp_end: 1.0
+    #   growing: false
+  # fourier:                        # NeRF-style Fourier positional encoding
+  #   enabled: false
+  #   levels: 6
+  #   include_input: true
 
-# ─── Per-shot local-window optimization (optional, recommended) ──────────────
+# ═══ Source encoding — TWO modes (both under this one block) ══════════════════
+# The two "encodings" are switched by `mode`:
+#   mode: random             → random ±1 supershot. ALSO needs
+#                              obs.plan.sampling (above) to trigger the
+#                              multisource loop; enabled:false there = per-CRG
+#                              independent (no ±1). This is the OBN 1-GPU path.
+#   mode: frequency_selection → steady-state frequency-comb encoding. Plan-free
+#                              (data lives in coeff_shards); dispatched purely
+#                              by this block, ignores obs.plan.
+# Omit / enabled:false ⇒ conventional per-shot FWI (no encoding).
 #
-# Instead of touching the whole vp grid every iteration, only update the
-# region within (padding_x_m, padding_z_m) of the shot's source+receivers.
-# Dramatically cheaper for long streamer lines.
+# source_encoding:                 # --- ① random ±1 (pm1) ---
+#   enabled: true
+#   mode: random
+#   reseed_every_iter: true        # redraw signs each iter (de-correlate crosstalk)
+#   sign_seed: null
+#   min_coverage: 0
+#
+# source_encoding:                 # --- ② frequency selection (fs) ---
+#   enabled: true
+#   mode: frequency_selection
+#   frequency:                     # REQUIRED for this mode
+#     coeff_shards: /path/obs_2-4hz_part*.npz   # OR synthesize_from_true: true
+#     k_lo: 49
+#     k_hi: 96
+#     steady_samples: 2500
+#     n_pools: 14
+
+# ═══ Illumination preconditioning (diagonal pseudo-Hessian) ═══════════════════
+# illumination_precondition:
+#   enabled: true
+#   exponent: 0.5                   # 0.5 = sqrt-illum (OBN default); 1.0 = full
+#   epsilon: 1.0e-6
+# save_illumination: false          # dump the accumulated illumination tensor
+
+# ═══ Smoothness regularization (TV-style prior on vp) ═════════════════════════
+# smooth_regularization:
+#   weight: 0.0                     # 0 = off; raise to penalize roughness
+#   order: first                    # first | second | both | mixed | first_second
+#   x_weight: 1.0
+#   z_weight: 1.0
+#   velocity_scale_m_s: 1000.0
+
+# ═══ Pre-FWI data / model selection plans ═════════════════════════════════════
+# data_plan:                        # subsample shots / receivers / time
+#   shot_start: 0
+#   shot_stop: null
+#   shot_stride: 1
+#   receiver_stride: 1
+#   offset_min_m: null
+#   offset_max_m: null
+#   dt_target_s: null               # resample obs to this dt
+#   t_start_s: null
+#   t_end_s: null
+# model_plan:                       # crop vp to a region; drop out-of-window shots
+#   x_window_m: [0.0, 10000.0]
+#   z_window_m: [0.0, 4000.0]
+#   drop_outside_sources: true
+#   drop_outside_receivers: false
+
+# ═══ Obs-synthesis overrides (only when generating synthetic obs) ═════════════
+# modeling_override:                # use a different wavelet/geometry for obs gen
+#   wavelet: {kind: ricker, fm: 10.0}
+#   geometry: {kind: line, sources: {start: 0, stop: 2305, step: 20, depth: 1},
+#              receivers: {start: 0, stop: 2305, step: 1, depth: 1}}
+
+# ═══ Per-shot local-window optimization (Engquist-style DD) ═══════════════════
 
 local_model_window:
   enabled: true
-  padding_x_m: 1500.0
+  padding_x_m: 1500.0               # halo around each shot's src+rec footprint
   padding_z_m: 0.0
+  # padding_y_m: null               # 3-D only
   full_depth: true
   min_width_m: 0.0
 
-# ─── Iteration counts (top-level; overridden per-stage below) ────────────────
+# ═══ Iteration budget (top-level; per-stage `stages:` override these) ═════════
 
-epochs: 300                    # total iters across all stages
-batchsize: 48                  # default batch_size before stages override
-train_shot_batchsize: 1        # gradient micro-batch per forward solve
-show_every: 10                 # console-log every N iters
+epochs: 300                        # total iters across all stages
+batchsize: 48                      # shots per iter (before stage override)
+train_shot_batchsize: 1            # gradient micro-batch per forward solve
+show_every: 10                     # console-log cadence
 
-# ─── Multiscale stages (low → high frequency) ───────────────────────────────
-#
-# Each stage takes `epochs` iterations on its own grid (dh_m, dt_s, nt) and
-# bandpass-filtered observed data. Starting low-frequency / coarse-grid
-# and ramping up is the canonical FWI recipe — fights cycle-skip and
-# saves compute on the easy stages.
+# ═══ Multiscale stages (low → high frequency) ════════════════════════════════
+# Each stage runs `epochs` iters on its own (dh_m, dt_s, nt) grid with
+# bandpass-filtered obs. Low-freq / coarse-grid first fights cycle-skip.
+# Per-stage keys: epochs, batch_size, dh_m, dt_s, nt, lr_scale, inr_lr_scale,
+# optimizer_reset, wavelet, bandpass, frequency (freqsel).
 
 stages:
   - {epochs: 50, batch_size: 48,  dh_m: 75.0,  dt_s: 0.004,  nt: 1500, bandpass: {lo_hz: 2.0, hi_hz:  5.0, order: 4, target: syn}}
@@ -241,14 +382,23 @@ stages:
   - {epochs: 50, batch_size: 96,  dh_m: 18.75, dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 20.0, order: 4, target: syn}}
   - {epochs: 50, batch_size: 112, dh_m: 15.0,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 25.0, order: 4, target: syn}}
   - {epochs: 50, batch_size: 128, dh_m: 12.5,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0, order: 4, target: syn}}
+# bandpass.target: "syn" (filter modeled+obs) | "wavelet" (filter the wavelet)
+# bandpass.padtype: "odd" | "even" | "constant"
 
-# ─── QC artifacts written during the run ────────────────────────────────────
+# ═══ QC artifacts ═════════════════════════════════════════════════════════════
 
 qc:
-  every_n_epochs: 10           # cadence for the per-iter QC PNGs
-  vp_png: true                 # current vp model snapshot
-  vp_diff_png: true            # Δvp from init_model
-  gradient_png: false          # per-iter ∂loss/∂vp (large, off by default)
-  shot_gather: true            # N obs/syn side-by-side panels
+  every_n_epochs: 10
+  vp_png: true                      # current vp snapshot
+  vp_diff_png: true                 # Δvp from init
+  gradient_png: false               # per-iter ∂loss/∂vp (large)
+  shot_gather: true                 # obs/syn side-by-side
   shot_gather_n_shots: 2
-  loss_curve: true             # cumulative loss curve PNG (final-only)
+  # shot_gather_normalize: trace    # "trace" | "shot" | "joint"
+  loss_curve: true
+  # supershot_panel: true           # encoded-supershot QC (multisource path)
+  # well_logs: true
+
+# ═══ Resume ═══════════════════════════════════════════════════════════════════
+resume: false                      # auto-resume from checkpoint.pt in this dir
+# resume_from: <task_id>           # resume from a DIFFERENT run's checkpoint
