@@ -8,9 +8,9 @@ changes from the legacy code:
   ``csg_index_v2`` npz + a separate raw SEG-Y path. The plan already
   knows where the SEG-Y bytes live (``row_file_id`` + ``row_trace_offset``)
   and what the time-axis is (``plan.dt_s``, ``plan.samples_per_trace``).
-* ``SirenWavelet`` is imported from the in-package
-  :mod:`sweep_tasks.wavelet._siren` helper instead of
-  ``fwi_workflow.models.inr``.
+* ``SirenWavelet`` comes from :mod:`sweep_nn.wavelet` (bit-identical to the old
+  in-package copy), imported lazily inside the siren-mode branch so the
+  CPU-only analyze / convert-farfield paths stay torch-free.
 
 Inner algorithm (rank-1 SIREN prefit + sweep wave-equation refinement)
 is unchanged.
@@ -30,7 +30,6 @@ import numpy as np
 
 from sweep_io.seismic_plan import PlanReader, SeismicPlan
 
-from ._siren import SirenWavelet
 from .estimation import normalize_wavelet, ricker
 
 
@@ -1313,14 +1312,22 @@ def run_wavelet_inversion(config: WaveletInversionConfig) -> Path:
             return wavelet_param
 
     elif config.mode == "siren":
+        # Local import: sweep_nn.wavelet pulls torch at module load, so defer it
+        # to this siren-inversion branch (which needs torch anyway) rather than
+        # the module top. Bit-identical to the retired in-package
+        # _siren.SirenWavelet (verified: same init + forward under one seed).
+        from sweep_nn.wavelet import SirenWavelet
+
         siren = SirenWavelet(
             data.simulation_nt,
-            config.inr_hidden_features,
-            config.inr_hidden_layers,
-            config.inr_first_omega0 if config.inr_first_omega0 is not None else config.inr_omega0,
-            config.inr_hidden_omega0,
-            device,
-        )
+            hidden_features=config.inr_hidden_features,
+            hidden_layers=config.inr_hidden_layers,
+            first_omega0=(config.inr_first_omega0
+                          if config.inr_first_omega0 is not None
+                          else config.inr_omega0),
+            hidden_omega0=config.inr_hidden_omega0,
+            bias=True,
+        ).to(device)
         parameters = list(siren.parameters())
 
         def current_wavelet():
