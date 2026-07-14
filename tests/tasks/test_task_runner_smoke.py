@@ -429,9 +429,12 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
     import os
     import signal
 
-    from sweep_tasks import runner as _runner
+    # ``_save_checkpoint`` now lives in the ``tasks.fwi`` mixin module (post
+    # runner.py split); the FWI loop resolves it in that namespace, so the
+    # monkeypatch must target there, not the re-exported ``runner`` binding.
+    from sweep_tasks.tasks import fwi as _fwi_mod
 
-    real_save = _runner._save_checkpoint
+    real_save = _fwi_mod._save_checkpoint
     call_count = {"n": 0}
 
     def _save_then_sigint(task_dir, payload):
@@ -441,7 +444,7 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
             os.kill(os.getpid(), signal.SIGINT)
         return out
 
-    monkeypatch.setattr(_runner, "_save_checkpoint", _save_then_sigint)
+    monkeypatch.setattr(_fwi_mod, "_save_checkpoint", _save_then_sigint)
 
     spec_dict = _fwi_smoke_spec(tmp_path, epochs=5, task_id="stoptest",
                                 resume=True)
@@ -456,7 +459,7 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
 
     # Resume the rest. Restore the un-patched ``_save_checkpoint`` so
     # the 2nd run isn't interrupted, then re-run the same YAML.
-    monkeypatch.setattr(_runner, "_save_checkpoint", real_save)
+    monkeypatch.setattr(_fwi_mod, "_save_checkpoint", real_save)
     result2 = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "stop2.yaml")))
     assert result2.status.state == "success", result2.status.error
     assert result2.status.summary["resumed_from"] == "stoptest"

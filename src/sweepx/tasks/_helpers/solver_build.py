@@ -1,5 +1,6 @@
 """Solver construction + CFL check + modeling-input resolution. Verbatim from runner.py."""
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
