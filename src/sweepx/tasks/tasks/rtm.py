@@ -1,6 +1,6 @@
 """RTM task runner (mixin). Verbatim from runner.py."""
 from pathlib import Path
-from sweep_preproc.filter import bandpass as _bandpass_cpu
+from sweep_tasks.preproc.filter import bandpass as _bandpass_cpu
 import numpy as np
 from sweep_tasks.schemas import RTMSpec
 from sweep_tasks._helpers.dd import (

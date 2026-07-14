@@ -944,7 +944,7 @@ class ReparamSpec(_Forbid):
 class StageBandpass(_Forbid):
     """Per-stage bandpass applied to obs at stage entry (Gap 5).
 
-    ``sweep_preproc.filter.bandpass`` is invoked on the *pristine* obs each
+    ``sweep_tasks.preproc.filter.bandpass`` is invoked on the *pristine* obs each
     time a new stage starts, so stages don't compose their filters.
 
     ``order``
@@ -1456,7 +1456,7 @@ class FWISpec(BaseTaskSpec):
 
     # Optional zero-phase Butterworth bandpass applied to the wavelet
     # (once at setup) AND to the per-iter encoded obs supershot (via
-    # the differentiable :func:`sweep_preproc.filter.bandpass_torch`).
+    # the differentiable :func:`sweep_tasks.preproc.filter.bandpass_torch`).
     # Used by the OBN CRG path only; the multi-stage 2-D / 3-D path
     # uses :class:`StageBandpass` inside ``stages`` instead.
     bandpass: StageBandpass | None = None

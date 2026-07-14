@@ -89,7 +89,7 @@ def materialize_plan_dataset(
     """
     from sweep_io.geometry import load_rotation_metadata
     from sweep_io.seismic_plan import PlanReader, SeismicPlan
-    from sweep_preproc.resample import resample_time
+    from sweep_tasks.preproc.resample import resample_time
 
     geom = spec.geometry
     ocfg = spec.obs.plan

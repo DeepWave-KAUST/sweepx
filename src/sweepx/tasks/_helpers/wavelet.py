@@ -42,9 +42,9 @@ def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
         # the same amount.
         # Resample to solver dt when the wavelet was sampled at a different
         # rate (typical for SIREN wavelets fit at SEG-Y dt while the solver
-        # runs at a finer step). Uses sweep_preproc.resample_time.
+        # runs at a finer step). Uses sweep_tasks.preproc.resample_time.
         if abs(loaded.dt_s - dt) > 1.0e-12:
-            from sweep_preproc.resample import resample_time
+            from sweep_tasks.preproc.resample import resample_time
             samples = resample_time(
                 samples.astype(np.float32), loaded.dt_s, dt, axis=0,
             ).astype(np.float32)

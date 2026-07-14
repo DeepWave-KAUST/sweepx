@@ -1,6 +1,6 @@
 """Multisource (streaming CRG/plan) FWI task runner (mixin). Verbatim from runner.py."""
 from pathlib import Path
-from sweep_preproc.filter import bandpass_torch as _bandpass_torch_fft
+from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
 import math
 import numpy as np
 import os
@@ -512,7 +512,7 @@ class MultisourceRunnerMixin:
         # in the stage-entry block below when a stage sets dt_s/nt.
         _wav_pristine_np = wavelet_orig.detach().cpu().numpy().copy()
         _wav_orig_dt = float(effective_dt)
-        from sweep_preproc.resample import resample_time as _resample_time_wav
+        from sweep_tasks.preproc.resample import resample_time as _resample_time_wav
 
         def _stage_bandpass(_st):
             return (_st.bandpass if _st.bandpass is not None
@@ -1054,7 +1054,7 @@ class MultisourceRunnerMixin:
             # Resample obs time axis on the prefetcher thread too so the
             # main loop's wait_io covers resample as well.
             if abs(plan.dt_s - effective_dt) > 1.0e-12:
-                from sweep_preproc.resample import resample_time
+                from sweep_tasks.preproc.resample import resample_time
                 t_np = resample_time(t_np, plan.dt_s, effective_dt, axis=-1)
             tstats["resample"] = time.perf_counter() - t_resample0
 

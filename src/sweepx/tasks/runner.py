@@ -34,8 +34,8 @@ from sweep.signal import ricker
 # ``bandpass_torch`` is the FFT |H(z)|² Butterworth on torch (GPU/CPU,
 # autograd-friendly). Importing once at module load avoids the ~50 µs
 # import-on-call cost previously paid by half a dozen inline imports.
-from sweep_preproc.filter import bandpass as _bandpass_cpu
-from sweep_preproc.filter import bandpass_torch as _bandpass_torch_fft
+from sweep_tasks.preproc.filter import bandpass as _bandpass_cpu
+from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
 from sweep_tasks.schemas import (
     BaseTaskSpec,
     ForwardSpec,
