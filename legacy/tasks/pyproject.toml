@@ -30,10 +30,10 @@ dependencies = [
     "sweep-solver",
     "sweep-loss",
     "sweep-nn",
-    "sweep-viz",
     "pydantic>=2.0",
     "PyYAML>=6.0",
     "numpy>=1.20",
+    "scipy>=1.8",       # sweep_tasks.preproc (filter/resample) + sweep_tasks.viz
     "torch>=1.13",
     "matplotlib>=3.5",
 ]

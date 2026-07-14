@@ -1,6 +1,6 @@
 """FWI quality-control products written during a run.
 
-This module composes :mod:`sweep_viz` plotting primitives (no in-repo
+This module composes :mod:`sweep_tasks.viz` plotting primitives (no in-repo
 matplotlib code) into per-epoch snapshots that diagnose how an FWI
 inversion is behaving. The runner calls :func:`run_epoch_qc` at a
 user-configurable cadence; final outputs go to ``<task_dir>/qc/``.
@@ -53,7 +53,7 @@ def save_vp_png(
     title_prefix: str = "vp",
 ) -> Path:
     """Save a single-panel velocity model PNG."""
-    from sweep_viz.model import plot_vp
+    from sweep_tasks.viz.model import plot_vp
 
     vp_np = _to_np(vp)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +76,7 @@ def save_vp_diff_png(
     perc: float = 99.0,
 ) -> Path:
     """Save Δvp = current − initial (initial resampled to current shape if needed)."""
-    from sweep_viz.model import plot_vp_diff
+    from sweep_tasks.viz.model import plot_vp_diff
 
     vp_np = _to_np(vp)
     init_np = _to_np(vp_initial)
@@ -108,13 +108,13 @@ def save_gradient_png(
 ) -> Path:
     """Save the FWI gradient ∂loss/∂vp as a diverging map.
 
-    ``cmap`` defaults to the bundled :data:`sweep_viz.colormaps.IMAGE_CMAP`
+    ``cmap`` defaults to the bundled :data:`sweep_tasks.viz.colormaps.IMAGE_CMAP`
     (``"sweep_image"``) — tuned for percentile-clipped kernel/gradient
     plots. Pass ``cmap="RdBu_r"`` to recover the legacy red/blue look.
     """
     # Import here so a missing sweep-viz at install time doesn't break
     # other QC paths. The registration side-effect fires on import.
-    from sweep_viz.colormaps import IMAGE_CMAP
+    from sweep_tasks.viz.colormaps import IMAGE_CMAP
 
     grad_np = _to_np(grad)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,8 +151,8 @@ def save_gradient_ortho_slices_png(
     visualization next to the vp ortho slices (``qc/gradient/`` parallel
     to ``qc/vp/``).
     """
-    from sweep_viz.colormaps import IMAGE_CMAP
-    from sweep_viz.model import plot_vp_ortho_slices
+    from sweep_tasks.viz.colormaps import IMAGE_CMAP
+    from sweep_tasks.viz.model import plot_vp_ortho_slices
 
     grad = _to_np(grad_zyx)
     if grad.ndim != 3:
@@ -192,13 +192,13 @@ def save_ortho_slices_png(
 ) -> Path:
     """Save a 3-orthogonal-slice PNG for a 3-D velocity volume.
 
-    Thin wrapper around :func:`sweep_viz.model.plot_vp_ortho_slices`;
+    Thin wrapper around :func:`sweep_tasks.viz.model.plot_vp_ortho_slices`;
     used by ``run_epoch_qc`` when ``state["inv_by_name"]["vp"]`` is 3-D
     (the OBN CRG-plan FWI case). ``dh`` may be a scalar (cubic dh) or a
     per-axis ``(dz, dy, dx)`` tuple.
     """
-    from sweep_viz.colormaps import VP_CMAP
-    from sweep_viz.model import plot_vp_ortho_slices
+    from sweep_tasks.viz.colormaps import VP_CMAP
+    from sweep_tasks.viz.model import plot_vp_ortho_slices
 
     vol = _to_np(vol_zyx)
     if vol.ndim != 3:
@@ -1134,7 +1134,7 @@ def run_epoch_qc(
             if init_np.ndim == 3 and init_np.shape == vp.shape:
                 diff = _to_np(vp) - init_np
                 s = float(np.percentile(np.abs(diff), 99.0)) or 1.0
-                from sweep_viz.colormaps import IMAGE_CMAP
+                from sweep_tasks.viz.colormaps import IMAGE_CMAP
                 written.append(save_ortho_slices_png(
                     diff, dh=dh_xyz, out_path=qc_dir / "vp_diff" / iter_tag,
                     epoch=epoch, vmin=-s, vmax=s,
@@ -1144,7 +1144,7 @@ def run_epoch_qc(
         if qc_spec.gradient_png and grad_3d is not None:
             grad_np = _to_np(grad_3d)
             s = float(np.percentile(np.abs(grad_np), 99.0)) or 1.0
-            from sweep_viz.colormaps import IMAGE_CMAP
+            from sweep_tasks.viz.colormaps import IMAGE_CMAP
             written.append(save_ortho_slices_png(
                 grad_np, dh=dh_xyz, out_path=qc_dir / "gradient" / iter_tag,
                 epoch=epoch, vmin=-s, vmax=s,

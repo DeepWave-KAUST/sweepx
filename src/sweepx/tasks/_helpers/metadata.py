@@ -88,7 +88,7 @@ def _dump_run_metadata(
 
     pkgs = [
         "sweep_tasks", "sweep_nn", "sweep_io", "sweep",
-        "sweep_loss", "sweep_viz",
+        "sweep_loss",
         "torch", "numpy",
     ]
     versions = {n: _pkg_version(n) for n in pkgs}

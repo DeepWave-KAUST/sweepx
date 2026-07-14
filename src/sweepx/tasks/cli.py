@@ -1243,7 +1243,7 @@ def main(argv: list[str] | None = None) -> int:
     fi.add_argument("--cmap", default="sweep_image",
                     help="matplotlib colormap for PNG output (default: "
                          "sweep_image, the bundled diverging LUT from "
-                         "sweep_viz tuned for percentile-clipped RTM / "
+                         "sweep_tasks.viz tuned for percentile-clipped RTM / "
                          "kernel images; pass 'seismic' or 'gray' for "
                          "legacy display).")
     fi.add_argument("--output-dir", default=None,

@@ -138,7 +138,7 @@ def _save_png(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
     try:  # registers ``sweep_image`` / ``sweep_vp`` as matplotlib cmaps
-        import sweep_viz.colormaps  # noqa: F401
+        import sweep_tasks.viz.colormaps  # noqa: F401
     except Exception:  # noqa: BLE001
         pass
 
@@ -195,7 +195,7 @@ def _save_comparison_png(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
     try:  # registers ``sweep_image`` / ``sweep_vp`` as matplotlib cmaps
-        import sweep_viz.colormaps  # noqa: F401
+        import sweep_tasks.viz.colormaps  # noqa: F401
     except Exception:  # noqa: BLE001
         pass
 

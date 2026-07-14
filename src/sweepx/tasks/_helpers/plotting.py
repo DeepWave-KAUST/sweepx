@@ -21,12 +21,12 @@ def _save_illumination(solver, snapshots_dir: Path, epoch: int) -> list[Path]:
 
 
 def _plot_loss_curve(losses, path: Path, title: str) -> Path:
-    """Loss curve via `sweep_viz.convergence.plot_loss`."""
+    """Loss curve via `sweep_tasks.viz.convergence.plot_loss`."""
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    from sweep_viz.convergence import plot_loss
+    from sweep_tasks.viz.convergence import plot_loss
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
     plot_loss(list(losses), ax=ax, logy=True, title=title)
@@ -38,17 +38,17 @@ def _plot_loss_curve(losses, path: Path, title: str) -> Path:
 
 def _plot_wavefield_snapshots(snapshots_np, snapshot_times, abcn, shape, path,
                               free_surface) -> Path:
-    """Wavefield snapshot grid via `sweep_viz.wavefield.plot_snapshot` (one per panel).
+    """Wavefield snapshot grid via `sweep_tasks.viz.wavefield.plot_snapshot` (one per panel).
 
     The PML / absorbing-boundary cropping logic (and the `(nsnap, 1, 1, 1, ...)`
     sweep-binding tensor layout) is sweep-tasks-specific, so it stays here;
-    each cropped panel is then rendered by sweep_viz.
+    each cropped panel is then rendered by sweep_tasks.viz.
     """
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    from sweep_viz.wavefield import plot_snapshot
+    from sweep_tasks.viz.wavefield import plot_snapshot
 
     nz, nx = int(shape[0]), int(shape[1])
     nsnap = snapshots_np.shape[0]
@@ -93,10 +93,10 @@ def _save_rtm_qc_pngs(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
     # Side-effect import: registers ``sweep_image`` / ``sweep_vp`` so the
-    # RTM panels below resolve. Tolerate sweep_viz being missing — caller
+    # RTM panels below resolve. Tolerate sweep_tasks.viz being missing — caller
     # gets a clear matplotlib error in that case.
     try:
-        from sweep_viz.colormaps import IMAGE_CMAP as _RTM_CMAP
+        from sweep_tasks.viz.colormaps import IMAGE_CMAP as _RTM_CMAP
     except Exception:  # noqa: BLE001
         _RTM_CMAP = "seismic"
 

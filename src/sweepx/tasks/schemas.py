@@ -1518,7 +1518,7 @@ class PostFilterImageSpec(_Forbid):
     clip_percentile: float = Field(ge=0, le=49, default=1.0)
     display_scale: float = Field(gt=0, default=1.0)
     # ``sweep_image`` is the bundled diverging LUT from
-    # ``sweep_viz.colormaps`` (registered as a matplotlib cmap at import
+    # ``sweep_tasks.viz.colormaps`` (registered as a matplotlib cmap at import
     # time). Tuned for percentile-clipped RTM / kernel images. Override
     # with any matplotlib cmap name (e.g. ``"seismic"``, ``"gray"``) for
     # legacy display.
