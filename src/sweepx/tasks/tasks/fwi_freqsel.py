@@ -82,6 +82,37 @@ class FreqselRunnerMixin:
         water_t = torch.tensor(frozen, device=dev)
         base_t = torch.tensor(vp0p, device=dev)
 
+        # Multi-parameter reparam: prepare a base tensor per freed parameter
+        # (vp is channel 0 = base_t; z / vs / … loaded from init_models by name),
+        # each resampled to this stage's grid + padded like vp so the shared
+        # MultiParamINR renders all channels on one grid.
+        free_multi = bool(use_reparam and getattr(spec.reparam, "free_params", None))
+        n_free = len(spec.reparam.free_params) if free_multi else 1
+        param_bases = None
+        if free_multi:
+            def _prep_base(native_arr):
+                if abs(float(dh) - float(native_dh)) < 1e-9:
+                    a0 = native_arr
+                else:
+                    _ns = _shape_for_dh(native_arr.shape, native_dh, float(dh))
+                    a0 = _resample_vp_tensor(torch.tensor(native_arr), _ns
+                                             ).detach().cpu().numpy()
+                a0p = np.pad(a0, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)), mode="edge")
+                return torch.tensor(a0p, device=dev)
+
+            _refs = {m.name: m for m in _normalize_fwi_init_models(spec)}
+            param_bases = []
+            for _fp in spec.reparam.free_params:
+                if _fp.name == "vp":
+                    param_bases.append(base_t)
+                    continue
+                _ref = _refs.get(_fp.name)
+                if _ref is None or getattr(_ref, "path", None) is None:
+                    raise ValueError(
+                        f"reparam.free_params '{_fp.name}' has no matching "
+                        f"init_models entry with a path")
+                param_bases.append(_prep_base(np.load(_ref.path).astype(np.float32)))
+
         solver = _build_solver(spec.physics, spec.backend,
                                (nz, nyp, nxp), float(dh),
                                float(dt), nt, dev)
@@ -124,11 +155,15 @@ class FreqselRunnerMixin:
             f0 = 1.5 * float(np.mean(comb.freqs))
             a = np.pi * f0 * (t - 0.25)
             ricker = ((1 - 2 * a * a) * np.exp(-a * a)).astype(np.float32)
+            vpt_t = torch.tensor(
+                np.pad(vpt, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)), mode="edge"),
+                device=dev)
+            # True obs uses the correct multi-parameter physics: VRZ -> [vp, z]
+            # (Gardner-coupled truth for this synthetic test), acoustic -> [vp].
+            _synth_models = _solver_models(vpt_t, spec)
             fsl.synthesize_shard(
-                shard, solver, torch.tensor(
-                    np.pad(vpt, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)),
-                           mode="edge"), device=dev),
-                nodes, recs, comb, ricker, dev, verbose=rank == 0)
+                shard, solver, vpt_t, nodes, recs, comb, ricker, dev,
+                verbose=rank == 0, models=_synth_models)
             shards_glob = shard
         else:
             shards_glob = fspec.coeff_shards
@@ -150,7 +185,8 @@ class FreqselRunnerMixin:
         if si == 0:
             if use_reparam:
                 net = _build_reparam_net(spec.reparam, base_t,
-                                         spec.model_bounds.get("vp"))
+                                         spec.model_bounds.get("vp"),
+                                         param_bases=param_bases)
                 net = net.to(dev)
                 if dd_on:
                     import torch.distributed as dist
@@ -163,6 +199,12 @@ class FreqselRunnerMixin:
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
         else:
             if use_reparam:
+                if free_multi:
+                    raise NotImplementedError(
+                        "multi-parameter reparam (free_params) does not yet "
+                        "support multi-stage carry-over (per-channel base "
+                        "resample via update_base_velocity); use a single stage "
+                        "per band and warm-start with reparam.init_from.")
                 # Carry the network across the band: resample only its base to
                 # the new grid, keep hash+SIREN params AND Adam state (the whole
                 # point — the coarse structure learned in prior bands stays).
@@ -201,6 +243,14 @@ class FreqselRunnerMixin:
             eps=float(fspec.eps))
 
         _dd_rc = _dd_config()[3] if dd_on else 0
+        # Multi-parameter reparam (VRZ option C etc.): the net has one output
+        # channel per freed solver-model parameter (free_multi / n_free were set
+        # above). DD needs per-channel tile render/backward — not yet wired.
+        if free_multi and dd_on:
+            raise NotImplementedError(
+                "reparam.free_params (multi-parameter INR) is not yet wired for "
+                "domain decomposition (per-channel tile render/backward); run it "
+                "on a single GPU / non-DD config.")
 
         def _leaf():
             if not use_reparam:
@@ -215,14 +265,31 @@ class FreqselRunnerMixin:
                 m = net.render(chunk_rows=chunk_rows).detach().clone()
             return m.requires_grad_(True)
 
+        # Multi-parameter reparam: render EVERY freed parameter as its own
+        # detached leaf (vp, z, …) in solver-model order so the solver inverts
+        # them jointly. _get_models() returns (leaves, models); single-param
+        # keeps the Gardner-coupled model list via _solver_models.
+        def _leaves():
+            with torch.no_grad():
+                fields = net.render_all(chunk_rows=chunk_rows)
+            return [fields[i].detach().clone().requires_grad_(True)
+                    for i in range(n_free)]
+
+        def _get_models():
+            if free_multi:
+                lv = _leaves()
+                return lv, list(lv)
+            lf = _leaf()
+            return [lf], _solver_models(lf, spec)
+
         # ---- capture + ownership + steady-state QC ------------------------
         pool0 = sched.pools[0]
         bins0 = np.arange(len(pool0))
-        leaf = _leaf()
+        leaves, models0 = _get_models()
         rec0 = solver(
             fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
             targets.node_grid[pool0][None].astype(np.int32), rec_table,
-            models=_solver_models(leaf, spec))
+            models=models0)
         own = getattr(solver, "_own_rec_idx", None)
         # Debug: audit receiver ownership across ranks (SWEEP_FREQSEL_OWN_AUDIT=1).
         # Duplicated/dropped receivers at tile cut planes would bias the GCN loss.
@@ -245,7 +312,7 @@ class FreqselRunnerMixin:
             int(fspec.slack_samples))
         print(f"[freqsel][rank{rank}] stage {si} steady-state two-window "
               f"check: median rel diff = {chk:.3e}", flush=True)
-        del rec0, leaf
+        del rec0, leaves
 
         # ---- coarse-to-fine hash schedule (per stage) ---------------------
         _c2f = getattr(getattr(spec.reparam, "hash", None), "c2f", None)
@@ -290,12 +357,13 @@ class FreqselRunnerMixin:
                           f"{_act[0]:.2f}/{_act[1]}", flush=True)
             optimizer.zero_grad()
             _pf_sync(); _pa = _time.perf_counter()
-            leaf = _leaf()
+            leaves, models = _get_models()
+            leaf = leaves[0]
             _pf_sync(); _pf["render"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             syn = solver(
                 fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
                 targets.node_grid[pool][None].astype(np.int32), rec_table,
-                models=_solver_models(leaf, spec))
+                models=models)
             _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
             # + owned receiver indices — localizes DD-vs-single divergence to
@@ -331,7 +399,21 @@ class FreqselRunnerMixin:
                 else:
                     np.savez(os.path.join(_gdump, f"grad_s{si}_it{it}_single.npz"),
                              g=g.detach().cpu().numpy())
-            if dd_on and use_reparam:
+            if free_multi:
+                # Joint N-channel reparam backward (single GPU): each freed
+                # parameter's own leaf carries dL/d(that parameter); map them all
+                # onto the shared trunk in one chunked pass. DD is guarded out
+                # above; illumination precond is not supported on this path.
+                grads = []
+                for _lf in leaves:
+                    _gg = _lf.grad
+                    if _gg is None:
+                        _gg = torch.zeros_like(net.base_stack[0])
+                    else:
+                        _gg[water_t] = 0.0
+                    grads.append(_gg)
+                net.backward_gradients(grads, chunk_rows=chunk_rows)
+            elif dd_on and use_reparam:
                 # Tile-grad path (mirrors multisource _dd_backward_tile): g
                 # covers only this rank's tile window; zero the water inside
                 # the window, push it through the net tile-locally, and let
@@ -518,6 +600,13 @@ class FreqselRunnerMixin:
                 m = self._freqsel_last_vp.detach()
             final = m[:, :ny_, :nx_].cpu().numpy()
             np.save(task_dir / "inverted_vp.npy", final)
+            # Multi-parameter reparam: also dump every freed channel (z, …).
+            if use_reparam and getattr(spec.reparam, "free_params", None):
+                with torch.no_grad():
+                    allf = net.render_all(chunk_rows=chunk_rows).detach()
+                for _i, _fp in enumerate(spec.reparam.free_params):
+                    np.save(task_dir / f"inverted_{_fp.name}.npy",
+                            allf[_i, :, :ny_, :nx_].cpu().numpy())
             np.savez(task_dir / "curves.npz", losses=np.array(losses),
                      iter_s=np.array(times), peak_gb=np.array(peaks))
             summary = {

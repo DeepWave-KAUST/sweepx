@@ -843,6 +843,29 @@ class QCSpec(_Forbid):
     well_logs: bool = True
 
 
+class FreeParamSpec(_Forbid):
+    """One output channel of a multi-parameter reparam (:class:`sweep_nn.MultiParamINR`).
+
+    Each freed solver-model parameter (vp, z, and later vs, rho, eps …) gets its
+    own affine scale + clamp; the init model comes from ``init_models`` matched
+    by ``name``. List the entries in :attr:`ReparamSpec.free_params` in the SAME
+    order as the equation's model specs — channel 0 (the first entry) is the
+    PRIMARY parameter (vp), the one snapshots / DD tile render use.
+
+    ``std`` is the per-parameter "scale": the channel's effective learning rate
+    is ``reparam.lr * std``, so pick it for the parameter's magnitude (vp ~ 500,
+    impedance z ~ 2). ``water_value`` pins the water column of THIS channel when
+    the reparam's water mask is active (e.g. vp -> 1500, Gardner-water z -> 1.5);
+    leave it null to skip the pin for this channel.
+    """
+
+    name: str
+    mean: float = 0.0
+    std: float = Field(gt=0)
+    bounds: ModelBounds | None = None
+    water_value: float | None = None
+
+
 class ReparamSpec(_Forbid):
     """Neural-network reparameterization of the velocity model (sweep-nn).
 
@@ -853,11 +876,24 @@ class ReparamSpec(_Forbid):
     velocity, preserving all learnable parameters (SIREN's multi-scale
     benefit).
 
-    Currently only applies to the ``vp`` model; multi-parameter equations
-    fall back to raw tensors for the non-vp models.
+    Single-parameter by default (vp only); set :attr:`free_params` to invert
+    several solver-model parameters JOINTLY from one shared-trunk network
+    (:class:`sweep_nn.MultiParamINR`) — see that field.
     """
 
     kind: Literal["velocity_inr"] = "velocity_inr"
+    # Multi-parameter reparam: predict SEVERAL solver-model parameters jointly
+    # from ONE shared-trunk network (sweep_nn.MultiParamINR), one output channel
+    # per entry (channel 0 = vp = primary). When None (default) the reparam is
+    # single-channel vp (VelocityINR) and non-vp models fall back to coupling
+    # (VRZ option A: z = Gardner(vp)). When set — e.g. ``[{name: vp, std: 500,
+    # bounds: {min: 1450, max: 5500}}, {name: z, std: 2.0, bounds: {min: 1.4,
+    # max: 18}}]`` — vp AND z (and any further params) are inverted as free,
+    # independent channels off a shared encoder + SIREN body (VRZ option C). The
+    # shared-trunk hyperparameters (hidden_*, omega, hash, use_bias) below are
+    # reused; each channel's affine/bounds/water come from its FreeParamSpec.
+    # init models come from ``init_models`` matched by name.
+    free_params: list[FreeParamSpec] | None = None
     # Warm-start: path to a saved reparam-net state_dict (a previous run's
     # ``reparam_net.pt``, dumped with ``save_net: true`` or SWEEP_SAVE_REPARAM_NET=1).
     # The runner loads it into the freshly-built network so a SECOND run continues

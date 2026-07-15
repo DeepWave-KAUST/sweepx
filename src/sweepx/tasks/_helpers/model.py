@@ -43,8 +43,18 @@ def _gardner_z(vp, water_thr=1505.0, coeff=0.31, exp=0.25):
 
 
 def _solver_models(leaf, spec):
-    """Model list for a solver forward. Non-VRZ equations: ``[vp]`` (unchanged).
-    AcousticVRZ/3D (option A): ``[vp, Gardner-z(vp)]``, z coupled to the current vp."""
+    """Model list for a solver forward.
+
+    * ``leaf`` is a LIST (multi-parameter reparam, ``reparam.free_params`` set):
+      the caller already rendered every freed parameter as its own channel/leaf
+      in solver-model order (VRZ option C: ``[vp, z]``) — pass it straight
+      through.
+    * Non-VRZ equations: ``[vp]`` (unchanged).
+    * AcousticVRZ/3D (option A, single-channel vp): ``[vp, Gardner-z(vp)]``, z
+      coupled to the current vp.
+    """
+    if isinstance(leaf, (list, tuple)):
+        return list(leaf)
     if getattr(getattr(spec, "physics", None), "equation", None) in _VRZ_EQUATIONS:
         wthr = 1505.0
         wv = (getattr(spec.reparam, "water_vp_m_s", None)

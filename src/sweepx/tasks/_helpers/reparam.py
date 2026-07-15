@@ -2,13 +2,20 @@
 import torch
 
 
-def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
-    """Construct a :class:`sweep_nn.VelocityINR` from a ReparamSpec.
+def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
+                       param_bases=None):
+    """Construct the reparam network from a ReparamSpec.
 
-    ``base_vp`` is the initial vp tensor at the first stage's grid. The net
-    keeps it as a buffer (its forward returns ``base + delta``). ``bounds``
-    is the optional :class:`ModelBounds` for vp — if provided, the network
-    clamps its render output to those limits.
+    Single-parameter (default): a :class:`sweep_nn.VelocityINR` over ``base_vp``
+    (the initial vp tensor at the first stage's grid); its forward returns
+    ``base + delta`` clamped to ``bounds``.
+
+    Multi-parameter (``spec.free_params`` set): a :class:`sweep_nn.MultiParamINR`
+    with one output channel per freed parameter. ``param_bases`` is the list of
+    per-channel init tensors (same order as ``spec.free_params``, already
+    resampled+padded to the stage grid); channel 0 is vp. Each channel's
+    affine/bounds/water come from its :class:`FreeParamSpec`; the shared trunk
+    reuses the ReparamSpec SIREN/hash hyperparameters.
     """
     import torch  # local import — runner.py keeps torch imports per-function
     from sweep_nn import VelocityINR
@@ -42,6 +49,66 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None):
                 f"equal water_vp_m_s={water_vp_val}; mask will be empty.",
                 stacklevel=2,
             )
+    # ---- multi-parameter reparam (free_params) -> MultiParamINR ---------- #
+    free_params = getattr(spec, "free_params", None)
+    if free_params:
+        from sweep_nn import MultiParamINR
+        if param_bases is None or len(param_bases) != len(free_params):
+            raise ValueError(
+                f"free_params has {len(free_params)} entries but got "
+                f"{0 if param_bases is None else len(param_bases)} param_bases")
+
+        def _fp_bounds(fp):
+            b = getattr(fp, "bounds", None)
+            if b is None or not bool(getattr(b, "enabled", True)):
+                return None
+            return (b.min, b.max)
+
+        net = MultiParamINR(
+            [b.detach() for b in param_bases],
+            means=[float(fp.mean) for fp in free_params],
+            stds=[float(fp.std) for fp in free_params],
+            bounds=[_fp_bounds(fp) for fp in free_params],
+            water_mask=water_mask,
+            water_values=[(float(fp.water_value) if fp.water_value is not None
+                           else float("nan")) for fp in free_params],
+            hidden_features=int(spec.hidden_features),
+            hidden_layers=int(spec.hidden_layers),
+            first_omega0=float(spec.first_omega0),
+            hidden_omega0=float(spec.hidden_omega0),
+            use_bias=bool(spec.use_bias),
+            use_hash_encoding=bool(spec.hash.enabled),
+            hash_levels=int(spec.hash.levels),
+            hash_features_per_level=int(spec.hash.features_per_level),
+            hash_log2_size=int(spec.hash.log2_size),
+            hash_base_resolution=(list(spec.hash.base_resolution)
+                                  if isinstance(spec.hash.base_resolution, list)
+                                  else int(spec.hash.base_resolution)),
+            hash_finest_resolution=(list(spec.hash.finest_resolution)
+                                    if isinstance(spec.hash.finest_resolution, list)
+                                    else int(spec.hash.finest_resolution)),
+            hash_c2f=bool(getattr(spec.hash, "c2f", None) is not None
+                          and spec.hash.c2f.enabled),
+            hash_c2f_base_levels=int(getattr(getattr(spec.hash, "c2f", None),
+                                             "base_levels", 2) or 2),
+            hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
+                                      "ramp", "cosine") or "cosine"),
+            hash_growing=bool(getattr(getattr(spec.hash, "c2f", None), "growing", False)),
+            hash_backend=str(getattr(spec.hash, "backend", "pytorch") or "pytorch"),
+            direct_velocity=bool(spec.direct_velocity),
+            coord_min=float(spec.coord_min),
+            coord_max=float(spec.coord_max),
+        ).to(base_vp.device)
+        _init_from = getattr(spec, "init_from", None)
+        if _init_from:
+            sd = torch.load(str(_init_from), map_location=base_vp.device)
+            if isinstance(sd, dict) and "state_dict" in sd:
+                sd = sd["state_dict"]
+            net.load_state_dict(sd)
+            print(f"[reparam] init_from: warm-started MultiParamINR "
+                  f"({net.n_params}-param) <- {_init_from}", flush=True)
+        return net
+
     net = VelocityINR(
         base_vp.detach(),
         vp_mean=float(spec.vp_mean),

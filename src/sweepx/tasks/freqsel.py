@@ -42,7 +42,8 @@ __all__ = [
 def synthesize_shard(out_path: str, solver, vp_true: torch.Tensor,
                      node_grid_xyz: np.ndarray, shot_grid_xyz: np.ndarray,
                      comb: FrequencyComb, wavelet: np.ndarray,
-                     device, batch: int = 8, verbose: bool = False) -> str:
+                     device, batch: int = 8, verbose: bool = False,
+                     models: list | None = None) -> str:
     """Forward-model per-node conventional gathers through ``vp_true`` and
     write an extraction shard npz (same schema as the field extractor).
 
@@ -64,7 +65,11 @@ def synthesize_shard(out_path: str, solver, vp_true: torch.Tensor,
         src = node_grid_xyz[a:b].astype(np.int32)
         rec = np.repeat(shot_grid_xyz[None].astype(np.int32), b - a, axis=0)
         with torch.no_grad():
-            out = solver(wav_t, src, rec, models=[vp_true])[..., 0]
+            # ``models`` overrides the default single-vp model list — e.g. VRZ
+            # synth passes ``[vp_true, z_true]`` so the true obs uses the correct
+            # multi-parameter physics.
+            out = solver(wav_t, src, rec,
+                         models=(models if models is not None else [vp_true]))[..., 0]
         arr = out.double().cpu().numpy()                 # (b-a, nt, n_rec)
         if nt is None:
             nt = arr.shape[1]
