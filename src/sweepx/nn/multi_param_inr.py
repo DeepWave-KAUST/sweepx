@@ -204,6 +204,50 @@ class MultiParamINR(nn.Module):
     def forward(self) -> torch.Tensor:
         return self.render()
 
+    def update_base_models(self, new_bases: Sequence[torch.Tensor],
+                           water_mask: torch.Tensor | None = None,
+                           water_values: Sequence[float] | None = None) -> None:
+        """Swap in new per-channel bases (possibly a different grid) + rebuild
+        coords — multi-parameter analogue of VelocityINR.update_base_velocity.
+
+        The shared encoder + SIREN parameters are KEPT (the whole point of
+        carrying the net across multiscale stages); only base_stack / coords /
+        water mask are refreshed. ``new_bases`` is one tensor per channel (same
+        order as construction), each resampled to the new grid. Pass a
+        ``water_mask`` matched to the new shape to refresh the water pin (a stale
+        mask on a shape change is dropped with a warning).
+        """
+        import warnings
+        new_bases = list(new_bases)
+        if len(new_bases) != self.n_params:
+            raise ValueError(f"expected {self.n_params} bases, got {len(new_bases)}")
+        shape = tuple(int(s) for s in new_bases[0].shape)
+        if len(shape) != self.dim:
+            raise ValueError(f"new base ndim {len(shape)} != self.dim {self.dim}")
+        for k, b in enumerate(new_bases):
+            if tuple(b.shape) != shape:
+                raise ValueError(f"new_bases[{k}] {tuple(b.shape)} != {shape}")
+        dev = self.base_stack.device
+        shape_changed = (shape != self.shape)
+        self.base_stack = torch.stack(
+            [b.detach().to(device=dev, dtype=torch.float32) for b in new_bases], 0).clone()
+        self.shape = shape
+        self.coords = _make_coord_grid(shape, coord_min=self.coord_min,
+                                       coord_max=self.coord_max, device=dev)
+        if water_values is not None:
+            self.water_values = torch.tensor([float(v) for v in water_values],
+                                             dtype=torch.float32, device=dev)
+        if water_mask is not None:
+            if tuple(water_mask.shape) != shape:
+                raise ValueError(
+                    f"water_mask {tuple(water_mask.shape)} != new base shape {shape}")
+            self.water_mask = water_mask.to(device=dev, dtype=torch.bool).clone()
+        elif shape_changed and self.water_mask is not None:
+            warnings.warn(
+                "MultiParamINR.update_base_models: base shape changed; dropping "
+                "stale water_mask (pass water_mask=... to refresh).", stacklevel=2)
+            self.water_mask = None
+
     # ---- rendering -------------------------------------------------------
     def _render_all_at(self, coords: torch.Tensor, shape: Tuple[int, ...],
                        base_stack: torch.Tensor, water_mask: torch.Tensor | None
