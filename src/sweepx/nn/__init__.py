@@ -12,6 +12,7 @@ from .hash_encoding import MultiResHashGrid
 from .triton_hash_encoding import have_triton
 from .growing_hash_grid import GrowingHashGrid
 from .velocity_inr import VelocityINR
+from .multi_param_inr import MultiParamINR
 from .wavelet import SirenWavelet
 from . import diffusion
 from .diffusion import UNet2D, GaussianDiffusion, EMA
@@ -29,6 +30,7 @@ __all__ = [
     "SeabedFreezeMask",
     "TVPrior",
     "VelocityINR",
+    "MultiParamINR",
     "SirenWavelet",
     "diffusion",
     "UNet2D",
