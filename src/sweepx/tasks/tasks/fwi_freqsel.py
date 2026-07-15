@@ -141,7 +141,10 @@ class FreqselRunnerMixin:
                     "synthesize_from_true is a single-device test path")
             vpt = np.load(fspec.true_model_path).astype(np.float32)
             if vpt.shape != gshape:
-                raise ValueError("true/init model shapes differ")
+                # Resample the true model to this stage's grid (mirrors the init
+                # resample) so synthesize_from_true supports multi-stage ladders.
+                vpt = _resample_vp_tensor(
+                    torch.tensor(vpt), gshape).detach().cpu().numpy().astype(np.float32)
             n_nodes = int(fspec.synth_n_nodes)
             sx = np.linspace(8, nx_ - 9, n_nodes).astype(np.int64)
             nodes = np.stack([sx, np.full(n_nodes, ny_ // 2, np.int64),
@@ -199,12 +202,6 @@ class FreqselRunnerMixin:
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
         else:
             if use_reparam:
-                if free_multi:
-                    raise NotImplementedError(
-                        "multi-parameter reparam (free_params) does not yet "
-                        "support multi-stage carry-over (per-channel base "
-                        "resample via update_base_velocity); use a single stage "
-                        "per band and warm-start with reparam.init_from.")
                 # Carry the network across the band: resample only its base to
                 # the new grid, keep hash+SIREN params AND Adam state (the whole
                 # point — the coarse structure learned in prior bands stays).
@@ -217,7 +214,13 @@ class FreqselRunnerMixin:
                 _wm = ((base_t.detach() == _wvp)
                        if bool(getattr(spec.reparam, "mask_water_layer", False))
                        else None)
-                net.update_base_velocity(base_t, water_mask=_wm)
+                if free_multi:
+                    # Multi-parameter: carry the shared trunk, resample EVERY
+                    # channel's base to the new grid (param_bases was rebuilt
+                    # for this stage's dh above). vp (channel 0) drives _wm.
+                    net.update_base_models(param_bases, water_mask=_wm)
+                else:
+                    net.update_base_velocity(base_t, water_mask=_wm)
                 if bool(getattr(stage, "optimizer_reset", False)):
                     optimizer = torch.optim.Adam(net.parameters(),
                                                  lr=float(spec.reparam.lr))
