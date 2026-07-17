@@ -63,6 +63,44 @@ def _dd_backward_tile(reparam_net, model_leaf, bounds, rc):
             _td.all_reduce(p.grad, op=_td.ReduceOp.SUM)
 
 
+def _dd_render_tile_multi(reparam_net, bounds, rc, n_params):
+    """Multi-parameter DD tile render (MultiParamINR): return a list of
+    ``n_params`` detached per-tile leaves. render_window yields ``(n, z-chunk, …)``;
+    z-chunk over the tile, cat along z (axis 1), split into one leaf per channel."""
+    import torch
+    tz0, tz1, rest = bounds[0], bounds[1], bounds[2:]
+    slabs = []
+    with torch.no_grad():
+        for z0 in range(tz0, tz1, rc):
+            z1 = min(tz1, z0 + rc)
+            slabs.append(reparam_net.render_window(z0, z1, *rest))   # (n, z1-z0, …)
+    full = torch.cat(slabs, dim=1)                                   # (n, tile_z, …)
+    return [full[i].detach().requires_grad_(True) for i in range(int(n_params))]
+
+
+def _dd_backward_tile_multi(reparam_net, model_leaves, bounds, rc):
+    """Push EACH channel's tile grad through the shared trunk (z-chunked
+    render_window), then all_reduce net-param grads once across tiles. all_reduce
+    runs unconditionally (zero-fill) so the collective stays consistent even when
+    a tile's leaf grads are all None."""
+    import torch
+    import torch.distributed as _td
+    tz0, tz1, rest = bounds[0], bounds[1], bounds[2:]
+    grads = [lf.grad for lf in model_leaves]
+    idx = [i for i, gg in enumerate(grads) if gg is not None]
+    if idx:
+        for z0 in range(tz0, tz1, rc):
+            z1 = min(tz1, z0 + rc)
+            fields = reparam_net.render_window(z0, z1, *rest)        # (n, z1-z0, …) w/ grad
+            torch.autograd.backward([fields[i] for i in idx],
+                                    [grads[i][z0 - tz0:z1 - tz0] for i in idx])
+    if _td.is_available() and _td.is_initialized():
+        for p in reparam_net.parameters():
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+            _td.all_reduce(p.grad, op=_td.ReduceOp.SUM)
+
+
 def _compute_local_window(sources_chunk, receivers_chunk, full_shape, dh, win_spec):
     """Bounding-box crop enclosing the batch's sources + receivers.
 

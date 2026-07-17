@@ -4,8 +4,10 @@ import os
 from sweep_tasks.schemas import FWISpec
 from sweep_tasks._helpers.dd import (
     _dd_backward_tile,
+    _dd_backward_tile_multi,
     _dd_config,
     _dd_render_tile,
+    _dd_render_tile_multi,
     _dd_tile_bounds,
     _dd_wrap,
 )
@@ -183,12 +185,63 @@ class FreqselRunnerMixin:
                   f"{comb.freqs[-1]:.4f} Hz, nt={nt}, dh={dh}, dt={dt}",
                   flush=True)
 
+        # ---- optional seabed-based water pin (geologically-correct) --------
+        # The seabed_depth npz is a 2-D (ny, nx) bathymetry (meters from z=0)
+        # on the model's lateral extent at ANY resolution; resample it to THIS
+        # stage's (ny_, nx_) — same physical window — then broadcast
+        # z*dh<seabed to a 3-D water mask. Preferred over the
+        # vp==water_vp_m_s heuristic (which only catches voxels stamped to
+        # exactly the water velocity — e.g. the lateral edge-fill — and misses
+        # a water column filled with extrapolated rock).
+        _seabed_override = None
+        if (use_reparam and spec.reparam is not None
+                and bool(getattr(spec.reparam, "mask_water_layer", False))
+                and getattr(spec.reparam, "seabed_depth_path", None) is not None):
+            from sweep_tasks.bathymetry import (
+                load_seabed_depth_npz, water_mask_from_seabed_depth)
+            _sd = load_seabed_depth_npz(spec.reparam.seabed_depth_path)
+            if _sd.ndim != 2:
+                raise ValueError(
+                    f"reparam.seabed_depth_path: expected 2-D (ny, nx) "
+                    f"seabed_depth for 3-D FWI; got shape {tuple(_sd.shape)}")
+            # Registration guard: the npz must cover the SAME lateral extent as
+            # the model (it is resampled to (ny_, nx_) below, so any resolution
+            # is fine) — verify by aspect ratio so a wrong-frame file (e.g. the
+            # full survey-frame bathymetry) is rejected instead of silently
+            # stretched into the model window.
+            _ar_model = float(vp0_native.shape[1]) / float(vp0_native.shape[2])
+            _ar_sd = float(_sd.shape[0]) / float(_sd.shape[1])
+            if abs(_ar_sd - _ar_model) / _ar_model > 0.03:
+                raise ValueError(
+                    f"reparam.seabed_depth_path shape {tuple(_sd.shape)} "
+                    f"(ny/nx={_ar_sd:.3f}) does not match the model lateral "
+                    f"aspect ratio {_ar_model:.3f} (native "
+                    f"{vp0_native.shape[1]}x{vp0_native.shape[2]}); wrong-frame "
+                    "bathymetry? regenerate on the model's lateral window.")
+            _sd_r = torch.nn.functional.interpolate(
+                torch.tensor(_sd, dtype=torch.float32)[None, None],
+                size=(int(ny_), int(nx_)), mode="bilinear",
+                align_corners=True)[0, 0].numpy()
+            _mask_np = water_mask_from_seabed_depth(
+                _sd_r, nz=int(nz), dh_z_m=float(dh))
+            if (nyp, nxp) != (ny_, nx_):
+                _mask_np = np.pad(_mask_np, ((0, 0), (0, nyp - ny_),
+                                             (0, nxp - nx_)), mode="edge")
+            _seabed_override = torch.from_numpy(_mask_np).to(dev)
+            if rank == 0:
+                print(f"[freqsel] seabed water-pin from "
+                      f"{spec.reparam.seabed_depth_path}: "
+                      f"{int(_mask_np.sum()):,}/{_mask_np.size:,} voxels "
+                      f"({100 * _mask_np.mean():.2f}%), seabed depth "
+                      f"[{_sd_r.min():.0f}, {_sd_r.max():.0f}] m", flush=True)
+
         # ---- parameterisation: grid vp or reparam INR ---------------------
         vp = None
         if si == 0:
             if use_reparam:
                 net = _build_reparam_net(spec.reparam, base_t,
                                          spec.model_bounds.get("vp"),
+                                         water_mask_override=_seabed_override,
                                          param_bases=param_bases)
                 net = net.to(dev)
                 if dd_on:
@@ -211,9 +264,13 @@ class FreqselRunnerMixin:
                 # (VelocityINR.update_base_velocity), so water would un-pin at
                 # the 2-8 band. Mirrors the random/CRG path (passes new_mask).
                 _wvp = float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
-                _wm = ((base_t.detach() == _wvp)
-                       if bool(getattr(spec.reparam, "mask_water_layer", False))
-                       else None)
+                # Seabed pin (rebuilt on THIS stage's grid above) wins over the
+                # vp==water_vp heuristic; keep the fallback for legacy configs.
+                _wm = (_seabed_override if _seabed_override is not None
+                       else ((base_t.detach() == _wvp)
+                             if bool(getattr(spec.reparam,
+                                             "mask_water_layer", False))
+                             else None))
                 if free_multi:
                     # Multi-parameter: carry the shared trunk, resample EVERY
                     # channel's base to the new grid (param_bases was rebuilt
@@ -246,14 +303,6 @@ class FreqselRunnerMixin:
             eps=float(fspec.eps))
 
         _dd_rc = _dd_config()[3] if dd_on else 0
-        # Multi-parameter reparam (VRZ option C etc.): the net has one output
-        # channel per freed solver-model parameter (free_multi / n_free were set
-        # above). DD needs per-channel tile render/backward — not yet wired.
-        if free_multi and dd_on:
-            raise NotImplementedError(
-                "reparam.free_params (multi-parameter INR) is not yet wired for "
-                "domain decomposition (per-channel tile render/backward); run it "
-                "on a single GPU / non-DD config.")
 
         def _leaf():
             if not use_reparam:
@@ -273,6 +322,10 @@ class FreqselRunnerMixin:
         # them jointly. _get_models() returns (leaves, models); single-param
         # keeps the Gardner-coupled model list via _solver_models.
         def _leaves():
+            if dd_on:
+                # DD: render ONLY this rank's solver tile, per channel -> N leaves.
+                return _dd_render_tile_multi(
+                    net, _dd_tile_bounds(solver), _dd_rc, n_free)
             with torch.no_grad():
                 fields = net.render_all(chunk_rows=chunk_rows)
             return [fields[i].detach().clone().requires_grad_(True)
@@ -403,19 +456,30 @@ class FreqselRunnerMixin:
                     np.savez(os.path.join(_gdump, f"grad_s{si}_it{it}_single.npz"),
                              g=g.detach().cpu().numpy())
             if free_multi:
-                # Joint N-channel reparam backward (single GPU): each freed
-                # parameter's own leaf carries dL/d(that parameter); map them all
-                # onto the shared trunk in one chunked pass. DD is guarded out
-                # above; illumination precond is not supported on this path.
-                grads = []
-                for _lf in leaves:
-                    _gg = _lf.grad
-                    if _gg is None:
-                        _gg = torch.zeros_like(net.base_stack[0])
-                    else:
-                        _gg[water_t] = 0.0
-                    grads.append(_gg)
-                net.backward_gradients(grads, chunk_rows=chunk_rows)
+                # Joint N-channel reparam backward. Each freed parameter's own
+                # leaf carries dL/d(that parameter); map them all onto the shared
+                # trunk. illumination precond is not supported on this path.
+                if dd_on:
+                    # DD: leaves are per-channel TILE renders; zero the water in
+                    # this rank's tile window, push each channel through the net
+                    # tile-locally, all_reduce param grads across tiles.
+                    _tb = _dd_tile_bounds(solver)
+                    _wt = water_t[_tb[0]:_tb[1], _tb[2]:_tb[3], _tb[4]:_tb[5]]
+                    for _lf in leaves:
+                        if _lf.grad is not None:
+                            _lf.grad[_wt] = 0.0
+                    _dd_backward_tile_multi(net, leaves, _tb, _dd_rc)
+                else:
+                    # single GPU: full-grid leaves -> one chunked backward pass.
+                    grads = []
+                    for _lf in leaves:
+                        _gg = _lf.grad
+                        if _gg is None:
+                            _gg = torch.zeros_like(net.base_stack[0])
+                        else:
+                            _gg[water_t] = 0.0
+                        grads.append(_gg)
+                    net.backward_gradients(grads, chunk_rows=chunk_rows)
             elif dd_on and use_reparam:
                 # Tile-grad path (mirrors multisource _dd_backward_tile): g
                 # covers only this rank's tile window; zero the water inside
