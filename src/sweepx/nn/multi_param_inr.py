@@ -311,6 +311,35 @@ class MultiParamINR(nn.Module):
         """Render the PRIMARY parameter (vp, channel 0) — VelocityINR-compatible."""
         return self.render_all(chunk_rows=chunk_rows)[0]
 
+    def render_window(self, *bounds: int) -> torch.Tensor:
+        """Render a rectangular window over ALL channels -> ``(n_params, *win)``.
+
+        Bounds: 2-D ``(z0, z1, x0, x1)``, 3-D ``(z0, z1, y0, y1, x0, x1)`` — the
+        N-channel analogue of VelocityINR.render_window, used by the DD tile
+        render. coords/base_stack may live on CPU for huge global grids; only
+        this window's slices move to the compute device.
+        """
+        if len(bounds) != 2 * self.dim:
+            raise ValueError(f"need {2 * self.dim} bounds for {self.dim}-D; got {len(bounds)}")
+        slices = []
+        win_shape = []
+        for d in range(self.dim):
+            lo = max(0, int(bounds[2 * d]))
+            hi = min(self.shape[d], int(bounds[2 * d + 1]))
+            slices.append(slice(lo, hi))
+            win_shape.append(hi - lo)
+        win_shape = tuple(win_shape)
+        sl = tuple(slices)
+        coords_win = self.coords.reshape(*self.shape, self.dim)[sl].reshape(-1, self.dim)
+        base_win = self.base_stack[(slice(None),) + sl]                 # (n, *win)
+        wm_win = self.water_mask[sl] if self.water_mask is not None else None
+        dev = next(self.parameters()).device
+        coords_win = coords_win.to(dev, non_blocking=True)
+        base_win = base_win.to(dev, non_blocking=True)
+        if wm_win is not None:
+            wm_win = wm_win.to(dev, non_blocking=True)
+        return self._render_all_at(coords_win, win_shape, base_win, wm_win)
+
     # ---- joint chunked backward -----------------------------------------
     def backward_gradients(self, grads: Sequence[torch.Tensor], *,
                            chunk_rows: int = 64) -> None:
