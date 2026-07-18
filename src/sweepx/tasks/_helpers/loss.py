@@ -77,7 +77,8 @@ def _loss_sum(syn, obs_chunk, loss_spec, mask_chunk=None, *, window_mode=False):
     return pw.sum()
 
 
-def _diving_window_mask(chunk_src, chunk_rec, node_asinh, nt, dt, dh, loss_spec, dev):
+def _diving_window_mask(chunk_src, chunk_rec, node_asinh, nt, dt, dh, loss_spec, dev,
+                        frame_delay_s=0.0):
     """On-the-fly diving-wave mute mask for one shot-chunk.
 
     CRG reciprocity: ``chunk_src`` is the OBN node ("shot"), ``chunk_rec`` are
@@ -93,6 +94,21 @@ def _diving_window_mask(chunk_src, chunk_rec, node_asinh, nt, dt, dh, loss_spec,
                   to this chunk's nodes; NaN row -> that shot gets an all-ones
                   (no-op) mask so it is not silently muted.
       nt, dt: time samples / step (s) of the syn/obs axis.
+      frame_delay_s: MECHANICAL offset between the pick database's time datum
+                  and the misfit's time axis, which the caller knows and the
+                  user should not have to re-type. Concretely: a SIREN-pipeline
+                  wavelet carries a ``source_delay_s`` zero-prepad, so the runner
+                  rolls obs LATER by ``obs_prepad_samples`` to line it up with
+                  syn — while the picks (and hence the asinh fit) are on the RAW
+                  field-data datum. Pass ``obs_prepad_samples * dt``.
+                  Without it the window sits that far too early: it still brackets
+                  the first break (the window is wide enough to absorb the error,
+                  so a picks-inside-window check CANNOT see this bug), but it is
+                  de-centred — on a production field wavelet the delay error
+                  shrinks the post-arrival window from ``minwin`` 0.5 s to 0.3 s,
+                  which at 2-4 Hz is barely one cycle of the wavelet.
+                  ``loss_spec.diving_obs_delay_s`` is added ON TOP as the user's
+                  own correction.
     Returns float32 mask (nsh, nt, nrec, 1) on ``dev``.
     """
     import torch
@@ -101,35 +117,94 @@ def _diving_window_mask(chunk_src, chunk_rec, node_asinh, nt, dt, dh, loss_spec,
     minwin = float(loss_spec.diving_minwin_s)
     taper = max(float(loss_spec.diving_taper_s), dt)
     vw = float(loss_spec.diving_water_vel)
-    delay = float(loss_spec.diving_obs_delay_s)
+    delay = float(loss_spec.diving_obs_delay_s) + float(frame_delay_s)
     dh = float(dh)
 
-    src = torch.as_tensor(np.asarray(chunk_src), dtype=torch.float64)   # (nsh,npts,ndim)
-    rec = torch.as_tensor(np.asarray(chunk_rec), dtype=torch.float64)   # (nsh,nrec,ndim)
+    # Built on ``dev`` in float32. The (nt, nrec) grid is the whole cost, and
+    # doing it in float64 on the CPU measured 1.6 s per node = ~37 s/iter at
+    # batchsize 24 — enough to dominate the solver, for what is a geometry-only
+    # constant. Times here are O(10 s) at millisecond dt, comfortably inside
+    # float32's resolution.
+    f32 = torch.float32
+    src = torch.as_tensor(np.asarray(chunk_src), dtype=f32, device=dev)  # (nsh,npts,ndim)
+    rec = torch.as_tensor(np.asarray(chunk_rec), dtype=f32, device=dev)  # (nsh,nrec,ndim)
     nsh, nrec = rec.shape[0], rec.shape[1]
     # node position = mean of the shot points (single-point shot -> itself)
     node = src.mean(dim=1, keepdim=True)                               # (nsh,1,ndim)
     off = torch.linalg.norm((rec - node), dim=2) * dh                  # (nsh,nrec) metres
-    par = torch.as_tensor(np.asarray(node_asinh), dtype=torch.float64) # (nsh,3)
+    par = torch.as_tensor(np.asarray(node_asinh), dtype=f32, device=dev)  # (nsh,3)
     ok = torch.isfinite(par).all(dim=1)                               # (nsh,) valid rows
     # Replace NaN/invalid rows with a finite dummy BEFORE the math so 0*NaN
     # can't poison the taper; the NaN shots are overridden to all-ones below.
-    par = torch.where(ok.view(nsh, 1), par, torch.tensor([0.1, 1800.0, 0.8], dtype=torch.float64))
+    par = torch.where(ok.view(nsh, 1), par,
+                      torch.tensor([0.1, 1800.0, 0.8], dtype=f32, device=dev))
     t0 = par[:, 0:1]; v0 = par[:, 1:2].clamp(min=1.0); k = par[:, 2:3].clamp(min=1e-3)
     center = t0 + (2.0 / k) * torch.arcsinh(k * off / (2.0 * v0))      # (nsh,nrec)
-    twd = off / vw
     ttop = center - pre + delay
-    tbot = torch.maximum(twd, center + minwin) + delay
-    t = (torch.arange(int(nt), dtype=torch.float64) * dt)             # (nt,)
-    tt = t.view(1, int(nt), 1)
+    tbot = torch.maximum(off / vw, center + minwin) + delay
+    t = torch.arange(int(nt), dtype=f32, device=dev).view(1, int(nt), 1) * dt
     a = ttop.view(nsh, 1, nrec); b = tbot.view(nsh, 1, nrec)
-    core = ((tt >= a) & (tt <= b)).to(torch.float64)
-    up = ((tt >= a - taper) & (tt < a)).to(torch.float64)
-    core = core + up * 0.5 * (1 - torch.cos(np.pi * (tt - (a - taper)) / taper))
-    dn = ((tt > b) & (tt <= b + taper)).to(torch.float64)
-    core = core + dn * 0.5 * (1 + torch.cos(np.pi * (tt - b) / taper))
-    core = torch.where(ok.view(nsh, 1, 1), core, torch.ones_like(core))  # NaN-param shot -> all ones (no-op)
-    return core.to(torch.float32).unsqueeze(-1).to(dev)               # (nsh,nt,nrec,1)
+    # Cosine-tapered box as the product of two clamped cosine ramps. Identical
+    # to the piecewise core+up+dn form (each ramp is flat 1 across the core and
+    # 0 beyond the taper) but with ~3x fewer (nt, nrec) temporaries.
+    up = ((t - (a - taper)) / taper).clamp_(0.0, 1.0)
+    dn = ((b + taper - t) / taper).clamp_(0.0, 1.0)
+    w = (0.5 - 0.5 * torch.cos(np.pi * up)) * (0.5 - 0.5 * torch.cos(np.pi * dn))
+    w = torch.where(ok.view(nsh, 1, 1), w, torch.ones_like(w))  # NaN-param shot -> no-op
+    return w.unsqueeze(-1)                                            # (nsh,nt,nrec,1)
+
+
+def _diving_asinh_for_nodes(db_path, node_model_xy, tol_m=25.0, min_picks=50):
+    """Match a diving-wave pick database's per-node moveout params onto this
+    run's nodes, ready for ``_diving_window_mask``'s ``node_asinh``.
+
+    The database stores ``node_rec`` in the SAME rotated model frame as
+    ``frame.to_model(plan.group_xyz)``, so the match is a plain 2-D lookup in
+    metres — no grid/origin conversion, hence immune to the model_plan crop and
+    the in-window filter's group renumbering.
+
+    Among the candidates inside ``tol_m`` this takes the one with the MOST
+    picks, NOT the nearest. A survey node can appear TWICE in the database (a
+    full deployment plus a small remnant, 0-4 m apart), and the remnant's asinh
+    fit is degenerate — too few picks, so v0 pins at the fit bound and the
+    centre lands ~1 s off. They sit closer together than the match is precise,
+    so nearest-neighbour picks between them by coin flip; on the production
+    field plan that handed a few nodes a single-digit-pick fit, which would
+    have muted their diving wave away entirely. ``node_fitok`` does NOT catch
+    this (it reads 667/667 ok), hence the explicit ``min_picks`` floor.
+
+    Nodes with no usable fit get a NaN row, which ``_diving_window_mask`` turns
+    into an all-ones no-op mask; the caller is expected to report that count,
+    since an unwindowed node contributes its FULL record (reflections +
+    multiples) to a diving-wave-only misfit.
+
+    Args:
+      node_model_xy: (G, 2) rotated model-frame xy of this run's nodes.
+    Returns (float32 (G, 3) of (t0, v0, k), n_matched).
+    """
+    from scipy.spatial import cKDTree
+
+    db = np.load(db_path)
+    rec = np.asarray(db["node_rec"], dtype=np.float64)      # (N,3) rotated metres
+    par = np.asarray(db["node_asinh"], dtype=np.float64)    # (N,3) (t0, v0, k)
+    if "node_npick" in db.files:
+        npick = np.asarray(db["node_npick"], dtype=np.int64)
+    else:
+        npick = np.bincount(np.asarray(db["node_inv"]), minlength=len(par))
+    good = np.flatnonzero(np.isfinite(par).all(axis=1) & (npick >= int(min_picks)))
+    out = np.full((len(node_model_xy), 3), np.nan, dtype=np.float32)
+    if good.size == 0:
+        return out, 0
+    xy = np.asarray(node_model_xy, dtype=np.float64)
+    cand = cKDTree(rec[good, :2]).query_ball_point(xy, r=float(tol_m))
+    n_hit = 0
+    for g, c in enumerate(cand):
+        if not c:
+            continue
+        best = good[c[int(np.argmax(npick[good[c]]))]]
+        out[g] = par[best].astype(np.float32)
+        n_hit += 1
+    return out, n_hit
 
 
 def _mask_chunk(data_mask, chunk, dev):

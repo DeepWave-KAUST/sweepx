@@ -15,7 +15,11 @@ from sweep_tasks._helpers.dd import (
     _dd_wrap,
 )
 from sweep_tasks._helpers.illumination import _apply_illumination_precond
-from sweep_tasks._helpers.loss import _compute_loss
+from sweep_tasks._helpers.loss import (
+    _compute_loss,
+    _diving_asinh_for_nodes,
+    _diving_window_mask,
+)
 from sweep_tasks._helpers.metadata import _dump_run_metadata
 from sweep_tasks._helpers.optimizer import (
     _build_optimizer,
@@ -23,6 +27,7 @@ from sweep_tasks._helpers.optimizer import (
 )
 from sweep_tasks._helpers.plan_apply import _normalize_fwi_init_models
 from sweep_tasks._helpers.plotting import (
+    _dump_diving_window_qc,
     _dump_receiver_rotation_qc,
     _plot_loss_curve,
 )
@@ -419,6 +424,35 @@ class MultisourceRunnerMixin:
             _t = _stage("setup in-window plan filter (filter_rows+drop_empty)", _t)
         eligible_groups = np.flatnonzero(slot_in).astype(np.int64)
 
+        # --- 4a') Diving-wave window: match the pick database's per-node
+        # moveout params onto the nodes ONCE, here — AFTER the in-window
+        # filter, whose drop_empty_groups() renumbers groups (matching before
+        # it would silently mis-assign every node's window). The window itself
+        # is geometry-only and gets built per node inside the misfit loop.
+        _diving_asinh_g = None
+        if getattr(spec.loss, "diving_window_db", None):
+            if not (dz_m == dy_m == dx_m):
+                raise ValueError(
+                    "loss.diving_window_db needs an isotropic grid: the window's "
+                    "offset is |rec - node| * dh with a SCALAR dh, so anisotropic "
+                    f"cells would mis-scale it; got dh_xyz_m=({dz_m}, {dy_m}, {dx_m})."
+                )
+            _diving_asinh_g, _n_hit = _diving_asinh_for_nodes(
+                spec.loss.diving_window_db, src_model_xy)
+            _n_miss = int(plan.n_groups) - _n_hit
+            print(f"[multisource] diving window: matched {_n_hit}/{plan.n_groups} "
+                  f"nodes to {Path(spec.loss.diving_window_db).name}")
+            if _n_miss:
+                print(f"[multisource] WARNING: {_n_miss} node(s) have no pick -> "
+                      f"NOT windowed (full record enters the misfit)")
+            if _n_hit == 0:
+                raise ValueError(
+                    f"loss.diving_window_db matched 0/{plan.n_groups} nodes within "
+                    f"25 m. Is {spec.loss.diving_window_db} in the same rotated "
+                    f"frame as geometry.rotation_metadata?"
+                )
+            _t = _stage("diving-window node match", _t)
+
         # --- 4b) QC: dump the receiver layout in BOTH UTM (raw) and model
         # frame (post-rotation, origin-shifted) so the user can confirm the
         # rotation_metadata.json gives the same survey layout as the
@@ -742,7 +776,13 @@ class MultisourceRunnerMixin:
         # where the CDF of intra-file gaps clusters near the stride).
         _coalesce_gap = max(0, 4 * _trace_stride_bytes)
         reader = PlanReader(
-            plan, mmap=True,
+            # On-demand (cache_all=False) random reads on wekafs/Lustre: use
+            # os.pread (mmap=False) so each read releases the GIL and the
+            # DataLoader workers / DDP ranks read in parallel instead of
+            # GIL-serialising on mmap page faults — the dominant wait_io cost
+            # once compute is small (multi-GPU DDP, few shots/rank). Eager
+            # cache_all=True does one bulk sequential read where mmap is fine.
+            plan, mmap=bool(spec.obs.plan.cache_all),
             cache_all=bool(spec.obs.plan.cache_all),
             trace_cache_bytes=int(getattr(sampling_cfg, "trace_cache_bytes", 0)),
             coalesce_gap=_coalesce_gap,
@@ -1398,6 +1438,22 @@ class MultisourceRunnerMixin:
 
             # Grid-indexed sources / receivers for this iter.
             sources_grid = src_grid_xyz[batch.group_indices]  # (B, 3)
+            _diving_asinh_slot = (None if _diving_asinh_g is None
+                                  else _diving_asinh_g[batch.group_indices])  # (B, 3)
+            if _diving_asinh_slot is not None and not (_percrg and not dd_on):
+                # Fail loudly: the window is applied ONLY in the per-CRG
+                # on-demand misfit loop. Anywhere else it is a silent no-op and
+                # a "diving-wave" inversion would quietly fit the FULL record —
+                # reflections, multiples and all. Note the dispatch below reads
+                # ``if dd_on: ... elif _percrg:``, so DD WINS even when
+                # per_crg_independent is true: testing `_percrg` alone is not
+                # enough to know the window will actually be reached.
+                raise ValueError(
+                    "loss.diving_window_db is applied only in the per-CRG on-demand "
+                    "misfit loop, but this run takes the "
+                    f"{'DD (dd_on wins over per_crg_independent)' if dd_on else 'shared-receiver'}"
+                    " misfit branch, where the window would be silently ignored."
+                )
             if _percrg:
                 # No shared receiver grid — each node's geometry is built
                 # per-shot below from batch.recv_rows_padded. rows0 (for QC)
@@ -1598,20 +1654,131 @@ class MultisourceRunnerMixin:
                 # valid elements across the whole batch (set before the loop).
                 _nrec_j = valid_mask_local.sum(dim=1).to(torch.int64).cpu().numpy()
                 _nt_p = int(obs_t.shape[-1])
-                global_norm = float(int(valid_mask_local.sum().item()) * _nt_p) or 1.0
                 loss_t = torch.zeros((), device=dev)
                 syn = None
                 _B_loc = local_end - local_start
+
+                def _win_j(_j, _recv_j):
+                    """Diving-wave window for node _j -> (1, nt, nij, 1) or None.
+                    CRG reciprocity: sources_super[_j] IS the node, _recv_j are
+                    the survey shots, which is exactly what the mask expects.
+
+                    Must pass _cur_dh, NOT dx_m: a stage with ``dh_m`` re-projects
+                    src_grid_xyz/plan_grid_xyz onto the stage grid (_apply_stage_dh
+                    -> _grid_for_dh) and moves _cur_dh with them, but dx_m stays
+                    pinned to the base spacing. Feeding dx_m would scale every
+                    offset by _cur_dh/dx_m — on a 75 -> 37.5 m refinement that is
+                    2x, which puts the window entirely off the diving wave, with
+                    no crash and no shape error."""
+                    if _diving_asinh_slot is None:
+                        return None
+                    return _diving_window_mask(
+                        sources_super[_j:_j + 1][:, None, :], _recv_j,
+                        _diving_asinh_slot[local_start + _j:local_start + _j + 1],
+                        _nt_p, effective_dt, _cur_dh, spec.loss, dev,
+                        frame_delay_s=obs_prepad_samples * effective_dt,
+                    )
+
+                _n_samp = float(int(valid_mask_local.sum().item()) * _nt_p) or 1.0
+                if _diving_asinh_slot is None or spec.loss.kind == "trace_cosine":
+                    # trace_cosine's "pointwise" tensor is the PER-TRACE value
+                    # broadcast across time, so windowing does NOT shrink the sum
+                    # (each surviving trace still contributes (1-cos)*nt) and
+                    # sum/(traces*nt) stays the per-trace mean. Normalising it by
+                    # the kept-sample count instead would inflate the gradient by
+                    # 1/kept_fraction — ~3x here, and batch-dependent (the kept
+                    # fraction varies 27-34% per node), i.e. a drifting effective lr.
+                    global_norm = _n_samp
+                else:
+                    # Pointwise misfits DO shrink with the window (~70% of the
+                    # summed residual is muted), so normalise by the KEPT sample
+                    # weight to keep the gradient scale — and the tuned lr —
+                    # comparable to an unwindowed run. Needs a geometry-only
+                    # pre-pass because backward() runs per node below and so needs
+                    # the norm up front; recomputing each mask is far cheaper than
+                    # holding all B of them (tens of MB each at a production
+                    # nt x nrec in float32), which is this loop's whole purpose.
+                    _gn = 0.0
+                    for _j in range(_B_loc):
+                        _w0 = _win_j(_j, receivers_super[_j, :int(_nrec_j[_j])][None])
+                        _gn += float(_w0.sum().item())
+                        del _w0
+                    global_norm = _gn or 1.0
+                # DDP: global_norm MUST be the GLOBAL kept-sample count. Each rank
+                # normalises its own nodes' loss by this before backward, and the
+                # per-shot path all_reduce-SUMs vp_leaf.grad across ranks (~line
+                # 1847). With a LOCAL norm (this rank's ~B/world_size nodes) that
+                # SUM inflates the gradient by ~world_size — an 8x effective lr on
+                # 8 GPUs that silently diverges a long run. all_reduce-ing the norm
+                # makes the summed, globally-normalised gradient equal the 1-GPU run.
+                if dist_info.is_distributed:
+                    import torch.distributed as _td
+                    _gtn = torch.tensor(float(global_norm), device=dev)
+                    _td.all_reduce(_gtn, op=_td.ReduceOp.SUM)
+                    global_norm = float(_gtn.item()) or 1.0
                 for _j in range(_B_loc):
                     _nij = int(_nrec_j[_j])
                     _recv_j = receivers_super[_j, :_nij][None]                  # (1,nij,3)
                     _obs_j = obs_t[local_start + _j, :_nij].to(dev)[None]       # (1,nij,nt)
+                    if bandpass_spec is not None:
+                        # obs MUST be band-limited HERE. The stage bandpass upstream
+                        # writes into ``obs_super``, but this loop re-slices the RAW
+                        # host ``obs_t`` — so that filter is a DEAD STORE on the
+                        # per-CRG path and obs reached the misfit unfiltered. Measured
+                        # on a low-frequency field config: a tiny fraction of obs energy
+                        # in band, most of the rest far above it, while syn
+                        # (band-limited via the wavelet, ~line 1346) had ~80% in
+                        # band. Two signals in
+                        # disjoint bands are near-orthogonal, which pinned trace_cosine
+                        # at ~1.0 (cos 0.015); filtering here lifts cos to 0.52-0.74.
+                        # Done per node on-device after the H2D copy: obs_t is
+                        # deliberately kept on the host (a full batch would not fit
+                        # on-device), so filtering it whole would undo that.
+                        _obs_j = _bandpass_torch_fft(
+                            _obs_j, lo=float(bandpass_spec.lo_hz),
+                            hi=float(bandpass_spec.hi_hz), dt=float(effective_dt),
+                            order=int(bandpass_spec.order), axis=-1)
+                        if obs_prepad_samples > 0:
+                            # Re-zero the prepad head: the zero-phase filter smears
+                            # energy back across the roll's zeroed samples.
+                            _obs_j = _obs_j.clone()
+                            _obs_j[..., :obs_prepad_samples] = 0.0
                     _syn_j = solver(
                         wavelet_super[_j:_j + 1], sources_super[_j:_j + 1],
                         _recv_j, models=models, source_encoding=False,
                     )
-                    _loss_j = loss_fn(
-                        _syn_j, _obs_j.permute(0, 2, 1).unsqueeze(-1)).sum()
+                    _obs_4d = _obs_j.permute(0, 2, 1).unsqueeze(-1)
+                    _w = _win_j(_j, _recv_j)
+                    if _w is None:
+                        _loss_j = loss_fn(_syn_j, _obs_4d).sum()
+                    else:
+                        # MUTE-THEN-MISFIT: window syn AND obs before the misfit,
+                        # so the misfit only ever sees the diving-wave window.
+                        _loss_j = loss_fn(_syn_j * _w, _obs_4d * _w).sum()
+                        # QC the data the misfit ACTUALLY sees. Dumped here, at
+                        # the loss call site, so it is the very tensors that go
+                        # into loss_fn, rather than a side reconstruction that
+                        # could agree with the picks while the real misfit sees
+                        # something else. That distinction is not academic: this
+                        # dump is what exposed obs arriving unfiltered.
+                        if (_j == 0 and dist_info.is_root
+                                and epoch % spec.show_every == 0):
+                            try:
+                                _rec_j = receivers_super[_j, :_nij]
+                                _off_j = (np.linalg.norm(
+                                    _rec_j - sources_super[_j], axis=1) * _cur_dh)
+                                # Pass real positions: the QC sorts by acquisition
+                                # position, not offset. The window is a function of
+                                # |offset| and so is azimuthally symmetric, which
+                                # offset-sorting would hide.
+                                _dump_diving_window_qc(
+                                    _obs_4d, _syn_j, _w, _off_j, effective_dt,
+                                    epoch, int(batch.group_indices[local_start + _j]),
+                                    qc_dir,
+                                    rec_xy=_rec_j[:, :2] * _cur_dh,
+                                    node_xy=sources_super[_j][:2] * _cur_dh)
+                            except Exception as _e:      # QC must never kill a run
+                                print(f"[multisource] diving-window QC failed: {_e}")
                     (_loss_j / global_norm).backward()
                     loss_t = loss_t + _loss_j.detach()
                     if _j == _B_loc - 1:
@@ -1698,6 +1865,10 @@ class MultisourceRunnerMixin:
                     and v_leaf_for_illum.grad is not None):
                 import torch.distributed as _td
                 _td.all_reduce(v_leaf_for_illum.grad, op=_td.ReduceOp.SUM)
+                # loss_t is this rank's node-subset sum; SUM it so the logged
+                # loss_t/global_norm is the true global per-trace mean, not the
+                # ~1/world_size fragment each rank would otherwise report.
+                _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
                 # Also sync illuminations stored on the solver for the
                 # precond step below (per-rank partial sums → global sum).
                 for _attr in ("source_illumination", "receiver_illumination"):
