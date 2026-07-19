@@ -48,6 +48,16 @@ def _build_argparser() -> argparse.ArgumentParser:
     ps.add_argument("--extra", nargs=argparse.REMAINDER, help="Extra flags passed to `vllm serve`.")
     ps.set_defaults(func=_cmd_serve)
 
+    # ui ------------------------------------------------------------------
+    pu = sub.add_parser("ui", help="Launch the Gradio chat window (drag-drop files, inline figures).")
+    pu.add_argument("--host", default="0.0.0.0", help="Bind address (default 0.0.0.0).")
+    pu.add_argument("--port", type=int, default=7860, help="Port (default 7860).")
+    pu.add_argument("--url", default=None, help=f"vLLM URL the agent talks to (default: $SWEEP_AGENT_LLM_URL or {DEFAULT_URL}).")
+    pu.add_argument("--model", default=None, help="Model name/alias (default: $SWEEP_AGENT_LLM_MODEL).")
+    pu.add_argument("--max-steps", type=int, default=24, help="Max tool-call rounds per user turn.")
+    pu.add_argument("--share", action="store_true", help="Create a public Gradio share link.")
+    pu.set_defaults(func=_cmd_ui)
+
     # tools ---------------------------------------------------------------
     pt = sub.add_parser("tools", help="List the tools the LLM can call.")
     pt.add_argument("--json", action="store_true", help="Emit OpenAI tool specs as JSON.")
@@ -56,9 +66,26 @@ def _build_argparser() -> argparse.ArgumentParser:
     return p
 
 
+def _cmd_ui(args: argparse.Namespace) -> int:
+    # The backend reads the endpoint from the environment; honour --url/--model
+    # so the web UI can be pointed at the right vLLM port (the default 8000 may
+    # collide with other local services).
+    if args.url:
+        os.environ["SWEEP_AGENT_LLM_URL"] = args.url
+    if args.model:
+        os.environ["SWEEP_AGENT_LLM_MODEL"] = args.model
+    os.environ["SWEEP_AGENT_MAX_STEPS"] = str(args.max_steps)
+    # Single launch path: webui.launch() owns theme/css/js + allowed_paths.
+    from sweep_agent.webui import launch
+
+    launch(server_name=args.host, server_port=args.port, share=args.share)
+    return 0
+
+
 def _cmd_chat(args: argparse.Namespace) -> int:
+    from sweep_agent.tools.selection import select_tool_names
     backend = VLLMBackend(url=args.url, model=args.model)
-    agent = Agent(llm=backend, max_steps=args.max_steps)
+    agent = Agent(llm=backend, max_steps=args.max_steps, tool_selector=select_tool_names)
     print(f"[sweep-agent] model={backend.model_id}  url={backend.url}")
     print("[sweep-agent] type your request, Ctrl-D to exit.\n")
     try:

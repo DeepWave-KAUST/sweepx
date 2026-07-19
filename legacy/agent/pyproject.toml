@@ -26,8 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "sweep-tasks",
-    "sweep-viz",
+    "sweep-tasks",   # provides sweep_tasks.viz (absorbed from the retired sweep-viz)
     "pydantic>=2.0",
     "httpx>=0.25",
     "PyYAML>=6.0",
