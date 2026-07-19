@@ -73,8 +73,14 @@ class Registry:
     def get(self, name: str) -> Tool | None:
         return self.tools.get(name)
 
-    def openai_specs(self) -> list[dict[str, Any]]:
-        return [t.openai_spec() for t in self.tools.values()]
+    def openai_specs(self, names: list[str] | None = None) -> list[dict[str, Any]]:
+        """OpenAI tool specs. If ``names`` is given, only those tools (in registry
+        order) — used for per-query tool subsetting to keep the small model's
+        choice space (and the prompt) small."""
+        if names is None:
+            return [t.openai_spec() for t in self.tools.values()]
+        keep = set(names)
+        return [t.openai_spec() for n, t in self.tools.items() if n in keep]
 
     def names(self) -> list[str]:
         return list(self.tools)
@@ -111,5 +117,7 @@ import sweep_agent.tools.execute          # noqa: E402,F401
 import sweep_agent.tools.status           # noqa: E402,F401
 import sweep_agent.tools.visualize        # noqa: E402,F401
 import sweep_agent.tools.orchestrate      # noqa: E402,F401
+import sweep_agent.tools.synth            # noqa: E402,F401
+import sweep_agent.tools.analysis         # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]
