@@ -1,6 +1,6 @@
 """Visualization tools — thin LLM-callable wrappers over ``sweep_tasks.viz.wavefield``.
 
-The actual plotting lives in sweep-viz (plot_snapshot / animate_snapshots /
+The actual plotting lives in sweep_tasks.viz (plot_snapshot / animate_snapshots /
 compare_snapshots). These tools only handle the agent-side concerns — locating a
 task's snapshots.npy and cropping the PML — then delegate the drawing. Pass
 ``abcn`` (the PML thickness used in the run) so the absorbing border is cropped.
@@ -82,7 +82,7 @@ class PlotWavefieldParams(BaseModel):
 @register(
     name="plot_wavefield",
     description=(
-        "Render one wavefield snapshot from a finished wavefield task to a PNG (via sweep-viz). "
+        "Render one wavefield snapshot from a finished wavefield task to a PNG (via sweep_tasks.viz). "
         "Crops the PML border using `abcn`. Returns the saved image path. Use after run_task on a "
         "wavefield spec."
     ),
@@ -128,7 +128,7 @@ class CompareWavefieldsParams(BaseModel):
     name="compare_wavefields",
     description=(
         "Plot one snapshot from several wavefield tasks side by side with a shared color scale (via "
-        "sweep-viz) — e.g. Acoustic vs VTI vs TTI wavefronts. task_dirs must be distinct, real "
+        "sweep_tasks.viz) — e.g. Acoustic vs VTI vs TTI wavefronts. task_dirs must be distinct, real "
         "wavefield runs (no path fallback — a wrong/forward dir errors). Returns the image path."
     ),
     params_model=CompareWavefieldsParams,
@@ -191,7 +191,7 @@ class MakeGifParams(BaseModel):
 @register(
     name="make_wavefield_gif",
     description=(
-        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweep-viz animate_snapshots). "
+        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweep_tasks.viz animate_snapshots). "
         "Returns the saved path. Use after a wavefield run with several snapshot_times — e.g. to show "
         "propagation under topography."
     ),
@@ -245,7 +245,7 @@ class PlotShotGatherParams(BaseModel):
     name="plot_shot_gather",
     description=(
         "Plot a shot gather (synthetic seismic record) from a forward/FWI task's record.npy — image "
-        "display by default, or wiggle. Drawn via sweep-viz. Use after a forward run when the user "
+        "display by default, or wiggle. Drawn via sweep_tasks.viz. Use after a forward run when the user "
         "wants to SEE the record / shot gather / 炮记录. Returns the saved image path."
     ),
     params_model=PlotShotGatherParams,
@@ -301,7 +301,7 @@ class PlotModelParams(BaseModel):
     name="plot_model",
     description=(
         "Plot velocity models side by side from an FWI/migration run — typically initial vs inverted vs "
-        "true, with an inverted−true residual panel — on a shared colour scale (via sweep-viz). Use after "
+        "true, with an inverted−true residual panel — on a shared colour scale (via sweep_tasks.viz). Use after "
         "an FWI run when the user wants to SEE the inverted model / result / 反演结果. Pass "
         "true_model_path and init_model_path (the same files you gave the builder) for the full comparison. "
         "Returns the saved image path."
@@ -362,7 +362,7 @@ class PlotConvergenceParams(BaseModel):
 @register(
     name="plot_convergence",
     description=(
-        "Plot the FWI loss / misfit convergence curve from a task's loss.npy (via sweep-viz). Use after "
+        "Plot the FWI loss / misfit convergence curve from a task's loss.npy (via sweep_tasks.viz). Use after "
         "an FWI run when the user wants to see how the inversion converged / loss 曲线 / 收敛. Returns the "
         "saved image path."
     ),
@@ -582,7 +582,7 @@ class PlotVelocityModelParams(BaseModel):
         "Plot a velocity/parameter model from a .npy FILE so the user can SEE what a model looks like "
         "BEFORE running anything (2-D heat-map, or three orthogonal slices for a 3-D cube). Use when the "
         "user uploads/points at a model and asks to see it / 看看这个模型 / what does this model look like. "
-        "Drawn via sweep-viz. Returns the saved image path and the model shape."
+        "Drawn via sweep_tasks.viz. Returns the saved image path and the model shape."
     ),
     params_model=PlotVelocityModelParams,
 )

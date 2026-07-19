@@ -99,7 +99,7 @@ class BuildForwardParams(BaseModel):
     # --- Identity / IO ----------------------------------------------------
     output_dir: str = Field("./sweep_runs", description="Parent dir; <output_dir>/<task_id>/ holds artifacts.")
     task_id: str | None = Field(None, description="Subdirectory name; auto from timestamp if omitted.")
-    device: str = Field("cpu", description="Simulation device; defaults to cpu (GPU is held by the LLM). Set cuda only when the GPU is free.")
+    device: str = Field("cpu", description="Simulation device: 'cpu', 'cuda' (NVIDIA GPU) or 'mps' (Apple Silicon GPU). Defaults to cpu because the GPU is usually held by the LLM. Use 'cuda' only when an NVIDIA GPU is free; on a Mac use 'mps' — 'cuda' is NOT available there and will fail.")
     seed: int = Field(0, description="RNG seed.")
 
     # --- Output of this tool ----------------------------------------------
