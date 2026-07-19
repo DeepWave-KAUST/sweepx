@@ -50,19 +50,32 @@ sweep-agent tools        # prints the 30 tools and what each does
 
 ### 2. The solver — `sweep` (equation discovery + wave modelling)
 
-`sweep` (the core wave-equation solver) is open source but **not on PyPI** — install it from its
-repository:
+`sweep` (the core wave-equation solver) is open source but **not on PyPI**. Install your backend
+framework **first** — sweep deliberately does not pull PyTorch/JAX for you, so that you control the
+CUDA build — then install sweep from the repo root:
 
 ```bash
+# 1. a working PyTorch (or JAX) environment — see pytorch.org / the JAX install docs
+# 2. then:
 git clone https://github.com/DeepWave-KAUST/sweep
-pip install -e './sweep[torch]'      # use [jax] instead for the JAX backend
+cd sweep
+pip install .
+```
+
+That one command covers **both** the PyTorch-eager and the JAX paths — sweep uses lazy imports, so
+you only need the framework you actually use.
+
+Optionally, on **Linux + NVIDIA only**, you can additionally build the compiled C++/CUDA binding
+(`sweep._C`). sweep-agent's tools do not require it:
+
+```bash
+SWEEP_BUILD_CUDA=1 pip install -v .[cuda] --no-build-isolation
 ```
 
 Naming: the distribution is **`sweep-solver`** — that is what `pip list` and dependency errors call
 it — while the import name is **`sweep`**. Same package.
 
-Its CUDA extension is **opt-in** via `SWEEP_BUILD_CUDA=1`; leave that unset for a CPU / MPS install.
-This enables `list_equations` and the wave-modelling tools.
+Verify with `sweep list equations`. This enables `list_equations` and the wave-modelling tools.
 
 ### 3. The production runner — `sweep-tasks` (optional, not yet released)
 
@@ -110,10 +123,11 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 sweep-agent tools                      # should list 30 tools
 
-# 3. The solver, CPU/MPS build. Its CUDA extension is OPT-IN via SWEEP_BUILD_CUDA=1 —
-#    leave that unset on a Mac and sweep installs as pure Python + the torch backend.
+# 3. The solver. Install PyTorch first (its arm64 wheels give you MPS), then sweep itself.
+#    Do NOT set SWEEP_BUILD_CUDA — that is the Linux+NVIDIA compiled-binding path.
+pip install torch
 git clone https://github.com/DeepWave-KAUST/sweep
-pip install -e './sweep[torch]'
+(cd sweep && pip install .)
 
 # 4. LLM backend — vLLM is CUDA-only, so use Ollama (native, Metal-accelerated)
 brew install ollama
