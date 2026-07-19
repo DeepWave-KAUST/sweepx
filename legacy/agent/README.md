@@ -50,36 +50,26 @@ sweep-agent tools        # prints the 30 tools and what each does
 
 ### 2. The solver — `sweep` (equation discovery + wave modelling)
 
-`sweep` (the core solver) is **not on PyPI**; install it from its own repository:
+`sweep` (the core wave-equation solver) is open source but **not on PyPI** — install it from its
+repository:
 
 ```bash
-pip install -e /path/to/sweep        # from a local checkout of the sweep repo
+git clone https://github.com/DeepWave-KAUST/sweep
+pip install -e './sweep[torch]'      # use [jax] instead for the JAX backend
 ```
 
-Enables `list_equations` and — together with step 3 — the forward / wavefield / FWI tools.
+Its CUDA extension is **opt-in** via `SWEEP_BUILD_CUDA=1`; leave that unset for a CPU / MPS install.
+This enables `list_equations` and the wave-modelling tools.
 
-### 3. The production runner — `sweep-tasks` (build_* / run_task / plot_*)
+### 3. The production runner — `sweep-tasks` (optional, not yet released)
 
-The `build_*_spec`, `run_task`, and `plot_*` tools drive `sweep_tasks.TaskRunner`. It is a stack of
-local packages, none of them on PyPI — install them in this order:
+The `build_*_spec`, `run_task`, and `plot_*` tools drive `sweep_tasks.TaskRunner` — the production
+task layer of the sweep stack (spec schemas, losses, optimizers, multi-GPU, IO, plotting). It is
+**not publicly released yet**, so for now those tools are unavailable outside our group.
 
-```bash
-pip install -e /path/to/sweep-loss
-pip install -e /path/to/sweep-nn
-pip install -e /path/to/sweep-io     # imported by sweep-tasks at runtime, but NOT in its deps
-pip install -e /path/to/sweep-tasks
-pip install imageio                  # needed by the GIF / animation tools
-```
-
-Two known packaging traps:
-
-- `ModuleNotFoundError: No module named 'sweep_io'` on first import means you skipped `sweep-io` —
-  `sweep_tasks` imports it at runtime but does not declare it.
-- The animation tools raise a message telling you to `pip install sweep-viz[animate]`. That package
-  was retired and folded into `sweep_tasks.viz`; install **`imageio`** instead.
-
-Large production runs want a CUDA GPU. Until this tier is installed, its tools return a
-`sweep_tasks is not importable` message rather than failing hard.
+That is a soft limit, not a wall: every one of them imports `sweep_tasks` lazily and returns a
+plain `{"error": "sweep_tasks is not importable"}` when it is missing, so the agent still starts,
+still registers all 30 tools, and everything in steps 1–2 keeps working.
 
 ### 4. An LLM backend — to actually *chat*
 
@@ -119,7 +109,8 @@ sweep-agent tools                      # should list 30 tools
 
 # 3. The solver, CPU/MPS build. Its CUDA extension is OPT-IN via SWEEP_BUILD_CUDA=1 —
 #    leave that unset on a Mac and sweep installs as pure Python + the torch backend.
-pip install -e '/path/to/sweep[torch]'
+git clone https://github.com/DeepWave-KAUST/sweep
+pip install -e './sweep[torch]'
 
 # 4. LLM backend — vLLM is CUDA-only, so use Ollama (native, Metal-accelerated)
 brew install ollama
@@ -193,13 +184,14 @@ print(check_parameters.fn(CheckParametersParams(dh=10, dt=1e-3, fm=8, vp_min=150
 
 ## What works at each layer
 
-| tools | base (`pip install -e .`) | + `sweep` | + `sweep-tasks` |
+| tools | base (`pip install -e .`) | + `sweep` | + `sweep-tasks`<br>*(unreleased)* |
 |---|:--:|:--:|:--:|
 | `sweep-agent tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ | ✅ |
 | `list_equations` | error dict | ✅ | ✅ |
 | `build_*_spec`, `run_task`, `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | error dict | ✅ |
 
 A tool whose layer is missing returns `{"error": "… is not importable"}` — the agent stays up.
+Steps 1–2 are all publicly available today; the third column is our internal production tier.
 
 ## Tests
 
