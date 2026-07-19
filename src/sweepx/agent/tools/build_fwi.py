@@ -59,7 +59,8 @@ class BuildFwiParams(BaseModel):
     # --- grid / time / wavelet -------------------------------------------
     dh: float = Field(..., gt=0, description="Grid spacing (m).")
     dt: float = Field(..., gt=0, description="Time step (s).")
-    nt: int = Field(..., ge=1, description="Number of time samples.")
+    nt: int | None = Field(None, ge=1, description="Number of time samples (record length = dt*nt). Give this OR record_length_s.")
+    record_length_s: float | None = Field(None, gt=0, description="Record length in seconds; nt is computed as round(record_length_s/dt). Provide this OR nt.")
     fm: float = Field(8.0, gt=0, description="Ricker centre frequency (Hz).")
     wavelet_delay: float | None = Field(None, ge=0, description="Ricker delay (s); default 1/fm.")
 
@@ -91,7 +92,7 @@ class BuildFwiParams(BaseModel):
     # --- io ---------------------------------------------------------------
     output_dir: str = Field("./sweep_runs")
     task_id: str | None = Field(None)
-    device: str = Field("auto")
+    device: str = Field("cpu", description="Simulation device; defaults to cpu (the GPU is held by the LLM server). Set cuda only when the GPU is free.")
     seed: int = Field(0)
     show_every: int = Field(10)
     save_yaml: bool = Field(True)
@@ -175,6 +176,11 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
         from sweep_tasks import dump_task
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
+
+    from sweep_agent.tools.build_forward import _resolve_nt
+    nt_eff, nt_err = _resolve_nt(args)  # duck-typed on .nt / .record_length_s / .dt
+    if nt_err is not None:
+        return nt_err
 
     init_block, err = _resolve_init_models(args)
     if err is not None:

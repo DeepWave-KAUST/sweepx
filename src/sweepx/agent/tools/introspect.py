@@ -43,6 +43,40 @@ def all_equations() -> dict[str, list[str]]:
     return {name: equation_model_names(classes[name]) for name in sorted(classes)}
 
 
+# Preferred "plain" equations when a model set is ambiguous (e.g. vp+vs+rho is
+# shared by Elastic, DASElastic, ElasticAPM, ...). Earlier = more canonical.
+_CANONICAL_EQUATIONS = (
+    "Acoustic", "Elastic", "AcousticVTI", "AcousticTTI",
+    "Acoustic3D", "Elastic3D", "AcousticVTI3D", "ElasticTTI",
+)
+
+
+def equations_for_models(extra_models: set[str] | list[str], ndim: int | None = None) -> list[str]:
+    """Equations whose NON-primary models exactly equal ``extra_models``, ranked
+    so the canonical / dimension-appropriate choice comes first.
+
+    The primary model (the equation's first input — ``vp``, or ``vp0`` for
+    elastic-TTI) always comes from ``vp_path``; ``extra_models`` are everything
+    after it. So we match on ``models[1:]``, which works whether the primary is
+    named ``vp`` or ``vp0``. Used to (a) auto-pick an equation from the files a
+    user supplied and (b) suggest the right equation when the LLM left a
+    multi-parameter model set on a plain-acoustic equation. Specialized variants
+    (DAS / Visco / APM / Curvilinear / staggered / 1st-order) are deprioritized;
+    when ``ndim`` is given, equations matching that dimensionality are preferred.
+    """
+    extra = set(extra_models)
+    matches = [e for e, m in all_equations().items() if len(m) >= 1 and set(m[1:]) == extra]
+
+    def rank(e: str) -> tuple:
+        is3d = "3D" in e
+        dim_mismatch = 0 if ndim is None else int((ndim == 3) != is3d)
+        canon = _CANONICAL_EQUATIONS.index(e) if e in _CANONICAL_EQUATIONS else len(_CANONICAL_EQUATIONS)
+        specialized = int(any(t in e for t in ("DAS", "Visco", "APM", "Curvilinear", "SG", "1st")))
+        return (dim_mismatch, canon, specialized, len(e), e)
+
+    return sorted(matches, key=rank)
+
+
 def equation_default_fields(name: str) -> tuple[list[str], list[str]]:
     """(default_source_fields, default_receiver_fields) for an equation, statically.
 

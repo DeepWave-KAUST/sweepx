@@ -17,9 +17,11 @@ from sweep_agent.tools import register
 from sweep_agent.tools.build_forward import (
     BuildForwardParams,
     _deep_merge,
+    _maybe_upgrade_3d,
     _physics_source_fields,
     _resolve_geometry,
     _resolve_models,
+    _resolve_nt,
     _slug,
 )
 
@@ -85,19 +87,29 @@ def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
 
+    nt_eff, nt_err = _resolve_nt(args)
+    if nt_err is not None:
+        return nt_err
+
     bad = [t for t in args.snapshot_times if t < 0 or t >= args.nt]
     if bad:
         return {"error": f"snapshot_times {bad} out of range; must be in [0, nt={args.nt})."}
-
-    models, err = _resolve_models(args)  # reused from build_forward (duck-typed on equation/extra_models/vp_path)
-    if err is not None:
-        return err
 
     import numpy as _np
     try:
         vp_shape = tuple(_np.load(args.vp_path, mmap_mode="r").shape)
     except Exception as exc:
         return {"error": f"could not read shape of vp_path '{args.vp_path}': {exc}"}
+
+    # A 3-D model needs a 3-D equation; auto-upgrade Acoustic→Acoustic3D etc.
+    args.equation, eq_err = _maybe_upgrade_3d(args.equation, len(vp_shape))
+    if eq_err is not None:
+        return {"error": eq_err}
+
+    models, err = _resolve_models(args)  # reused from build_forward (duck-typed on equation/extra_models/vp_path)
+    if err is not None:
+        return err
+
     try:
         geometry = _resolve_geometry(args, vp_shape)
     except ValueError as exc:
