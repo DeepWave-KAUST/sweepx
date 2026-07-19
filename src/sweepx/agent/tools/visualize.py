@@ -1,4 +1,4 @@
-"""Visualization tools — thin LLM-callable wrappers over ``sweep_viz.wavefield``.
+"""Visualization tools — thin LLM-callable wrappers over ``sweep_tasks.viz.wavefield``.
 
 The actual plotting lives in sweep-viz (plot_snapshot / animate_snapshots /
 compare_snapshots). These tools only handle the agent-side concerns — locating a
@@ -96,7 +96,7 @@ def plot_wavefield(args: PlotWavefieldParams) -> dict[str, Any]:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from sweep_viz import wavefield as viz
+    from sweep_tasks.viz import wavefield as viz
 
     frame = wf[args.snapshot_index]
     rd = resolve_task_dir(args.task_dir)
@@ -145,7 +145,7 @@ def compare_wavefields(args: CompareWavefieldsParams) -> dict[str, Any]:
         except Exception as exc:
             return {"error": f"{td}: {type(exc).__name__}: {exc}"}
         frames.append(wf[args.snapshot_index])
-    from sweep_viz import wavefield as viz
+    from sweep_tasks.viz import wavefield as viz
 
     try:
         viz.compare_snapshots(frames, list(args.labels), args.out_path, suptitle=args.suptitle)
@@ -207,7 +207,7 @@ def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if wf.shape[0] < 2:
         return {"error": "need >= 2 snapshots for a GIF; re-run with more snapshot_times."}
-    from sweep_viz import wavefield as viz
+    from sweep_tasks.viz import wavefield as viz
 
     rd = resolve_task_dir(args.task_dir)
     out = rd / "output" / args.out_name
@@ -268,7 +268,7 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from sweep_viz import seismic
+    from sweep_tasks.viz import seismic
 
     out = rd / "output" / args.out_name
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
@@ -281,3 +281,530 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(arr.shape)}
+
+
+# ---------------------------------------------------------------------------
+# plot_model — FWI / migration result (inverted vs true vs init)
+# ---------------------------------------------------------------------------
+
+class PlotModelParams(BaseModel):
+    task_dir: str = Field(..., description="FWI / migration task directory from run_task — must contain output/inverted_vp.npy (or a model .npy via model_name).")
+    true_model_path: str | None = Field(None, description="Path to the ground-truth vp .npy, to show alongside + a residual panel. Optional.")
+    init_model_path: str | None = Field(None, description="Path to the initial/starting vp .npy, to show as the left panel. Optional.")
+    model_name: str = Field("inverted_vp.npy", description="Which model file under <task_dir>/output to read (default the FWI result).")
+    dh: float | None = Field(None, description="Grid spacing (m) for physical axes; samples if omitted.")
+    out_name: str = Field("model_comparison.png", description="Output PNG filename under <task_dir>/output/.")
+    title: str | None = Field(None, description="Figure suptitle.")
+
+
+@register(
+    name="plot_model",
+    description=(
+        "Plot velocity models side by side from an FWI/migration run — typically initial vs inverted vs "
+        "true, with an inverted−true residual panel — on a shared colour scale (via sweep-viz). Use after "
+        "an FWI run when the user wants to SEE the inverted model / result / 反演结果. Pass "
+        "true_model_path and init_model_path (the same files you gave the builder) for the full comparison. "
+        "Returns the saved image path."
+    ),
+    params_model=PlotModelParams,
+)
+def plot_model(args: PlotModelParams) -> dict[str, Any]:
+    rd = resolve_task_dir(args.task_dir, marker=args.model_name)
+    inv_path = rd / "output" / args.model_name
+    if not inv_path.is_file():
+        return {"error": f"no {args.model_name} under {args.task_dir}/output (run an FWI/migration task first)"}
+    inverted = np.load(inv_path)
+    if inverted.ndim != 2:
+        return {"error": f"plot_model supports 2-D models; got shape {inverted.shape}"}
+
+    panels: list = []
+    labels: list[str] = []
+    if args.init_model_path:
+        try:
+            panels.append(np.load(args.init_model_path)); labels.append("initial")
+        except Exception as exc:
+            return {"error": f"could not load init_model_path: {exc}"}
+    panels.append(inverted); labels.append("inverted")
+    true_arr = None
+    if args.true_model_path:
+        try:
+            true_arr = np.load(args.true_model_path)
+        except Exception as exc:
+            return {"error": f"could not load true_model_path: {exc}"}
+        panels.append(true_arr); labels.append("true")
+
+    import matplotlib
+    matplotlib.use("Agg")
+    from sweep_tasks.viz import model as vizmodel
+
+    out = rd / "output" / args.out_name
+    dh = (args.dh, args.dh) if args.dh else None
+    residual = (inverted, true_arr) if true_arr is not None else None
+    try:
+        vizmodel.compare_models(panels, labels, str(out), dh=dh, residual=residual, suptitle=args.title)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {"image_path": str(out), "task_dir_used": str(rd), "panels": labels, "shape": list(inverted.shape)}
+
+
+# ---------------------------------------------------------------------------
+# plot_convergence — FWI loss curve
+# ---------------------------------------------------------------------------
+
+class PlotConvergenceParams(BaseModel):
+    task_dir: str = Field(..., description="FWI task directory from run_task — must contain output/loss.npy.")
+    loss_name: str = Field("loss.npy", description="Which loss file under <task_dir>/output to read.")
+    logy: bool = Field(True, description="Log-scale y-axis (default True).")
+    out_name: str = Field("convergence.png", description="Output PNG filename under <task_dir>/output/.")
+    title: str | None = Field(None, description="Plot title.")
+
+
+@register(
+    name="plot_convergence",
+    description=(
+        "Plot the FWI loss / misfit convergence curve from a task's loss.npy (via sweep-viz). Use after "
+        "an FWI run when the user wants to see how the inversion converged / loss 曲线 / 收敛. Returns the "
+        "saved image path."
+    ),
+    params_model=PlotConvergenceParams,
+)
+def plot_convergence(args: PlotConvergenceParams) -> dict[str, Any]:
+    rd = resolve_task_dir(args.task_dir, marker=args.loss_name)
+    path = rd / "output" / args.loss_name
+    if not path.is_file():
+        return {"error": f"no {args.loss_name} under {args.task_dir}/output (run an FWI task first)"}
+    loss = np.load(path).reshape(-1)
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_tasks.viz import convergence
+
+    out = rd / "output" / args.out_name
+    fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
+    convergence.plot_loss(loss, ax=ax, logy=args.logy, title=args.title or "FWI convergence")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "task_dir_used": str(rd), "n_iter": int(loss.size)}
+
+
+# ---------------------------------------------------------------------------
+# plot_observed_data — plot a shot gather straight from a record .npy file
+# ---------------------------------------------------------------------------
+
+def _record_to_2d(rec: np.ndarray, shot: int, channel: int) -> np.ndarray:
+    if rec.ndim == 4:        # (nshots, nt, nrec, nchannel)
+        return rec[shot, :, :, channel]
+    if rec.ndim == 3:        # (nshots, nt, nrec)
+        return rec[shot]
+    if rec.ndim == 2:        # (nt, nrec)
+        return rec
+    raise ValueError(f"unexpected record shape {rec.shape}")
+
+
+class PlotObservedDataParams(BaseModel):
+    npy_path: str = Field(..., description="Path to an observed/synthetic data .npy — (nshots,nt,nrec,nch), (nshots,nt,nrec) or (nt,nrec).")
+    shot: int = Field(0, description="Which shot to display.")
+    channel: int = Field(0, description="Which channel/component.")
+    dt: float | None = Field(None, description="Time step (s) for the time axis.")
+    dh: float | None = Field(None, description="Receiver spacing (m) for the offset axis.")
+    out_path: str = Field("/tmp/observed_gather.png", description="Full output PNG path.")
+    title: str | None = Field(None, description="Plot title.")
+
+
+@register(
+    name="plot_observed_data",
+    description=(
+        "Plot a shot gather directly from a data .npy FILE (observed or synthetic), without needing a "
+        "task directory. Use when the user points at a data file / 观测数据 and wants to see the record. "
+        "Returns the saved image path and the displayed (nt, nrec) shape."
+    ),
+    params_model=PlotObservedDataParams,
+)
+def plot_observed_data(args: PlotObservedDataParams) -> dict[str, Any]:
+    p = Path(args.npy_path).expanduser()
+    if not p.is_file():
+        return {"error": f"data file not found: {args.npy_path}"}
+    rec = np.load(p)
+    try:
+        arr = _record_to_2d(rec, args.shot, args.channel)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_tasks.viz import seismic
+
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    seismic.plot_shot(arr, dt=args.dt, dh=args.dh, ax=ax, title=args.title or "shot gather")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "shape": list(arr.shape)}
+
+
+# ---------------------------------------------------------------------------
+# plot_segy — read + display a SEG-Y shot gather
+# ---------------------------------------------------------------------------
+
+class PlotSegyParams(BaseModel):
+    segy_path: str = Field(..., description="Path to a .segy / .sgy file.")
+    max_traces: int = Field(2000, ge=1, description="Cap traces displayed (large files).")
+    dt: float | None = Field(None, description="Override time step (s); else read from the SEG-Y header.")
+    out_path: str = Field("/tmp/segy_gather.png", description="Full output PNG path.")
+    title: str | None = Field(None, description="Plot title.")
+
+
+@register(
+    name="plot_segy",
+    description=(
+        "Read a SEG-Y file (real field/observed data) and plot it as a shot gather. Use when the user "
+        "points at a .segy / .sgy file. Returns the image path, (nt, ntraces) shape and the sample "
+        "interval read from the header."
+    ),
+    params_model=PlotSegyParams,
+)
+def plot_segy(args: PlotSegyParams) -> dict[str, Any]:
+    p = Path(args.segy_path).expanduser()
+    if not p.is_file():
+        return {"error": f"SEG-Y file not found: {args.segy_path}"}
+    try:
+        import segyio
+    except ImportError as exc:
+        return {"error": f"segyio is required to read SEG-Y: {exc}"}
+    try:
+        with segyio.open(str(p), ignore_geometry=True) as f:
+            n = min(f.tracecount, args.max_traces)
+            data = np.stack([f.trace[i] for i in range(n)]).T  # (nt, ntraces)
+            hdr_dt = segyio.tools.dt(f) / 1.0e6  # microseconds → s
+    except Exception as exc:
+        return {"error": f"failed to read SEG-Y: {type(exc).__name__}: {exc}"}
+    dt = args.dt if args.dt is not None else hdr_dt
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_tasks.viz import seismic
+
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+    seismic.plot_shot(data, dt=dt, ax=ax, title=args.title or f"SEG-Y: {p.name}")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "shape": list(data.shape), "dt": float(dt), "n_traces": int(data.shape[1])}
+
+
+# ---------------------------------------------------------------------------
+# compare_shot_gathers — observed vs synthetic (+ residual), side by side
+# ---------------------------------------------------------------------------
+
+class CompareShotGathersParams(BaseModel):
+    record_a: str = Field(..., description="First record .npy path (or a task_dir containing output/record.npy) — e.g. observed.")
+    record_b: str = Field(..., description="Second record .npy path (or task_dir) — e.g. synthetic.")
+    label_a: str = Field("observed", description="Label for the first panel.")
+    label_b: str = Field("synthetic", description="Label for the second panel.")
+    shot: int = Field(0, description="Which shot to display.")
+    channel: int = Field(0, description="Which channel.")
+    dt: float | None = Field(None, description="Time step (s) for the time axis.")
+    out_path: str = Field("/tmp/gather_comparison.png", description="Full output PNG path.")
+
+
+def _resolve_record(path_or_dir: str) -> Path | None:
+    p = Path(path_or_dir).expanduser()
+    if p.is_file():
+        return p
+    rd = resolve_task_dir(path_or_dir, marker="record.npy")
+    cand = rd / "output" / "record.npy"
+    return cand if cand.is_file() else None
+
+
+@register(
+    name="compare_shot_gathers",
+    description=(
+        "Compare two shot gathers side by side with a shared scale plus a residual panel — the core FWI "
+        "QC (observed vs synthetic). Each input is a record .npy path OR a task_dir. Use when the user "
+        "wants to compare observed vs modelled data / 对比观测与合成 / see the data misfit. Returns the image."
+    ),
+    params_model=CompareShotGathersParams,
+)
+def compare_shot_gathers(args: CompareShotGathersParams) -> dict[str, Any]:
+    pa, pb = _resolve_record(args.record_a), _resolve_record(args.record_b)
+    if pa is None:
+        return {"error": f"no record found for record_a={args.record_a}"}
+    if pb is None:
+        return {"error": f"no record found for record_b={args.record_b}"}
+    try:
+        a = _record_to_2d(np.load(pa), args.shot, args.channel)
+        b = _record_to_2d(np.load(pb), args.shot, args.channel)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if a.shape != b.shape:
+        return {"error": f"record shapes differ: {a.shape} vs {b.shape}"}
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    s = np.percentile(np.abs(np.concatenate([a.ravel(), b.ravel()])), 98) + 1e-30
+    diff = a - b
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    nt = a.shape[0]
+    extent = [0, a.shape[1], (nt * args.dt) if args.dt else nt, 0]
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5), constrained_layout=True, sharey=True)
+    for ax, arr, lab in ((axes[0], a, args.label_a), (axes[1], b, args.label_b), (axes[2], diff, "residual (a−b)")):
+        ax.imshow(arr, cmap="RdBu_r", vmin=-s, vmax=s, aspect="auto", extent=extent)
+        ax.set_title(lab); ax.set_xlabel("receiver")
+    axes[0].set_ylabel("time (s)" if args.dt else "time (samples)")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    rel = float(np.linalg.norm(diff) / (np.linalg.norm(a) + 1e-30))
+    return {"image_path": str(out), "shape": list(a.shape), "relative_residual": round(rel, 4)}
+
+
+# ---------------------------------------------------------------------------
+# plot_velocity_model — visualise an INPUT model file (before running anything)
+# ---------------------------------------------------------------------------
+
+class PlotVelocityModelParams(BaseModel):
+    model_path: str = Field(..., description="Path to a velocity-model .npy — (nz,nx) for 2-D or (nz,ny,nx) for 3-D.")
+    dh: float | None = Field(None, description="Grid spacing (m) for physical axes; samples if omitted.")
+    out_path: str = Field("/tmp/velocity_model.png", description="Full output PNG path.")
+    title: str | None = Field(None, description="Figure title.")
+    cbar_label: str = Field("vp (m/s)", description="Colour-bar label.")
+
+
+@register(
+    name="plot_velocity_model",
+    description=(
+        "Plot a velocity/parameter model from a .npy FILE so the user can SEE what a model looks like "
+        "BEFORE running anything (2-D heat-map, or three orthogonal slices for a 3-D cube). Use when the "
+        "user uploads/points at a model and asks to see it / 看看这个模型 / what does this model look like. "
+        "Drawn via sweep-viz. Returns the saved image path and the model shape."
+    ),
+    params_model=PlotVelocityModelParams,
+)
+def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
+    p = Path(args.model_path).expanduser()
+    if not p.is_file():
+        return {"error": f"model file not found: {args.model_path}"}
+    arr = np.load(p)
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sweep_tasks.viz import model as vizmodel
+
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if arr.ndim == 2:
+        fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+        dh = (args.dh, args.dh) if args.dh else None
+        vizmodel.plot_vp(arr, dh=dh, ax=ax, title=args.title or f"velocity model {arr.shape}", cbar_label=args.cbar_label)
+        fig.savefig(out, dpi=130)
+        plt.close(fig)
+    elif arr.ndim == 3:
+        dh = args.dh or 1.0
+        fig, axes = vizmodel.plot_vp_ortho_slices(arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
+        fig.savefig(out, dpi=130)
+        plt.close(fig)
+    else:
+        return {"error": f"plot_velocity_model supports 2-D / 3-D; got shape {arr.shape}"}
+    return {
+        "image_path": str(out), "shape": list(arr.shape),
+        "vp_min": float(np.nanmin(arr)), "vp_max": float(np.nanmax(arr)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# plot_velocity_slice — vertical velocity-vs-depth profile(s) at given x
+# ---------------------------------------------------------------------------
+
+class PlotVelocitySliceParams(BaseModel):
+    model_path: str = Field(..., description="Velocity-model .npy — (nz,nx) for 2-D or (nz,ny,nx) for 3-D.")
+    x_indices: list[int] | None = Field(None, description="Lateral (x) column indices to slice at; default the model centre. Pass several to overlay profiles.")
+    y_index: int | None = Field(None, description="For a 3-D model, the crossline (y) index; default the y centre.")
+    dh: float | None = Field(None, description="Grid spacing (m) for the depth axis; samples if omitted.")
+    out_path: str = Field("/tmp/velocity_slice.png", description="Full output PNG path.")
+    title: str | None = Field(None, description="Plot title.")
+
+
+@register(
+    name="plot_velocity_slice",
+    description=(
+        "Plot the VERTICAL velocity profile(s) — velocity vs depth at a fixed lateral position — from a "
+        "model .npy (well-log style: depth increases downward, velocity on the x-axis). Use when the user "
+        "wants a 纵向切片 / 速度随深度 / depth profile / a 1-D slice of the model. Pass x_indices to overlay "
+        "several lateral positions. Returns the saved image path."
+    ),
+    params_model=PlotVelocitySliceParams,
+)
+def plot_velocity_slice(args: PlotVelocitySliceParams) -> dict[str, Any]:
+    p = Path(args.model_path).expanduser()
+    if not p.is_file():
+        return {"error": f"model file not found: {args.model_path}"}
+    arr = np.load(p)
+    if arr.ndim == 3:
+        ny = arr.shape[1]
+        yi = args.y_index if args.y_index is not None else ny // 2
+        yi = int(np.clip(yi, 0, ny - 1))
+        plane = arr[:, yi, :]            # (nz, nx) at fixed crossline y
+        ylabel_extra = f" (y={yi})"
+    elif arr.ndim == 2:
+        plane = arr
+        ylabel_extra = ""
+    else:
+        return {"error": f"plot_velocity_slice supports 2-D / 3-D; got shape {arr.shape}"}
+
+    nz, nx = plane.shape
+    xs = args.x_indices if args.x_indices else [nx // 2]
+    xs = [int(np.clip(x, 0, nx - 1)) for x in xs]
+    depth = np.arange(nz) * (args.dh if args.dh else 1.0)
+    depth_label = "depth (m)" if args.dh else "depth (samples)"
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(5, 7), constrained_layout=True)
+    for x in xs:
+        xpos = f"x={x * args.dh:.0f} m" if args.dh else f"x={x}"
+        ax.plot(plane[:, x], depth, label=xpos)
+    ax.invert_yaxis()                    # depth increases downward
+    ax.set_xlabel("vp (m/s)")
+    ax.set_ylabel(depth_label)
+    ax.set_title(args.title or f"vertical velocity profile{ylabel_extra}")
+    ax.grid(alpha=0.3)
+    if len(xs) > 1:
+        ax.legend()
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "shape": list(arr.shape), "x_indices": xs}
+
+
+# ---------------------------------------------------------------------------
+# plot_wavelet — Ricker source wavelet waveform + amplitude spectrum
+# ---------------------------------------------------------------------------
+
+class PlotWaveletParams(BaseModel):
+    fm: float = Field(..., gt=0, description="Ricker centre (peak) frequency in Hz.")
+    dt: float = Field(1.0e-3, gt=0, description="Time step (s).")
+    nt: int = Field(512, ge=16, description="Number of samples for the wavelet/spectrum.")
+    delay: float | None = Field(None, ge=0, description="Peak-time delay (s); default 1/fm.")
+    out_path: str = Field("/tmp/wavelet.png", description="Full output PNG path.")
+
+
+@register(
+    name="plot_wavelet",
+    description=(
+        "Plot the Ricker source wavelet for a given peak frequency: its time-domain waveform AND its "
+        "amplitude spectrum (so you can judge whether fm gives enough/too much frequency content). Use "
+        "when the user asks to see the source / wavelet / 子波 / 频谱, or to pick a frequency. Returns the "
+        "saved image path and the spectral peak frequency."
+    ),
+    params_model=PlotWaveletParams,
+)
+def plot_wavelet(args: PlotWaveletParams) -> dict[str, Any]:
+    delay = args.delay if args.delay is not None else 1.0 / args.fm
+    t = np.arange(args.nt) * args.dt
+    try:
+        from sweep.signal import ricker
+        w = np.asarray(ricker(t - delay, f=args.fm), dtype=np.float64)
+    except Exception:
+        # Analytic Ricker fallback if sweep.signal isn't importable.
+        a = (np.pi * args.fm * (t - delay)) ** 2
+        w = (1.0 - 2.0 * a) * np.exp(-a)
+
+    spec = np.abs(np.fft.rfft(w))
+    freqs = np.fft.rfftfreq(args.nt, d=args.dt)
+    peak_freq = float(freqs[int(np.argmax(spec))])
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out = Path(args.out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+    a1.plot(t, w, color="C0"); a1.set_xlabel("time (s)"); a1.set_ylabel("amplitude")
+    a1.set_title(f"Ricker wavelet (fm = {args.fm:g} Hz)"); a1.grid(alpha=0.3)
+    a2.plot(freqs, spec / (spec.max() + 1e-30), color="C3")
+    a2.axvline(peak_freq, ls="--", c="k", lw=1, label=f"peak {peak_freq:.1f} Hz")
+    a2.set_xlabel("frequency (Hz)"); a2.set_ylabel("normalized amplitude")
+    a2.set_xlim(0, min(freqs[-1], 4 * args.fm)); a2.set_title("amplitude spectrum")
+    a2.legend(); a2.grid(alpha=0.3)
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return {"image_path": str(out), "peak_frequency_hz": peak_freq, "fm": args.fm}
+
+
+# ---------------------------------------------------------------------------
+# animate_fwi_evolution — GIF of the inverted model improving each epoch
+# ---------------------------------------------------------------------------
+
+class AnimateFwiEvolutionParams(BaseModel):
+    task_dir: str = Field(..., description="FWI task directory from run_task — must contain output/epochs/vp_epoch_*.npy.")
+    true_model_path: str | None = Field(None, description="Optional ground-truth vp .npy to fix the colour scale (else per-run percentile).")
+    dh: float | None = Field(None, description="Grid spacing (m) for physical axes.")
+    out_name: str = Field("fwi_evolution.gif", description="Output GIF filename under <task_dir>/output/.")
+    fps: int = Field(4, ge=1, le=30, description="Frames per second.")
+
+
+@register(
+    name="animate_fwi_evolution",
+    description=(
+        "Animate how the FWI-inverted velocity model evolves epoch by epoch into a GIF (reads the "
+        "per-epoch models the FWI run saved under output/epochs/). Use after an FWI run when the user "
+        "wants to SEE the inversion converge / 反演过程 / how the model improves. Returns the gif path."
+    ),
+    params_model=AnimateFwiEvolutionParams,
+)
+def animate_fwi_evolution(args: AnimateFwiEvolutionParams) -> dict[str, Any]:
+    rd = resolve_task_dir(args.task_dir, marker="inverted_vp.npy")
+    epochs_dir = rd / "output" / "epochs"
+    frames_paths = sorted(epochs_dir.glob("vp_epoch_*.npy")) if epochs_dir.is_dir() else []
+    if not frames_paths:
+        return {"error": f"no per-epoch models under {rd}/output/epochs (run an FWI task that saves epochs)"}
+    mats = [np.load(f) for f in frames_paths]
+    if mats[0].ndim != 2:
+        return {"error": f"animate_fwi_evolution supports 2-D models; got shape {mats[0].shape}"}
+
+    if args.true_model_path and Path(args.true_model_path).is_file():
+        ref = np.load(args.true_model_path)
+        vmin, vmax = float(np.nanmin(ref)), float(np.nanmax(ref))
+    else:
+        allv = np.concatenate([m.ravel() for m in mats])
+        vmin, vmax = np.percentile(allv, [2, 98])
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import imageio.v2 as imageio
+    from sweep_tasks.viz.colormaps import VP_CMAP
+
+    out = rd / "output" / args.out_name
+    extent = None
+    if args.dh:
+        nz, nx = mats[0].shape
+        extent = (0.0, nx * args.dh, nz * args.dh, 0.0)
+    import re
+    def _epoch_num(path: Path) -> str:
+        mt = re.search(r"(\d+)", path.stem)
+        return mt.group(1).lstrip("0") or "0" if mt else "?"
+
+    images = []
+    for m, fpath in zip(mats, frames_paths):
+        fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
+        im = ax.imshow(m, cmap=VP_CMAP, vmin=vmin, vmax=vmax, aspect="auto", extent=extent)
+        ax.set_title(f"FWI — epoch {_epoch_num(fpath)}")
+        if extent:
+            ax.set_xlabel("x (m)"); ax.set_ylabel("z (m)")
+        fig.colorbar(im, ax=ax, label="vp (m/s)", fraction=0.04, pad=0.02)
+        fig.canvas.draw()
+        images.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
+        plt.close(fig)
+    imageio.mimsave(out, images, duration=1.0 / args.fps, loop=0)
+    return {"gif_path": str(out), "task_dir_used": str(rd), "n_frames": len(images)}
