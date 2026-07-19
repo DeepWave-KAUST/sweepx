@@ -85,9 +85,15 @@ def run_task(args: RunTaskParams) -> dict[str, Any]:
     except Exception as exc:
         return {"error": f"failed to load spec: {type(exc).__name__}: {exc}"}
 
-    # Optional cooperative timeout via SIGALRM (POSIX only).
+    # Optional cooperative timeout via SIGALRM (POSIX only). signal.signal()
+    # ONLY works in the main thread — under the Gradio web UI the handler runs
+    # in a worker thread, where arming it raises ValueError. Skip it there
+    # (the timeout is best-effort) instead of crashing the whole run.
+    import threading
+
     timeout_handler_set = False
-    if args.timeout_s is not None and hasattr(os, "fork"):
+    if (args.timeout_s is not None and hasattr(os, "fork")
+            and threading.current_thread() is threading.main_thread()):
         import signal
 
         def _on_timeout(signum, frame):  # pragma: no cover - exercised via integration
