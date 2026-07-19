@@ -58,6 +58,9 @@ git clone https://github.com/DeepWave-KAUST/sweep
 pip install -e './sweep[torch]'      # use [jax] instead for the JAX backend
 ```
 
+Naming: the distribution is **`sweep-solver`** — that is what `pip list` and dependency errors call
+it — while the import name is **`sweep`**. Same package.
+
 Its CUDA extension is **opt-in** via `SWEEP_BUILD_CUDA=1`; leave that unset for a CPU / MPS install.
 This enables `list_equations` and the wave-modelling tools.
 
