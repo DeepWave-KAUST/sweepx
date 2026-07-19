@@ -28,7 +28,12 @@ from _llm_demo import drive
 
 def main() -> None:
     d = "/tmp"
-    nz, nx = 140, 200
+    # SQUARE model — an asymmetric (nz != nx) grid distorts an isotropic
+    # wavefront on the comparison figure even with aspect='equal', because
+    # extent uses different physical x/z spans. Keeping it square + uniform
+    # speed makes Acoustic a clean circle, so any deviation in VTI/TTI is
+    # unambiguously physics.
+    nz = nx = 200
     np.save(f"{d}/vp_uni.npy", np.full((nz, nx), 2500.0, dtype=np.float32))
     np.save(f"{d}/eps.npy", np.full((nz, nx), 0.25, dtype=np.float32))
     np.save(f"{d}/delta.npy", np.full((nz, nx), 0.10, dtype=np.float32))

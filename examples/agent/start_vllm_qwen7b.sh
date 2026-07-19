@@ -38,7 +38,7 @@ export PATH="$ENV_BIN${CUDA_BIN:+:$CUDA_BIN}:$PATH"
 # --- config -----------------------------------------------------------------
 MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct}"
 GPU_MEM="${GPU_MEM:-0.85}"
-MAX_LEN="${MAX_LEN:-8192}"
+MAX_LEN="${MAX_LEN:-32768}"   # system prompt + tool schemas alone are ~16k tokens
 # Qwen2.5 / DeepSeek-R1-Distill(Qwen) → "hermes"; Llama-3.x → "llama3_json".
 PARSER="${PARSER:-hermes}"
 
@@ -54,6 +54,16 @@ echo "[start_vllm] PATH has ninja=$(command -v ninja || echo MISSING) nvcc=$(com
 echo "[start_vllm] launching $MODEL on port $PORT (parser=$PARSER)"
 echo "[start_vllm] → connect with: export SWEEP_AGENT_LLM_URL=http://localhost:$PORT/v1"
 
+# Optional YaRN rope-scaling to extend context past the model's native 32768.
+# Set ROPE_SCALING to a JSON string, e.g.
+#   ROPE_SCALING='{"rope_type":"yarn","factor":1.5,"original_max_position_embeddings":32768}'
+# (Qwen2.5 supports YaRN; mild short-context quality trade-off.) Empty = native.
+ROPE_ARGS=()
+if [ -n "${ROPE_SCALING:-}" ]; then
+    ROPE_ARGS=(--rope-scaling "$ROPE_SCALING")
+    echo "[start_vllm] rope-scaling: $ROPE_SCALING"
+fi
+
 exec vllm serve "$MODEL" \
     --host 0.0.0.0 \
     --port "$PORT" \
@@ -61,4 +71,5 @@ exec vllm serve "$MODEL" \
     --max-model-len "$MAX_LEN" \
     --dtype auto \
     --enable-auto-tool-choice \
-    --tool-call-parser "$PARSER"
+    --tool-call-parser "$PARSER" \
+    "${ROPE_ARGS[@]}"

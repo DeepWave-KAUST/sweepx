@@ -17,11 +17,12 @@ os.environ.setdefault("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
 from sweep_agent.agent import Agent
 from sweep_agent.llm.vllm_backend import VLLMBackend
+from sweep_agent.tools.selection import select_tool_names
 
 
 def drive(prompt: str, max_steps: int = 24) -> None:
     backend = VLLMBackend()
-    agent = Agent(llm=backend, max_steps=max_steps)
+    agent = Agent(llm=backend, max_steps=max_steps, tool_selector=select_tool_names)
     print(f"[demo] model={backend.model_id}  url={backend.url}\n")
     print(f"USER  > {prompt}\n")
     try:
