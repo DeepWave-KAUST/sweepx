@@ -1,9 +1,14 @@
-"""Visualization tools — thin LLM-callable wrappers over ``sweep_tasks.viz.wavefield``.
+"""Visualization tools — the agent's LLM-callable plotting layer.
 
-The actual plotting lives in sweep_tasks.viz (plot_snapshot / animate_snapshots /
-compare_snapshots). These tools only handle the agent-side concerns — locating a
-task's snapshots.npy and cropping the PML — then delegate the drawing. Pass
-``abcn`` (the PML thickness used in the run) so the absorbing border is cropped.
+Most tools draw with matplotlib here and use ``sweep_tasks.viz`` for the
+seismic-specific pieces (snapshot / model / convergence renderers, colormaps).
+Three of them — plot_wavelet, plot_velocity_slice, compare_shot_gathers — need
+only matplotlib and work without the sweep_tasks tier. matplotlib is a hard
+dependency; imageio (GIF writing) is optional, see the ``animate`` extra.
+
+These tools also own the agent-side concerns: locating a task's snapshots.npy
+and cropping the PML. Pass ``abcn`` (the PML thickness used in the run) so the
+absorbing border is cropped.
 """
 
 from __future__ import annotations
@@ -15,6 +20,34 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from sweep_agent.tools import register
+
+
+def _require_matplotlib():
+    """Return ``(pyplot, None)``, or ``(None, error_dict)`` when matplotlib is absent.
+
+    Reporting a missing dependency as data keeps the contract the rest of the
+    tools follow: a tool whose layer is missing returns an error, never raises.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        return None, {"error": f"matplotlib is not importable: {exc}. Install it with `pip install matplotlib`."}
+    return plt, None
+
+
+def _require_imageio():
+    """Return ``(imageio, None)``, or ``(None, error_dict)`` when imageio is absent."""
+    try:
+        import imageio.v2 as imageio
+    except ImportError as exc:
+        return None, {
+            "error": f"imageio is not importable: {exc}. Install it with `pip install 'sweep-agent[animate]'`."
+        }
+    return imageio, None
+
 
 
 def resolve_task_dir(task_dir: str, marker: str = "snapshots.npy") -> Path:
@@ -93,9 +126,9 @@ def plot_wavefield(args: PlotWavefieldParams) -> dict[str, Any]:
         wf = _load_snaps(args.task_dir, args.abcn, args.free_surface, args.shot, args.field)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import wavefield as viz
 
     frame = wf[args.snapshot_index]
@@ -265,9 +298,9 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
     else:
         return {"error": f"unexpected record shape {rec.shape}"}
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import seismic
 
     out = rd / "output" / args.out_name
@@ -333,8 +366,9 @@ def plot_model(args: PlotModelParams) -> dict[str, Any]:
             return {"error": f"could not load true_model_path: {exc}"}
         panels.append(true_arr); labels.append("true")
 
-    import matplotlib
-    matplotlib.use("Agg")
+    _, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import model as vizmodel
 
     out = rd / "output" / args.out_name
@@ -375,9 +409,9 @@ def plot_convergence(args: PlotConvergenceParams) -> dict[str, Any]:
         return {"error": f"no {args.loss_name} under {args.task_dir}/output (run an FWI task first)"}
     loss = np.load(path).reshape(-1)
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import convergence
 
     out = rd / "output" / args.out_name
@@ -430,9 +464,9 @@ def plot_observed_data(args: PlotObservedDataParams) -> dict[str, Any]:
         arr = _record_to_2d(rec, args.shot, args.channel)
     except ValueError as exc:
         return {"error": str(exc)}
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import seismic
 
     out = Path(args.out_path).expanduser()
@@ -482,9 +516,9 @@ def plot_segy(args: PlotSegyParams) -> dict[str, Any]:
         return {"error": f"failed to read SEG-Y: {type(exc).__name__}: {exc}"}
     dt = args.dt if args.dt is not None else hdr_dt
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import seismic
 
     out = Path(args.out_path).expanduser()
@@ -543,9 +577,9 @@ def compare_shot_gathers(args: CompareShotGathersParams) -> dict[str, Any]:
     if a.shape != b.shape:
         return {"error": f"record shapes differ: {a.shape} vs {b.shape}"}
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
 
     s = np.percentile(np.abs(np.concatenate([a.ravel(), b.ravel()])), 98) + 1e-30
     diff = a - b
@@ -591,9 +625,9 @@ def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
     if not p.is_file():
         return {"error": f"model file not found: {args.model_path}"}
     arr = np.load(p)
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
     from sweep_tasks.viz import model as vizmodel
 
     out = Path(args.out_path).expanduser()
@@ -663,9 +697,9 @@ def plot_velocity_slice(args: PlotVelocitySliceParams) -> dict[str, Any]:
     depth = np.arange(nz) * (args.dh if args.dh else 1.0)
     depth_label = "depth (m)" if args.dh else "depth (samples)"
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
 
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -722,9 +756,9 @@ def plot_wavelet(args: PlotWaveletParams) -> dict[str, Any]:
     freqs = np.fft.rfftfreq(args.nt, d=args.dt)
     peak_freq = float(freqs[int(np.argmax(spec))])
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
 
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -779,10 +813,12 @@ def animate_fwi_evolution(args: AnimateFwiEvolutionParams) -> dict[str, Any]:
         allv = np.concatenate([m.ravel() for m in mats])
         vmin, vmax = np.percentile(allv, [2, 98])
 
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import imageio.v2 as imageio
+    plt, _mpl_err = _require_matplotlib()
+    if _mpl_err is not None:
+        return _mpl_err
+    imageio, _io_err = _require_imageio()
+    if _io_err is not None:
+        return _io_err
     from sweep_tasks.viz.colormaps import VP_CMAP
 
     out = rd / "output" / args.out_name

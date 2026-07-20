@@ -42,7 +42,9 @@ pip install -e .          # PyPI deps only: pydantic, httpx, PyYAML, numpy
 ```
 
 This alone gives you the CLI, the full 30-tool registry, and every tool that doesn't need a
-solver (`inspect_file`, `check_parameters`, `make_synthetic_model`). Verify:
+solver — `inspect_file`, `check_parameters`, `make_synthetic_model`, plus the three plotting
+tools that only need matplotlib (`plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers`).
+Verify:
 
 ```bash
 sweep-agent tools        # prints the 30 tools and what each does
@@ -108,9 +110,10 @@ them with `sweep-agent tools`.
 ### Optional extras
 
 ```bash
-pip install -e '.[ui]'     # Gradio web UI (drag-drop files, inline figures)
-pip install -e '.[test]'   # pytest
-pip install -e '.[dev]'    # pytest + ruff + black
+pip install -e '.[ui]'       # Gradio web UI (drag-drop files, inline figures)
+pip install -e '.[animate]'  # imageio — GIF writing for animate_fwi_evolution
+pip install -e '.[test]'     # pytest
+pip install -e '.[dev]'      # pytest + ruff + black
 ```
 
 ### macOS (Apple Silicon) — end-to-end
@@ -207,8 +210,9 @@ print(check_parameters.fn(CheckParametersParams(dh=10, dt=1e-3, fm=8, vp_min=150
 | tools | base (`pip install -e .`) | + `sweep` | + `sweep-tasks`<br>*(unreleased)* |
 |---|:--:|:--:|:--:|
 | `sweep-agent tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ | ✅ |
+| `plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers` *(matplotlib only)* | ✅ | ✅ | ✅ |
 | `list_equations` | error dict | ✅ | ✅ |
-| `build_*_spec`, `run_task`, `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | error dict | ✅ |
+| `build_*_spec`, `run_task`, the other `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | error dict | ✅ |
 
 A tool whose layer is missing returns `{"error": "… is not importable"}` — the agent stays up.
 Steps 1–2 are all publicly available today; the third column is our internal production tier.
