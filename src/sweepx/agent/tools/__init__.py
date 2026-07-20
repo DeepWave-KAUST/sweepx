@@ -119,5 +119,6 @@ import sweep_agent.tools.visualize        # noqa: E402,F401
 import sweep_agent.tools.orchestrate      # noqa: E402,F401
 import sweep_agent.tools.synth            # noqa: E402,F401
 import sweep_agent.tools.analysis         # noqa: E402,F401
+import sweep_agent.tools.forward_sweep    # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]
