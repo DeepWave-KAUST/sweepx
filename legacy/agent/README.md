@@ -65,6 +65,9 @@ pip install .
 That one command covers **both** the PyTorch-eager and the JAX paths — sweep uses lazy imports, so
 you only need the framework you actually use.
 
+Note: `sweep`'s default branch is `dev`, so a plain `git clone` checks out the development head.
+Pin a tag or commit if you need a reproducible environment.
+
 Optionally, on **Linux + NVIDIA only**, you can additionally build the compiled C++/CUDA binding
 (`sweep._C`). sweep-agent's tools do not require it:
 
