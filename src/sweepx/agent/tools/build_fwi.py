@@ -92,7 +92,7 @@ class BuildFwiParams(BaseModel):
     # --- io ---------------------------------------------------------------
     output_dir: str = Field("./sweep_runs")
     task_id: str | None = Field(None)
-    device: str = Field("cpu", description="Simulation device; defaults to cpu (the GPU is held by the LLM server). Set cuda only when the GPU is free.")
+    device: str = Field("cpu", description="Simulation device: 'cpu', 'cuda' (NVIDIA GPU) or 'mps' (Apple Silicon GPU). Defaults to cpu because the GPU is usually held by the LLM. Use 'cuda' only when an NVIDIA GPU is free; on a Mac use 'mps' — 'cuda' is NOT available there and will fail.")
     seed: int = Field(0)
     show_every: int = Field(10)
     save_yaml: bool = Field(True)
@@ -177,7 +177,12 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
 
-    from sweep_agent.tools.build_forward import _resolve_nt
+    from sweep_agent.tools.build_forward import _device_unavailable_reason, _resolve_nt
+
+    dev_err = _device_unavailable_reason(args.device)
+    if dev_err is not None:
+        return {"error": dev_err}
+
     nt_eff, nt_err = _resolve_nt(args)  # duck-typed on .nt / .record_length_s / .dt
     if nt_err is not None:
         return nt_err

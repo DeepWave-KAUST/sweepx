@@ -17,6 +17,7 @@ from sweep_agent.tools import register
 from sweep_agent.tools.build_forward import (
     BuildForwardParams,
     _deep_merge,
+    _device_unavailable_reason,
     _maybe_upgrade_3d,
     _physics_source_fields,
     _resolve_geometry,
@@ -86,6 +87,10 @@ def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
         from sweep_tasks import dump_task
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
+
+    dev_err = _device_unavailable_reason(args.device)
+    if dev_err is not None:
+        return {"error": dev_err}
 
     nt_eff, nt_err = _resolve_nt(args)
     if nt_err is not None:

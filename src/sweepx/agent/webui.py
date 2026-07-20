@@ -30,7 +30,7 @@ from typing import Any
 
 from sweep_agent.agent import Agent
 from sweep_agent.llm.vllm_backend import VLLMBackend
-from sweep_agent.prompts import SYSTEM_PROMPT
+from sweep_agent.prompts import build_system_prompt
 from sweep_agent.tools import registry as default_registry
 
 # Tool-result keys that may hold a saved figure, in priority order.
@@ -455,7 +455,7 @@ def _context_line(agent, fallback_tools_tokens: int, max_len: int, count) -> str
     if agent is not None and getattr(agent, "history", None):
         hist_tokens = sum(count(m.content or "") for m in agent.history)
     else:
-        hist_tokens = count(SYSTEM_PROMPT)
+        hist_tokens = count(build_system_prompt())
     specs = getattr(agent, "last_tool_specs", None) if agent is not None else None
     tools_tokens = count(json.dumps(specs)) if specs else fallback_tools_tokens
     used = hist_tokens + tools_tokens

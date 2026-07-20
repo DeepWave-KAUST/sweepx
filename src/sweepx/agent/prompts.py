@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import platform
+from functools import lru_cache
+
 SYSTEM_PROMPT = """\
 You are sweep-agent, a controller for the `sweep` seismic full-waveform-modelling
 and full-waveform-inversion stack. The user gives you natural-language requests
@@ -228,3 +231,57 @@ fill paths/numbers from the request, and prefer the ONE-CALL tools:
 - "show this SEG-Y file" → plot_segy(segy_path=..)
 Do each task with the fewest calls; once the figure/result exists, STOP and report it.
 """
+
+
+@lru_cache(maxsize=1)
+def runtime_environment_note() -> str:
+    """Describe the machine this agent is driving, for the end of the prompt.
+
+    A field description can only state a *rule* ("on a Mac use mps"); the model
+    has no way to tell whether the rule applies, so it falls back on its prior
+    that GPU means cuda and asks for a device that cannot exist here. Naming the
+    platform and the usable devices up front is what actually makes it choose
+    correctly — see `_device_unavailable_reason` for the matching guard.
+
+    torch is optional (the base install has no solver), so a missing torch just
+    means we report cpu and stay quiet about accelerators.
+    """
+    devices = ["cpu"]
+    torch_note = "torch is NOT installed (no solver backend available yet)"
+    try:
+        import torch
+
+        torch_note = f"torch {torch.__version__}"
+        if torch.cuda.is_available():
+            devices.append("cuda")
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            devices.append("mps")
+    except Exception:
+        pass
+
+    gpu = [d for d in devices if d != "cpu"]
+    if gpu:
+        gpu_line = (
+            f"- When the user says \"GPU\" on THIS machine they mean '{gpu[0]}' — "
+            f"pass device='{gpu[0]}'."
+        )
+    else:
+        gpu_line = (
+            "- There is NO usable GPU here. Run on 'cpu' and say so if the user asks "
+            "for a GPU; never pass 'cuda' or 'mps'."
+        )
+    unavailable = [d for d in ("cuda", "mps") if d not in devices]
+
+    return f"""
+
+Runtime environment (THIS machine — trust these facts over any general assumption):
+- OS={platform.system()} ({platform.machine()}), Python {platform.python_version()}, {torch_note}
+- Usable `device` values here: {", ".join(devices)}
+- NOT available here: {", ".join(unavailable) if unavailable else "(none)"} — passing one of these WILL fail.
+{gpu_line}
+"""
+
+
+def build_system_prompt() -> str:
+    """System prompt + a description of the machine it is running on."""
+    return SYSTEM_PROMPT + runtime_environment_note()

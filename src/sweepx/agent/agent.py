@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 from sweep_agent.llm.base import BaseLLM, ChatMessage
-from sweep_agent.prompts import SYSTEM_PROMPT
+from sweep_agent.prompts import build_system_prompt
 from sweep_agent.tools import Registry, registry as default_registry
 
 # Big tool-result fields that must NOT be echoed back into the conversation —
@@ -70,7 +70,7 @@ class AgentStep:
 class Agent:
     llm: BaseLLM
     tools: Registry = field(default_factory=lambda: default_registry)
-    system_prompt: str = SYSTEM_PROMPT
+    system_prompt: str = field(default_factory=build_system_prompt)
     max_steps: int = 12
     history: list[ChatMessage] = field(default_factory=list)
     # Optional per-turn tool subsetting: (message, all_names) -> subset of names.

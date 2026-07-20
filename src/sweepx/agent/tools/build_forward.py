@@ -245,6 +245,39 @@ def _centered_geometry(vp_shape: tuple[int, ...], receiver_step: int, receiver_d
     return {"kind": "explicit", "sources": [src], "receivers": recs}
 
 
+def _device_unavailable_reason(device: str) -> str | None:
+    """Return why `device` can't run here, or None if it can.
+
+    Without this the spec validates happily and only blows up inside run_task
+    ("Torch not compiled with CUDA enabled"), and the model's usual reaction is
+    to drop the device and retry — so a request for a GPU comes back as a
+    successful CPU run that nobody notices. Failing here instead names the
+    device that does work, which is what the model needs to correct itself.
+    """
+    dev = (device or "cpu").strip().lower()
+    if dev == "cpu":
+        return None
+    try:
+        import torch
+    except ImportError:
+        return None  # nothing to check against; let the runner decide
+    if dev.startswith("cuda"):
+        if torch.cuda.is_available():
+            return None
+        mps = getattr(torch.backends, "mps", None)
+        alt = "mps" if mps is not None and mps.is_available() else "cpu"
+        return (
+            f"device={device!r} is not available on this machine "
+            f"(torch.cuda.is_available() is False). Use device='{alt}' instead."
+        )
+    if dev == "mps":
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return None
+        return f"device={device!r} is not available on this machine. Use device='cpu' instead."
+    return None
+
+
 def _resolve_nt(p: "BuildForwardParams") -> tuple[int | None, dict[str, Any] | None]:
     """Resolve the time-sample count: explicit nt, else round(record_length_s/dt).
     Returns (nt, None) or (None, error_dict). Mutates p.nt so downstream code that
@@ -384,6 +417,10 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
         from sweep_tasks import dump_task
     except ImportError as exc:
         return {"error": f"sweep_tasks is not importable: {exc}"}
+
+    dev_err = _device_unavailable_reason(args.device)
+    if dev_err is not None:
+        return {"error": dev_err}
 
     nt_eff, nt_err = _resolve_nt(args)
     if nt_err is not None:
