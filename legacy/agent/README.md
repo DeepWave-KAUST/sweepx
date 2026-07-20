@@ -142,6 +142,10 @@ ollama pull qwen2.5:7b                 # 4.7 GB; must be a tool-calling capable 
 export SWEEP_AGENT_LLM_URL=http://localhost:11434/v1
 export SWEEP_AGENT_LLM_MODEL=qwen2.5:7b
 sweep-agent chat
+
+# 5. optional — the browser UI instead of the terminal (same LLM endpoint)
+pip install -e '.[ui]'
+sweep-agent ui --port 7860             # then open http://localhost:7860
 ```
 
 Mac notes:
@@ -182,11 +186,24 @@ sweep-agent chat
 
 `--url` / `--model` flags override the env vars; `SWEEP_AGENT_MAX_STEPS` caps tool-call rounds per turn.
 
-### Web UI
+### Web UI (also needs an LLM endpoint from step 4)
+
+Same agent as `chat`, in a browser: drag files into the window, figures render inline.
 
 ```bash
 pip install -e '.[ui]'
-sweep-agent ui --port 7860     # then open http://localhost:7860
+
+# point it at the same endpoint `chat` uses — the UI does not start an LLM for you
+export SWEEP_AGENT_LLM_URL=http://localhost:11434/v1     # Ollama; …:8000/v1 for vLLM
+export SWEEP_AGENT_LLM_MODEL=qwen2.5:7b
+
+sweep-agent ui --port 7860        # then open http://localhost:7860
+```
+
+`--url` / `--model` override the environment, so you can skip the exports:
+
+```bash
+sweep-agent ui --url http://localhost:11434/v1 --model qwen2.5:7b
 ```
 
 Note: the web UI holds **one globally shared conversation** — every open browser window sees the
