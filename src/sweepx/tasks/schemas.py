@@ -397,6 +397,12 @@ class LossSpec(_Forbid):
     # data misfit is multiplied by it (window outside -> excluded); None = off
     # (the FWI/LSRTM misfit then runs exactly as before).
     data_mask_path: str | None = None
+    # Apply ``data_mask_path`` MUTE-THEN-MISFIT (syn & obs multiplied by the
+    # mask BEFORE the misfit) instead of as a post-hoc per-sample weight.
+    # Required for kind="trace_cosine": its per-trace value is broadcast over
+    # time, so a post-hoc weight rescales the trace but never windows it.
+    # Default False keeps every existing data_mask_path run bit-identical.
+    data_mask_window_mode: bool = False
     # Diving-wave time window computed ON-THE-FLY per batch from a per-node
     # first-arrival LUT (``diving_window_db`` npz: node_rec[Nn,3] + per-node
     # asinh moveout params node_asinh[Nn,3]=(t0,v0,k), from pick3d/FATT picks).

@@ -45,6 +45,22 @@ from sweep_tasks._helpers.optimizer import (
     _build_scheduler,
     _remember_initial_lrs,
 )
+def _MASK_WINDOW(spec):
+    """True when loss.data_mask_path should be applied MUTE-THEN-MISFIT.
+
+    Off by default so existing ``data_mask_path`` runs (post-hoc per-sample
+    weight) stay bit-identical. Needed for ``trace_cosine``, whose per-trace
+    value is broadcast over time: weighting it by a time-varying mask only
+    rescales the trace, it never windows it."""
+    return bool(getattr(getattr(spec, "loss", None), "data_mask_window_mode", False))
+
+
+def _MASK_WINDOW_TRACE_COSINE(spec):
+    """Windowed (mute-then-misfit) mask combined with the trace_cosine misfit."""
+    return (_MASK_WINDOW(spec)
+            and getattr(getattr(spec, "loss", None), "kind", None) == "trace_cosine")
+
+
 from sweep_tasks._helpers.plan_apply import (
     _apply_data_plan_to_fwi,
     _apply_model_plan_to_fwi,
@@ -1178,7 +1194,12 @@ class FWIRunnerMixin:
         per_shot_numel = int(sample.numel())
         global_norm = float(per_shot_numel * global_batchsize)
         data_mask = self._get_data_mask(spec, obs, dev)
-        if data_mask is not None:
+        if data_mask is not None and not _MASK_WINDOW_TRACE_COSINE(spec):
+            # Pointwise misfits lose the muted samples from the sum, so the norm
+            # must shrink by the kept fraction. NOT so for windowed trace_cosine:
+            # its per-trace value is broadcast over ALL nt samples regardless of
+            # the mask, so the sum keeps its full-length scale and shrinking the
+            # norm would inflate the reported loss by 1/mask.mean().
             global_norm = float(global_norm * max(float(data_mask.float().mean()), 1.0e-6))
 
         # Per-chunk forward input. In reparam mode we render a fresh vp
@@ -1285,7 +1306,8 @@ class FWIRunnerMixin:
                         syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
                                                   stage_dt, order=syn_bandpass.order)
                     obs_chunk = obs[chunk].to(dev)
-                    loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
+                    loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev),
+                                   window_mode=_MASK_WINDOW(spec))
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 if reparam_net is None:
@@ -1360,7 +1382,8 @@ class FWIRunnerMixin:
                 if _TPROF: _sync(); _t_bp = _t.perf_counter()
                 obs_chunk = obs[chunk].to(dev)
                 if _TPROF: _sync(); _t_obs = _t.perf_counter()
-                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
+                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev),
+                                   window_mode=_MASK_WINDOW(spec))
                 if _TPROF: _sync(); _t_loss = _t.perf_counter()
                 (loss_t / global_norm).backward()
                 if _TPROF: _sync(); _t_bwd = _t.perf_counter()
@@ -1538,7 +1561,8 @@ class FWIRunnerMixin:
                     syn = _bandpass_syn_torch(syn, syn_bandpass.lo_hz, syn_bandpass.hi_hz,
                                               stage_dt, order=syn_bandpass.order)
                 obs_chunk = obs[chunk].to(dev)
-                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
+                loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev),
+                                   window_mode=_MASK_WINDOW(spec))
                 if _TPROF: _sync(); _pf["loss"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
                 (loss_t / global_norm).backward()
                 if _TPROF: _sync(); _pf["bwd"] += _tm.perf_counter() - _t_a; _t_a = _tm.perf_counter()
