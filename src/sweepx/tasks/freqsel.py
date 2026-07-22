@@ -174,9 +174,18 @@ class FreqSelTargets:
         # rank (tens of GB on a full-survey node set) OOM-kills the host;
         # bind_ownership() streams D shard-by-shard keeping only owned rows.
         self._paths, self._sizes, self._nb = paths, sizes, nb
-        xyz = np.empty((self.n_items, 3), np.int32)
+        # Grid dimensionality comes from the shards themselves: (x, y, z) for
+        # 3-D, (x, z) for 2-D. Everything downstream (union table, solver
+        # receiver table) follows this width, so a 2-D run needs no flag.
+        with np.load(paths[0]) as p:
+            self.ndim = int(np.asarray(p["trace_grid_xyz"]).shape[1])
+        if self.ndim not in (2, 3):
+            raise ValueError(
+                f"trace_grid_xyz must be (N,2) for 2-D or (N,3) for 3-D; "
+                f"got width {self.ndim} in {paths[0]}")
+        xyz = np.empty((self.n_items, self.ndim), np.int32)
         self.node_of_item = np.empty(self.n_items, np.int32)
-        self.node_grid = np.empty((self.n_nodes, 3), np.int64)
+        self.node_grid = np.empty((self.n_nodes, self.ndim), np.int64)
         oi = on = 0
         for t, pth in enumerate(paths):
             with np.load(pth) as p:
@@ -190,10 +199,19 @@ class FreqSelTargets:
             on += nnodes[t]
             if verbose:
                 print(f"[freqsel] shard {t + 1}/{len(paths)} indexed", flush=True)
-        key = xyz[:, 0].astype(np.int64) * ny + xyz[:, 1]
-        ukey, self.union_col = np.unique(key, return_inverse=True)
-        self.union_xyz = np.stack(
-            [ukey // ny, ukey % ny, np.zeros_like(ukey)], -1).astype(np.int32)
+        # Dedup receivers onto surface grid CELLS. 3-D: the lateral cell
+        # (x, y), z forced to the surface. 2-D: the lateral coordinate is x
+        # alone and the shards carry (x, z) pairs, so ``ny`` is unused.
+        if self.ndim == 2:
+            key = xyz[:, 0].astype(np.int64)
+            ukey, self.union_col = np.unique(key, return_inverse=True)
+            self.union_xyz = np.stack(
+                [ukey, np.zeros_like(ukey)], -1).astype(np.int32)
+        else:
+            key = xyz[:, 0].astype(np.int64) * ny + xyz[:, 1]
+            ukey, self.union_col = np.unique(key, return_inverse=True)
+            self.union_xyz = np.stack(
+                [ukey // ny, ukey % ny, np.zeros_like(ukey)], -1).astype(np.int32)
         self.n_union = len(ukey)
         self._bound = None
 

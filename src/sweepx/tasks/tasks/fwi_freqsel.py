@@ -72,15 +72,26 @@ class FreqselRunnerMixin:
             vp0 = _resample_vp_tensor(
                 torch.tensor(vp0_native), new_shape).detach().cpu().numpy()
         gshape = vp0.shape
-        nz, ny_, nx_ = gshape
-        nyp = -(-ny_ // dd_py) * dd_py if dd_on else ny_
-        nxp = -(-nx_ // dd_px) * dd_px if dd_on else nx_
-        vp0p = np.pad(vp0, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)),
-                      mode="edge")
+        is2d = len(gshape) == 2
+        if is2d:
+            nz, nx_ = gshape
+            ny_ = None
+            nyp = None
+            nxp = nx_                      # DD is 3-D only (guarded below)
+            _pad = ((0, 0), (0, 0))
+            _solver_shape = (nz, nxp)
+        else:
+            nz, ny_, nx_ = gshape
+            nyp = -(-ny_ // dd_py) * dd_py if dd_on else ny_
+            nxp = -(-nx_ // dd_px) * dd_px if dd_on else nx_
+            _pad = ((0, 0), (0, nyp - ny_), (0, nxp - nx_))
+            _solver_shape = (nz, nyp, nxp)
+        vp0p = np.pad(vp0, _pad, mode="edge")
         frozen = vp0p == float(getattr(spec.reparam, "water_vp_m_s", 1500.0)
                                if spec.reparam else 1500.0)
-        frozen[:, ny_:, :] = True
-        frozen[:, :, nx_:] = True
+        if not is2d:
+            frozen[:, ny_:, :] = True
+            frozen[:, :, nx_:] = True
         water_t = torch.tensor(frozen, device=dev)
         base_t = torch.tensor(vp0p, device=dev)
 
@@ -99,7 +110,7 @@ class FreqselRunnerMixin:
                     _ns = _shape_for_dh(native_arr.shape, native_dh, float(dh))
                     a0 = _resample_vp_tensor(torch.tensor(native_arr), _ns
                                              ).detach().cpu().numpy()
-                a0p = np.pad(a0, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)), mode="edge")
+                a0p = np.pad(a0, _pad, mode="edge")
                 return torch.tensor(a0p, device=dev)
 
             _refs = {m.name: m for m in _normalize_fwi_init_models(spec)}
@@ -116,7 +127,7 @@ class FreqselRunnerMixin:
                 param_bases.append(_prep_base(np.load(_ref.path).astype(np.float32)))
 
         solver = _build_solver(spec.physics, spec.backend,
-                               (nz, nyp, nxp), float(dh),
+                               _solver_shape, float(dh),
                                float(dt), nt, dev)
         if dd_on:
             from sweep.parallel import MeshTopology
@@ -149,19 +160,24 @@ class FreqselRunnerMixin:
                     torch.tensor(vpt), gshape).detach().cpu().numpy().astype(np.float32)
             n_nodes = int(fspec.synth_n_nodes)
             sx = np.linspace(8, nx_ - 9, n_nodes).astype(np.int64)
-            nodes = np.stack([sx, np.full(n_nodes, ny_ // 2, np.int64),
-                              np.full(n_nodes, fspec.synth_node_z,
-                                      np.int64)], -1)
             rx = np.arange(4, nx_ - 4, int(fspec.synth_rec_stride))
-            recs = np.stack([rx, np.full(len(rx), ny_ // 2, np.int64),
-                             np.zeros(len(rx), np.int64)], -1)
+            if is2d:
+                nodes = np.stack([sx, np.full(n_nodes, fspec.synth_node_z,
+                                              np.int64)], -1)
+                recs = np.stack([rx, np.zeros(len(rx), np.int64)], -1)
+            else:
+                nodes = np.stack([sx, np.full(n_nodes, ny_ // 2, np.int64),
+                                  np.full(n_nodes, fspec.synth_node_z,
+                                          np.int64)], -1)
+                recs = np.stack([rx, np.full(len(rx), ny_ // 2, np.int64),
+                                 np.zeros(len(rx), np.int64)], -1)
             shard = str(task_dir / f"freqsel_synth_obs_s{si}.npz")
             t = np.arange(nt, dtype=np.float64) * comb.dt
             f0 = 1.5 * float(np.mean(comb.freqs))
             a = np.pi * f0 * (t - 0.25)
             ricker = ((1 - 2 * a * a) * np.exp(-a * a)).astype(np.float32)
             vpt_t = torch.tensor(
-                np.pad(vpt, ((0, 0), (0, nyp - ny_), (0, nxp - nx_)), mode="edge"),
+                np.pad(vpt, _pad, mode="edge"),
                 device=dev)
             # True obs uses the correct multi-parameter physics: VRZ -> [vp, z]
             # (Gardner-coupled truth for this synthetic test), acoustic -> [vp].
@@ -172,7 +188,7 @@ class FreqselRunnerMixin:
             shards_glob = shard
         else:
             shards_glob = fspec.coeff_shards
-        targets = fsl.FreqSelTargets(shards_glob, comb, ny_,
+        targets = fsl.FreqSelTargets(shards_glob, comb, ny_ or 1,
                                      verbose=rank == 0)
         sched = fsl.PoolScheduler(targets.node_grid, int(fspec.n_pools),
                                   comb.n_bins, seed=int(spec.seed) + 17,
@@ -546,7 +562,8 @@ class FreqselRunnerMixin:
                     m = (net.render(chunk_rows=chunk_rows).detach()
                          if use_reparam else vp.detach())
                 np.save(task_dir / f"vp_iter{gi + 1:04d}.npy",
-                        m[:, :ny_, :nx_].cpu().numpy())
+                        (m[:, :nx_] if is2d
+                         else m[:, :ny_, :nx_]).cpu().numpy())
                 if use_reparam and (spec.reparam.save_net
                                     or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
                     torch.save(net.state_dict(),
@@ -631,9 +648,20 @@ class FreqselRunnerMixin:
         _vp_ref = next((m for m in _init_refs
                         if getattr(m, "name", None) == "vp"), _init_refs[0])
         vp0_native = np.load(_vp_ref.path).astype(np.float32)
-        if vp0_native.ndim != 3:
-            raise ValueError("freqsel path is 3-D (use a thin-slab volume "
-                             f"for 2-D tests); init shape {vp0_native.shape}")
+        if vp0_native.ndim not in (2, 3):
+            raise ValueError("freqsel init must be 2-D (nz, nx) or 3-D "
+                             f"(nz, ny, nx); got shape {vp0_native.shape}")
+        if vp0_native.ndim == 2:
+            # 2-D freqsel: same encoding/loss, single lateral axis. Domain
+            # decomposition and the (ny, nx) bathymetry pin are 3-D-only.
+            if (getattr(spec, "dd", None) is not None
+                    and getattr(spec.dd, "enabled", False)):
+                raise ValueError("freqsel 2-D does not support domain "
+                                 "decomposition (dd.enabled); run single-device")
+            if (spec.reparam is not None
+                    and getattr(spec.reparam, "seabed_depth_path", None)):
+                raise ValueError("reparam.seabed_depth_path is a 3-D (ny, nx) "
+                                 "bathymetry; not available for 2-D freqsel")
         native_dh = float(spec.grid.dh)
 
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -665,7 +693,8 @@ class FreqselRunnerMixin:
                     m = net.render(chunk_rows=chunk_rows).detach()
             else:
                 m = self._freqsel_last_vp.detach()
-            final = m[:, :ny_, :nx_].cpu().numpy()
+            final = (m[:, :nx_] if m.ndim == 2
+                     else m[:, :ny_, :nx_]).cpu().numpy()
             np.save(task_dir / "inverted_vp.npy", final)
             # Multi-parameter reparam: also dump every freed channel (z, …).
             if use_reparam and getattr(spec.reparam, "free_params", None):
@@ -673,7 +702,8 @@ class FreqselRunnerMixin:
                     allf = net.render_all(chunk_rows=chunk_rows).detach()
                 for _i, _fp in enumerate(spec.reparam.free_params):
                     np.save(task_dir / f"inverted_{_fp.name}.npy",
-                            allf[_i, :, :ny_, :nx_].cpu().numpy())
+                            (allf[_i][:, :nx_] if allf[_i].ndim == 2
+                             else allf[_i][:, :ny_, :nx_]).cpu().numpy())
             np.savez(task_dir / "curves.npz", losses=np.array(losses),
                      iter_s=np.array(times), peak_gb=np.array(peaks))
             summary = {
