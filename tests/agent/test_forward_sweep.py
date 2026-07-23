@@ -34,7 +34,6 @@ def test_missing_solver_is_reported_as_data(monkeypatch):
     assert "error" in out
 
 
-@pytest.mark.xfail(reason="run_forward_sweep is still a scaffold — remove this marker once implemented", strict=False)
 def test_runs_a_shot_end_to_end(tmp_path):
     """A tiny two-layer model should come back as a (nt, nrec) shot gather."""
     pytest.importorskip("sweep")
