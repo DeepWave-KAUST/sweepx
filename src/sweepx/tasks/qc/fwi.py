@@ -112,8 +112,8 @@ def save_gradient_png(
     (``"sweep_image"``) — tuned for percentile-clipped kernel/gradient
     plots. Pass ``cmap="RdBu_r"`` to recover the legacy red/blue look.
     """
-    # Import here so a missing sweep-viz at install time doesn't break
-    # other QC paths. The registration side-effect fires on import.
+    # Deferred: importing the colormaps pulls matplotlib (which other QC paths
+    # don't need) and the colormap registration fires as an import side-effect.
     from sweep_tasks.viz.colormaps import IMAGE_CMAP
 
     grad_np = _to_np(grad)

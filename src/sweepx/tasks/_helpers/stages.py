@@ -1,4 +1,5 @@
 """Multiscale-stage prep + tensor/obs resampling + syn bandpass. Verbatim from runner.py."""
+import os
 import numpy as np
 import torch
 
@@ -328,7 +329,17 @@ def _prepare_stage(
     obs_t = torch.from_numpy(obs_np)
     on_cuda = _is_cuda_dev(dev)
     if on_cuda:
-        obs_t = obs_t.to(dev, non_blocking=False)
+        # Keep the full obs on GPU only when it fits with headroom. Large
+        # field-data obs at fine stages (tens of GB) OOMs the device and can
+        # exceed a V100's 32 GB; leave it on CPU and let the per-iter
+        # ``obs[chunk].to(dev)`` stream each chunk on demand.
+        _free_b, _ = torch.cuda.mem_get_info(dev)
+        if obs_t.nbytes < _free_b - (6 << 30) and os.environ.get("SWEEP_OBS_FORCE_CPU") != "1":
+            obs_t = obs_t.to(dev, non_blocking=False)
+        elif getattr(dist_info, "is_root", True):
+            print(f"[stage {stage_idx}] obs {obs_t.nbytes / (1 << 30):.1f} GB "
+                  f"> GPU headroom (free {_free_b / (1 << 30):.1f} GB) — kept on "
+                  f"CPU, streaming per-chunk to device", flush=True)
 
     # 4) bandpass (per-stage; uses the new dt, so it's correctly normalised)
     #
@@ -339,7 +350,7 @@ def _prepare_stage(
     # (1 GB float32), drops stage-entry time from ~10 s to <0.5 s.
     # CPU fallback: scipy ``sosfiltfilt`` with the configured padtype.
     if stage.bandpass is not None:
-        if on_cuda:
+        if obs_t.is_cuda:   # obs may be CPU-resident for large field data (see upload above)
             with torch.no_grad():
                 # Chunk the bandpass over the shot axis (dim 0) so each cuFFT
                 # plan stays under the 2^31-element limit; a full dense-OBN obs

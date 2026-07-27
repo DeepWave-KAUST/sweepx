@@ -30,6 +30,7 @@ dependencies = [
     "sweep-solver",
     "sweep-loss",
     "sweep-nn",
+    "sweep-io",         # imported at module scope by _helpers/data_loading + wavelet/*
     "pydantic>=2.0",
     "PyYAML>=6.0",
     "numpy>=1.20",
@@ -39,8 +40,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
-dev  = ["pytest>=7", "ruff", "black"]
+animate = ["imageio>=2.9"]   # GIF writing in sweep_tasks.viz.wavefield
+test    = ["pytest>=7"]
+dev     = ["pytest>=7", "ruff", "black"]
 
 [project.scripts]
 sweep-tasks = "sweep_tasks.cli:main"
