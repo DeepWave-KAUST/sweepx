@@ -90,41 +90,121 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     mods, err = _require_sweep()
     if err is not None:
         return err
+    from sweep_agent.tools.build_forward import _device_unavailable_reason
+    dev_err = _device_unavailable_reason(args.device)
+    if dev_err is not None:
+        return {"error": dev_err}
+    
+    
 
     # ------------------------------------------------------------------
     # TODO — implement the forward run. Worked reference (a complete, runnable
     # script using exactly this API):
     #     sweep/examples/wavefields/topography/acoustic2d_hill_demo.py
-    #
+    torch = mods["torch"]
+    ricker = mods["ricker"]
     # 1. Resolve nt: use args.nt, else round(args.record_length_s / args.dt).
     #    Return {"error": ...} if neither was given.
+    nt = args.nt
+    if nt is None:
+        if args.record_length_s is None:
+            return {"error": "give either nt or record_length_s."}
+        nt = round(args.record_length_s / args.dt)
     # 2. np.load the model, sanity-check it is 2-D, move it to args.device.
+    if not Path(args.vp_path).exists():
+        return {"error": f"velocity model not found: {args.vp_path}"}
+    vp_np = np.load(args.vp_path)
+    if vp_np.ndim != 2:
+        return {"error": f"vp must be 2-D (nz, nx); got shape {vp_np.shape}."}
+    vp = torch.from_numpy(vp_np.astype(np.float32)).to(args.device)
+    nz, nx = vp_np.shape
     # 3. Build the Ricker wavelet with mods["ricker"] on a t axis of nt samples
     #    (give it a delay so the wavelet is causal).
+    delay = 1.0 / args.fm
+    t = np.arange(nt, dtype=np.float32) * args.dt - delay
+    wavelet = torch.tensor((1.0e3 * ricker(t, f=args.fm)).astype(np.float32)).to(args.device)
     # 4. Build source and receiver index tensors. sources is (nshot, 2) as
     #    (x, z); receivers is (nshot, nrec, 2). Default the source to the middle
     #    column, receivers to a line across the model at receiver_depth.
+    src_x = args.source_x if args.source_x is not None else nx // 2
+    sources = torch.from_numpy(
+        np.array([[src_x, args.source_depth]], dtype=np.int64)
+    ).to(args.device)
+    rec_x = np.arange(0, nx, args.receiver_step, dtype=np.int64)
+    rec_z = np.full_like(rec_x, args.receiver_depth)
+    receivers = torch.from_numpy(
+        np.stack([rec_x, rec_z], axis=-1)[None, ...]
+    ).to(args.device)
     # 5. equation = mods["eq_mod"]._equation_classes()[args.equation](
     #        spatial_order=args.spatial_order, device=args.device, backend="torch")
     #    Reject equations needing more than vp — list_equations shows the models
     #    each one wants.
+    classes = mods["eq_mod"]._equation_classes()
+    if args.equation not in classes:
+        return {"error": f"unknown equation '{args.equation}'. See list_equations."}
+    equation = classes[args.equation](
+        spatial_order=args.spatial_order, device=args.device, backend="torch"
+    )
+    if list(equation.models) != ["vp"]:
+        return {"error": f"{args.equation} needs models {list(equation.models)}; "
+                         "this tool only supports single-vp equations."}
     # 6. prop = mods["PropTorch"](equation, shape=vp.shape, dh=args.dh,
     #        dt=args.dt, abcn=args.abcn, free_surface=args.free_surface,
     #        use_ckpt=False, impl="eager")
     #    record = prop(wavelet, sources, receivers, models=[vp])  under no_grad.
+    prop = mods["PropTorch"](
+        equation, shape=(nz, nx), dh=args.dh, dt=args.dt,
+        abcn=args.abcn, free_surface=args.free_surface, use_ckpt=False, impl="eager",
+    )
+    with torch.no_grad():
+        record = prop(wavelet, sources, receivers, models=[vp])
     # 7. record comes back as (nshot, nt, nrec, nfield) — squeeze to (nt, nrec),
     #    save it as .npy under out_dir.
+    rec_np = np.squeeze(record.detach().cpu().numpy())
+    if rec_np.ndim != 2:
+        return {"error": f"unexpected record shape {tuple(record.shape)} -> {rec_np.shape}."}
+    if not np.isfinite(rec_np).all():
+        return {"error": "diverged (non-finite record) - reduce dt; see check_parameters"}
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    record_path = out_dir / "record.npy"
+    np.save(record_path, rec_np)
+    
     # 8. If args.plot: draw the gather with matplotlib (see
     #    visualize.py::_require_matplotlib for the guarded-import pattern and
     #    plot_observed_data for a gather-plotting example) and save a PNG.
+    image_path = None
+    if args.plot:
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            plt = None
+        if plt is not None:
+            pct = np.percentile(np.abs(rec_np), 99.0) or 1.0
+            fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+            ax.imshow(rec_np, cmap="seismic", vmin=-pct, vmax=pct,
+                      aspect="auto", extent=[rec_x.min(), rec_x.max(), nt * args.dt, 0])
+            ax.set_xlabel("receiver x (cells)"); ax.set_ylabel("time (s)")
+            ax.set_title(f"{args.equation} shot gather")
+            png_path = out_dir / "shot_gather.png"
+            fig.savefig(png_path, dpi=140); plt.close(fig)
+            image_path = str(png_path)
+
+
+
+
     # 9. Return {"record_path", "image_path", "shape", "device", "nt", "summary"}.
-    #
     # Keep every import inside this function or inside _require_sweep, so the
     # module still imports on a base install with no solver present.
     # ------------------------------------------------------------------
     return {
-        "error": (
-            "run_forward_sweep is not implemented yet — see the TODO in "
-            "src/sweep_agent/tools/forward_sweep.py."
-        )
+        "record_path": str(record_path),
+        "image_path": image_path,
+        "shape": list(rec_np.shape),
+        "device": args.device,
+        "nt": nt,
+        "summary": f"Ran {args.equation} forward: {rec_np.shape[0]} samples x "
+                   f"{rec_np.shape[1]} receivers on {args.device}.",
     }
