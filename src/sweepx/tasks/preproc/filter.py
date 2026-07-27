@@ -197,4 +197,82 @@ def bandpass_torch(
     return y.to(dtype=x.dtype)
 
 
-__all__ = ["bandpass", "lowpass", "highpass", "bandpass_torch"]
+def receiver_smoothing_matrix(
+    rec_xy, sigma_cells: float, *, cutoff_sigmas: float = 3.0,
+    device=None, dtype=None,
+):
+    """Row-normalised Gaussian averaging matrix over scattered receivers.
+
+    Low-frequency marine records can be noise-dominated trace by trace while
+    the signal stays laterally coherent, so averaging neighbouring receivers
+    raises the usable SNR. This builds the operator ``W`` that does it:
+    ``W[i, j] ∝ exp(-|r_i - r_j|² / 2σ²)`` over the *surface* coordinates,
+    truncated beyond ``cutoff_sigmas``, with rows summing to 1 (normalised
+    convolution — no amplitude bias where the receiver density varies).
+
+    Apply the SAME ``W`` to obs and syn (see :func:`apply_receiver_smoothing`).
+    Smoothing only obs would compare a denoised observation against a
+    full-bandwidth synthetic and bias the misfit; applying it to both is a
+    linear projection of the data space, and autograd gets the adjoint for
+    free.
+
+    Parameters
+    ----------
+    rec_xy
+        ``(nrec, 2)`` receiver surface positions **in grid cells**.
+    sigma_cells
+        Gaussian sigma, in the same cell units as ``rec_xy``.
+    cutoff_sigmas
+        Zero the weights beyond this many sigmas (keeps ``W`` sparse-ish and
+        stops far receivers leaking in).
+
+    Returns
+    -------
+    torch.Tensor
+        ``(nrec, nrec)`` row-normalised weights.
+
+    Notes
+    -----
+    Cost is ``O(nrec²)`` in memory: 4 KB per 32 receivers. At ~1e3 receivers
+    that is ~4 MB and a trivially fast matmul; beyond ~2e4 receivers this
+    dense form is the wrong data structure (use a gridded normalised
+    convolution instead).
+    """
+    import torch
+
+    if not isinstance(rec_xy, torch.Tensor):
+        rec_xy = torch.as_tensor(rec_xy)
+    rec_xy = rec_xy.to(device=device, dtype=dtype or torch.float32)
+    if rec_xy.ndim != 2 or rec_xy.shape[1] != 2:
+        raise ValueError(f"rec_xy must be (nrec, 2); got {tuple(rec_xy.shape)}")
+    if sigma_cells <= 0:
+        raise ValueError(f"sigma_cells must be > 0; got {sigma_cells}")
+    d2 = torch.cdist(rec_xy, rec_xy).pow_(2)
+    w = torch.exp(-0.5 * d2 / (float(sigma_cells) ** 2))
+    w = torch.where(d2 <= (float(cutoff_sigmas) * float(sigma_cells)) ** 2,
+                    w, torch.zeros((), device=w.device, dtype=w.dtype))
+    return w / w.sum(dim=1, keepdim=True).clamp_min(1e-30)
+
+
+def apply_receiver_smoothing(x, w, *, rec_axis: int = -2):
+    """Apply a receiver-smoothing matrix from :func:`receiver_smoothing_matrix`.
+
+    ``x`` is the canonical record layout ``(n, nt, nrec, 1)``; ``rec_axis``
+    selects the receiver axis. Differentiable, stays on device.
+    """
+    import torch
+
+    if not isinstance(x, torch.Tensor):
+        raise TypeError(f"expects a torch.Tensor; got {type(x).__name__}")
+    nrec = x.shape[rec_axis]
+    if w.shape[0] != nrec:
+        raise ValueError(
+            f"smoothing matrix is {tuple(w.shape)} but the record has "
+            f"{nrec} receivers on axis {rec_axis}")
+    xm = x.movedim(rec_axis, -1)
+    ym = torch.matmul(xm, w.transpose(0, 1).to(dtype=xm.dtype))
+    return ym.movedim(-1, rec_axis)
+
+
+__all__ = ["bandpass", "lowpass", "highpass", "bandpass_torch",
+           "receiver_smoothing_matrix", "apply_receiver_smoothing"]

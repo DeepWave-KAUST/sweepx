@@ -753,6 +753,52 @@ class SourceEncodingSpec(_Forbid):
         return self
 
 
+class ReceiverSmoothingSpec(_Forbid):
+    """Lateral averaging over neighbouring receivers, applied to obs AND syn.
+
+    At low frequency a marine record can be noise-dominated trace by trace
+    while the signal stays laterally coherent, so averaging neighbouring
+    receivers lifts the usable SNR. The operator is a row-normalised
+    Gaussian over the receivers' *surface* positions (normalised
+    convolution, so a varying receiver density introduces no amplitude
+    bias) — see :func:`sweep_tasks.preproc.filter.receiver_smoothing_matrix`.
+
+    ``target`` decides whether the synthetic is smoothed too.
+
+    * ``"both"`` (default) applies the same linear operator to obs and syn,
+      so the misfit stays a consistent comparison whatever the operator does
+      to the signal. Autograd differentiates through it correctly.
+    * ``"obs"`` smooths only the observed record, on the argument that the
+      synthetic carries no noise to remove. That is only safe while the
+      operator is near-identity on coherent signal — otherwise the inversion
+      is asked to reproduce a laterally smeared wavefield that no model can
+      generate, and it distorts the model trying.
+
+    Whether ``"obs"`` is safe is a property of the band and sigma, and is
+    measurable: smooth a noise-free synthetic and see how much it changes.
+    On a field OBN dataset, ``corr(syn, S·syn)`` stays close to 1 in the
+    lowest band with ``sigma_cells=2`` (so ``"obs"`` is defensible there),
+    but drops clearly in the next band and with ``sigma_cells=3`` (where
+    it is not).
+
+    Trade-off on sigma: the operator averages across moveout, so the usable
+    ``sigma_cells`` shrinks as frequency rises. Measured on the same data by
+    comparing the amplitude a real gather retains against a phase-randomised
+    control, the signal-to-noise gain peaks near ``sigma_cells=2-3`` at
+    1.5-2 Hz and near ``1.5`` at 2-4 Hz; by ``3.0`` the 2-4 Hz signal is
+    already being destroyed faster than the noise.
+    """
+
+    enabled: bool = False
+    # Gaussian sigma in GRID CELLS (grid.dh), matching how the receiver
+    # positions are stored.
+    sigma_cells: float = Field(gt=0, default=2.0)
+    # Truncate the kernel beyond this many sigmas.
+    cutoff_sigmas: float = Field(gt=0, default=3.0)
+    # Smooth both records (consistent misfit) or only the noisy observation.
+    target: Literal["both", "obs"] = "both"
+
+
 class IlluminationPreconditionSpec(_Forbid):
     """Diagonal pseudo-Hessian illumination preconditioner applied per step.
 
@@ -1502,6 +1548,10 @@ class FWISpec(BaseTaskSpec):
     # Used by the OBN CRG path only; the multi-stage 2-D / 3-D path
     # uses :class:`StageBandpass` inside ``stages`` instead.
     bandpass: StageBandpass | None = None
+
+    # Optional lateral averaging of neighbouring receivers, applied to BOTH
+    # obs and syn right before the loss. See :class:`ReceiverSmoothingSpec`.
+    receiver_smoothing: ReceiverSmoothingSpec | None = None
 
     # Optional Sobolev / TV-style smoothness regularizer on vp. See
     # :class:`SmoothRegSpec`. The runner adds ``weight * TVPrior(vp)``

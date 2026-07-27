@@ -1,6 +1,10 @@
 """Multisource (streaming CRG/plan) FWI task runner (mixin). Verbatim from runner.py."""
 from pathlib import Path
 from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
+from sweep_tasks.preproc.filter import (
+    apply_receiver_smoothing as _apply_receiver_smoothing,
+    receiver_smoothing_matrix as _receiver_smoothing_matrix,
+)
 import math
 import numpy as np
 import os
@@ -560,6 +564,26 @@ class MultisourceRunnerMixin:
             print(f"[crg] multi-stage FWI: {len(stage_list)} stages, "
                   f"epochs={stage_epochs} (total {sum(stage_epochs)}), "
                   f"bandpass/stage={_bands}")
+        # Lateral receiver smoothing (applied to obs AND syn before the loss).
+        _recsm = getattr(spec, "receiver_smoothing", None)
+        if _recsm is not None and not _recsm.enabled:
+            _recsm = None
+        if _recsm is not None:
+            # The operator mixes receivers across the whole supershot, so it
+            # cannot be evaluated tile-locally (DD) or on the ragged per-CRG
+            # loop, which compute their misfit on receiver subsets.
+            if dd_on:
+                raise ValueError(
+                    "receiver_smoothing is not supported with domain "
+                    "decomposition: each tile owns a receiver subset, so the "
+                    "smoothing stencil would be truncated at tile boundaries")
+            _tgt = ("obs AND syn" if _recsm.target == "both"
+                    else "obs ONLY (syn left unsmoothed)")
+            print(f"[crg] receiver smoothing ON: sigma={_recsm.sigma_cells} cells "
+                  f"({_recsm.sigma_cells * float(spec.grid.dh):.0f} m), "
+                  f"cutoff={_recsm.cutoff_sigmas} sigma — applied to {_tgt}",
+                  flush=True)
+
         vp_leaf = torch.from_numpy(init_vp_np).to(dev).requires_grad_(True)
         inv_by_name = {"vp": vp_leaf}
         reparam_net = None
@@ -1800,6 +1824,28 @@ class MultisourceRunnerMixin:
             # Per-CRG did its loss+backward inside the per-node loop above.
             obs_match = (None if _percrg
                          else obs_super.permute(0, 2, 1).unsqueeze(-1).contiguous())
+            # Lateral receiver smoothing: the SAME linear operator on obs and
+            # syn (see ReceiverSmoothingSpec). Built per iter because the
+            # shared-shot set is resampled every iteration.
+            if _recsm is not None and _percrg:
+                raise ValueError(
+                    "receiver_smoothing is not supported on the per-CRG "
+                    "(ragged batch) path: its misfit is accumulated node by "
+                    "node over padded receiver subsets, so the smoothing "
+                    "stencil would straddle the padding. Use the encoded "
+                    "supershot path (source_encoding.enabled=true).")
+            if _recsm is not None and obs_match is not None:
+                _rxy = torch.as_tensor(
+                    np.asarray(receivers_super)[0, :, :2], device=dev,
+                    dtype=torch.float32)
+                _W = _receiver_smoothing_matrix(
+                    _rxy, float(_recsm.sigma_cells),
+                    cutoff_sigmas=float(_recsm.cutoff_sigmas), device=dev)
+                if _recsm.target == "both":
+                    if syn.dim() == 3:
+                        syn = syn.permute(0, 2, 1).unsqueeze(-1).contiguous()
+                    syn = _apply_receiver_smoothing(syn, _W)
+                obs_match = _apply_receiver_smoothing(obs_match, _W)
             t = time.perf_counter()
             if _percrg:
                 pass  # loss + backward already done in the on-demand loop
