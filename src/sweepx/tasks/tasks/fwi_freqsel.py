@@ -455,6 +455,33 @@ class FreqselRunnerMixin:
             J.backward()
             _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
             g = leaf.grad
+            # Optional water-column gradient freeze: zero the vp gradient above
+            # the seabed so the inversion never updates the (known) water
+            # velocity. Grid-mode path (reparam masks the water itself). Built
+            # once from the seabed-depth map. See :class:`FreezeWaterLayerSpec`.
+            _fwl = getattr(spec, "freeze_water_layer", None)
+            if (_fwl is not None and getattr(_fwl, "enabled", False)
+                    and _fwl.seabed_depth_path is not None and g is not None):
+                if not hasattr(self, "_freeze_water_mask"):
+                    from sweep_tasks.bathymetry import (
+                        load_seabed_depth_npz, water_mask_from_seabed_depth)
+                    _sd = load_seabed_depth_npz(_fwl.seabed_depth_path)
+                    _sdr = torch.nn.functional.interpolate(
+                        torch.tensor(_sd, dtype=torch.float32)[None, None],
+                        size=(int(ny_), int(nx_)), mode="bilinear",
+                        align_corners=True)[0, 0].numpy()
+                    _wm = water_mask_from_seabed_depth(
+                        _sdr, nz=int(nz), dh_z_m=float(dh),
+                        buffer_cells=int(_fwl.buffer_cells))
+                    if (nyp, nxp) != (ny_, nx_):
+                        _wm = np.pad(_wm, ((0, 0), (0, nyp - ny_),
+                                           (0, nxp - nx_)), mode="edge")
+                    self._freeze_water_mask = torch.from_numpy(
+                        _wm).to(g.device).bool()
+                    if rank == 0:
+                        print("[freqsel] freeze_water_layer: %d voxels zeroed"
+                              % int(self._freeze_water_mask.sum()), flush=True)
+                g[self._freeze_water_mask] = 0.0
             # Debug: dump the raw velocity gradient of selected iters for
             # DD-vs-single parity checks (SWEEP_FREQSEL_DUMP_GRAD=<dir>).
             # DD dumps this rank's TILE grad + its global bounds; single dumps
