@@ -382,8 +382,33 @@ class BackendSpec(_Forbid):
 class LossSpec(_Forbid):
     """Misfit between synthetic and observed seismograms."""
 
-    kind: Literal["mse", "l1", "huber", "trace_cosine"] = "mse"
+    kind: Literal["mse", "l1", "huber", "trace_cosine", "envelope", "ot",
+                  "cc_traveltime"] = "mse"
     huber_delta: float = 1.0  # only used when kind="huber"
+    # cc_traveltime (Luo & Schuster 1991): per-trace cross-correlation traveltime
+    # misfit 0.5*dt^2, where dt is the syn->obs time shift measured by a
+    # DIFFERENTIABLE soft-argmax of the (normalised) cross-correlation. Gives a
+    # low-wavenumber (tomographic) gradient robust to LARGE traveltime shifts
+    # (no cycle-skipping) — the right tool to update a smooth background
+    # velocity (e.g. an LVZ) from reflection MOVEOUT, when the reflector is
+    # already present in the model so its wavepath carries a transmission term.
+    # cc_max_lag_samples: search window (+/- samples) for the shift; 0 -> nt//4.
+    # cc_beta: soft-argmax sharpness over the normalised correlation (in [-1,1]);
+    # larger -> closer to a hard argmax (peakier), smaller -> smoother/robuster.
+    cc_max_lag_samples: int = 0
+    cc_beta: float = 30.0
+    # Early-time mute (samples): zero the first N time samples of syn AND obs
+    # before the misfit, to remove the strong early diving-wave energy and let
+    # the late wide-angle / reservoir-reflection event dominate. 0 = off.
+    time_mute_samples: int = 0
+    # Optional LATE mute (samples): zero time samples AFTER this index. Combined
+    # with time_mute_samples this makes a time WINDOW [early, late] around a
+    # specific event (e.g. isolate the reservoir reflection ~2.4-3.6 s and
+    # exclude both the shallow diving first-arrival AND the far-offset diving
+    # wave). Needed because a full-record cc/waveform misfit is dominated by the
+    # strong first-arrival, which for an LVZ (velocity inversion) is turning-ray
+    # BLIND — only the transmitted reservoir reflection carries the LVZ delay.
+    time_mute_late_samples: int = 0
     # trace_cosine: per-trace amplitude-normalised correlation misfit, equivalent
     # to ``1 - <s_unit, o_unit>`` after demeaning. Matches the loss used in
     # `fwi_workflow-dev`. Insensitive to per-trace amplitude scaling, so it's

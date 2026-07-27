@@ -22,6 +22,24 @@ def _compute_loss(syn, obs, loss_spec):
     from sweep_loss import huber_loss, l1_loss, l2_loss
 
     kind = loss_spec.kind
+    # Optional early-time mute (mute-then-misfit on BOTH syn & obs): zero the
+    # first ``time_mute_samples`` time samples so the strong early diving-wave
+    # energy is removed and the misfit is dominated by the LATE wide-angle /
+    # reservoir-reflection event (which carries the LVZ ~1 s delay). Canonical
+    # 4-D layout is (ns, nt, nrec, nchan) with time on axis 1.
+    _tmute = int(getattr(loss_spec, "time_mute_samples", 0) or 0)
+    _tmute_late = int(getattr(loss_spec, "time_mute_late_samples", 0) or 0)
+    if (_tmute > 0 or _tmute_late > 0) and syn.ndim == 4:
+        import torch
+        nt_ = syn.shape[1]
+        _m = torch.ones(nt_, device=syn.device, dtype=syn.dtype)
+        if _tmute > 0 and _tmute < nt_:
+            _m[:_tmute] = 0.0                 # mute early (diving/first-arrival)
+        if 0 < _tmute_late < nt_:
+            _m[_tmute_late:] = 0.0            # mute late -> WINDOW [early, late]
+        _m = _m.view(1, -1, 1, 1)
+        syn = syn * _m
+        obs = obs * _m
     if kind == "mse":
         # half=False matches the legacy `(syn-obs)**2` (not `0.5 * ...`).
         return l2_loss(syn, obs, reduction="none", half=False)
@@ -57,7 +75,93 @@ def _compute_loss(syn, obs, loss_spec):
         # the caller's .sum() / global_norm yields mean(1-cos) over traces.
         ns_c, nt_c, nr_c, nc_c = syn.shape
         return per_trace.view(ns_c, 1, nr_c, nc_c).expand(ns_c, nt_c, nr_c, nc_c)
+    if kind == "envelope":
+        # Envelope (instantaneous-amplitude) misfit — cycle-skip robust for large
+        # traveltime shifts. |analytic signal| via Hilbert transform (FFT along the
+        # time axis = axis 1 of canonical (ns, nt, nrec, nchan)). Differentiable.
+        import torch
+        nt = syn.shape[1]
+        f = torch.fft.fftfreq(nt, d=1.0).to(syn.device)
+        step = torch.zeros(nt, device=syn.device, dtype=torch.float32)
+        step[f > 0] = 2.0
+        step[f == 0] = 1.0                      # DC (and Nyquist stays 0; negligible)
+
+        def _env(x):
+            X = torch.fft.fft(x.to(torch.float32), dim=1)
+            a = torch.fft.ifft(X * step.view(1, nt, 1, 1), dim=1)
+            return torch.abs(a)
+
+        return (_env(syn) - _env(obs)) ** 2
+    if kind == "ot":
+        # 1-D optimal-transport (Wasserstein-1) misfit on the per-trace energy
+        # distribution: robust to LARGE traveltime shifts (a shift tau -> CDF
+        # offset -> |Fp-Fq| grows ~linearly, no cycle-skipping) and gives a
+        # low-wavenumber (tomographic) gradient — the right tool for a smooth
+        # velocity feature (LVZ) whose signature is a ~1 s wide-angle delay.
+        import torch
+        eps = 1.0e-12
+        p = syn.to(torch.float32) ** 2                 # non-negative energy
+        q = obs.to(torch.float32) ** 2
+        p = p / (p.sum(dim=1, keepdim=True) + eps)      # per-trace distribution
+        q = q / (q.sum(dim=1, keepdim=True) + eps)
+        Fp = torch.cumsum(p, dim=1)                     # CDF along time
+        Fq = torch.cumsum(q, dim=1)
+        return (Fp - Fq).abs()                          # W1 = sum_t |Fp-Fq|
+    if kind == "cc_traveltime":
+        # Cross-correlation traveltime misfit (Luo & Schuster 1991). Per trace,
+        # measure the time shift dt that aligns syn to obs via a DIFFERENTIABLE
+        # soft-argmax of the (demeaned, unit-energy) cross-correlation, then
+        # return 0.5*dt^2 broadcast across time (so the caller's .sum()/
+        # global_norm yields the per-trace mean, like trace_cosine). Autodiff
+        # produces the Luo-Schuster adjoint source ( ~ dt * d/dt syn ) exactly.
+        #
+        # Why this and not waveform FWI: the residual traveltime of the reservoir
+        # reflection (already present in the model) back-projects as a smooth,
+        # low-wavenumber TRANSMISSION update along its wavepath -> it moves the
+        # background velocity (the LVZ) instead of stamping high-wavenumber
+        # reflectivity, and it is immune to the ~0.4 s cycle-skip that kills
+        # amplitude misfits. Canonical layout (ns, nt, nrec, nchan), time axis 1.
+        import torch
+        ns_c, nt_c, nr_c, nc_c = syn.shape
+        s = syn.to(torch.float32)
+        o = obs.to(torch.float32)
+        # demean + unit-energy per trace (along time) -> CC is a correlation coeff
+        s = s - s.mean(dim=1, keepdim=True)
+        o = o - o.mean(dim=1, keepdim=True)
+        s = s / (s.pow(2).sum(dim=1, keepdim=True).sqrt() + 1.0e-12)
+        o = o / (o.pow(2).sum(dim=1, keepdim=True).sqrt() + 1.0e-12)
+        # full cross-correlation CC[tau] = sum_t s(t) o(t+tau) via FFT.
+        nfft = int(2 * nt_c)
+        S = torch.fft.rfft(s, n=nfft, dim=1)
+        O = torch.fft.rfft(o, n=nfft, dim=1)
+        cc = torch.fft.irfft(torch.conj(S) * O, n=nfft, dim=1)  # (ns, nfft, nr, nc)
+        # reorder to lags tau = -(nt-1)..(nt-1); center at tau=0
+        cc = torch.cat([cc[:, -(nt_c - 1):], cc[:, :nt_c]], dim=1)  # (ns, 2nt-1, nr, nc)
+        lags = torch.arange(-(nt_c - 1), nt_c, device=syn.device, dtype=torch.float32)
+        L = int(getattr(loss_spec, "cc_max_lag_samples", 0) or (nt_c // 4))
+        keep = lags.abs() <= L
+        cc = cc[:, keep]                                       # (ns, 2L+1, nr, nc)
+        lag_k = lags[keep].view(1, -1, 1, 1)
+        beta = float(getattr(loss_spec, "cc_beta", 30.0))
+        w = torch.softmax(beta * cc, dim=1)                    # soft-argmax weights
+        dt_samp = (w * lag_k).sum(dim=1, keepdim=True)         # (ns,1,nr,nc) in samples
+        dt_s = dt_samp * float(_LOSS_DT[0])                    # -> seconds
+        per_trace = 0.5 * dt_s.pow(2)                          # (ns,1,nr,nc)
+        return per_trace.expand(ns_c, nt_c, nr_c, nc_c)
     raise ValueError(f"Unknown loss kind '{kind}'.")
+
+
+# The cross-correlation traveltime misfit needs dt (s) to report the shift in
+# physical units. The runner sets this once per run before the misfit is called
+# (a module-level 1-element list avoids threading dt through every _loss_sum
+# call site). Defaults to 1.0 -> dt is then measured in SAMPLES, still a valid
+# (rescaled) misfit; the runner override makes the lr physically meaningful.
+_LOSS_DT = [1.0]
+
+
+def set_loss_dt(dt):
+    """Register the time step (s) used by the cc_traveltime misfit."""
+    _LOSS_DT[0] = float(dt)
 
 
 def _loss_sum(syn, obs_chunk, loss_spec, mask_chunk=None, *, window_mode=False):
