@@ -90,6 +90,12 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     mods, err = _require_sweep()
     if err is not None:
         return err
+    from sweep_agent.tools.build_forward import _device_unavailable_reason
+    dev_err = _device_unavailable_reason(args.device)
+    if dev_err is not None:
+        return {"error": dev_err}
+    
+    
 
     # ------------------------------------------------------------------
     # TODO — implement the forward run. Worked reference (a complete, runnable
@@ -105,6 +111,8 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
             return {"error": "give either nt or record_length_s."}
         nt = round(args.record_length_s / args.dt)
     # 2. np.load the model, sanity-check it is 2-D, move it to args.device.
+    if not Path(args.vp_path).exists():
+        return {"error": f"velocity model not found: {args.vp_path}"}
     vp_np = np.load(args.vp_path)
     if vp_np.ndim != 2:
         return {"error": f"vp must be 2-D (nz, nx); got shape {vp_np.shape}."}
@@ -155,6 +163,8 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     rec_np = np.squeeze(record.detach().cpu().numpy())
     if rec_np.ndim != 2:
         return {"error": f"unexpected record shape {tuple(record.shape)} -> {rec_np.shape}."}
+    if not np.isfinite(rec_np).all():
+        return {"error": "diverged (non-finite record) - reduce dt; see check_parameters"}
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     record_path = out_dir / "record.npy"
