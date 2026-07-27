@@ -32,6 +32,7 @@ from sweep_tasks._helpers.illumination import (
 from sweep_tasks._helpers.loss import (
     _loss_sum,
     _mask_chunk,
+    set_loss_dt,
 )
 from sweep_tasks._helpers.metadata import _dump_run_metadata
 from sweep_tasks._helpers.model import (
@@ -92,6 +93,85 @@ from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
+
+
+def _build_grad_smoother(spec, dev):
+    """Return a closure that Gaussian-smooths a vp gradient tensor.
+
+    Separable (depthwise) Gaussian along each spatial axis, reflect-padded so
+    the field edges aren't pulled toward zero. Handles 2-D (nz, nx) and 3-D
+    (nz, ny, nx) gradients. Sigmas are in grid cells; an axis with sigma<=0 is
+    left un-smoothed. Built once; the kernels live on ``dev``.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    def _kernel1d(sigma):
+        if sigma is None or sigma <= 0:
+            return None
+        rad = max(1, int(round(3.0 * sigma)))
+        t = torch.arange(-rad, rad + 1, dtype=torch.float32, device=dev)
+        k = torch.exp(-0.5 * (t / sigma) ** 2)
+        return (k / k.sum())
+
+    kz = _kernel1d(float(spec.sigma_z_cells))
+    kx = _kernel1d(float(spec.sigma_x_cells))
+    ky = _kernel1d(float(getattr(spec, "sigma_y_cells", 0.0)))
+    z_lo = int(getattr(spec, "mask_above_row", -1))   # zero rows < z_lo
+    z_hi = int(getattr(spec, "mask_below_row", -1))   # zero rows > z_hi
+    mask_taper = int(getattr(spec, "mask_taper_rows", 0))  # cosine taper width
+
+    def _depth_mask_(x):
+        # x is (..., nz, ...) with z on dim 0 of the last-2/last-3 image; here
+        # the gradient's first axis is always z (nz, nx) or (nz, ny, nx).
+        # A hard cutoff makes the gradient pile up at the boundary row; a linear
+        # cosine taper over ``mask_taper`` rows spreads it and removes the pile.
+        if z_lo > 0:
+            if mask_taper > 0:
+                r = min(mask_taper, z_lo)
+                ramp = torch.linspace(0.0, 1.0, r + 2, device=x.device, dtype=x.dtype)[1:-1]
+                x[:z_lo - r] = 0.0
+                x[z_lo - r:z_lo] *= ramp.view([-1] + [1] * (x.ndim - 1))
+            else:
+                x[:z_lo] = 0.0
+        if z_hi >= 0:
+            if mask_taper > 0:
+                r = min(mask_taper, x.shape[0] - z_hi - 1)
+                ramp = torch.linspace(1.0, 0.0, r + 2, device=x.device, dtype=x.dtype)[1:-1]
+                x[z_hi + 1: z_hi + 1 + r] *= ramp.view([-1] + [1] * (x.ndim - 1))
+                x[z_hi + 1 + r:] = 0.0
+            else:
+                x[z_hi + 1:] = 0.0
+        return x
+
+    def _smooth(grad):
+        g = grad
+        orig_shape = g.shape
+        if g.ndim == 2:            # (nz, nx): conv2d over a 1x1x nz x nx image
+            x = g[None, None]
+            if kz is not None:
+                w = kz.view(1, 1, -1, 1); p = kz.numel() // 2
+                x = F.conv2d(F.pad(x, (0, 0, p, p), mode="reflect"), w)
+            if kx is not None:
+                w = kx.view(1, 1, 1, -1); p = kx.numel() // 2
+                x = F.conv2d(F.pad(x, (p, p, 0, 0), mode="reflect"), w)
+            return _depth_mask_(x.view(orig_shape))
+        if g.ndim == 3:            # (nz, ny, nx): conv3d over a 1x1x nz x ny x nx
+            x = g[None, None]
+            for k, axis in ((kz, 2), (ky, 3), (kx, 4)):
+                if k is None:
+                    continue
+                shp = [1, 1, 1, 1, 1]; shp[axis] = -1
+                w = k.view(*shp); p = k.numel() // 2
+                pad = [0, 0, 0, 0, 0, 0]
+                # F.pad order is (x_l,x_r, y_l,y_r, z_l,z_r) for 3-D last-3 dims
+                idx = {2: 4, 3: 2, 4: 0}[axis]
+                pad[idx] = p; pad[idx + 1] = p
+                x = F.conv3d(F.pad(x, pad, mode="reflect"), w)
+            return _depth_mask_(x.view(orig_shape))
+        return _depth_mask_(g)
+
+    return _smooth
 
 
 class FWIRunnerMixin:
@@ -183,6 +263,9 @@ class FWIRunnerMixin:
                           f"{effective_nt} -> {new_nt}")
                 effective_dt = target_dt
                 effective_nt = new_nt
+        # Register the solver dt so the cc_traveltime misfit reports the shift in
+        # seconds (no-op for every other loss kind).
+        set_loss_dt(effective_dt)
 
         # CFL pre-check from the init_model vmax (cheap mmap peek).
         try:
@@ -388,6 +471,18 @@ class FWIRunnerMixin:
             if dist_info.is_root:
                 print(f"[fwi] smooth_regularization (TVPrior) ON: "
                       f"weight={smooth_weight:.2e} order={_smooth_spec.order}")
+
+        # Gaussian gradient smoother (tomographic preconditioner). Built once as
+        # separable 1-D kernels; applied to the grid-mode vp gradient each step.
+        _gsmooth_spec = getattr(spec, "grad_smooth", None)
+        _gsmooth = None
+        if _gsmooth_spec is not None and bool(getattr(_gsmooth_spec, "enabled", True)):
+            _gsmooth = _build_grad_smoother(_gsmooth_spec, dev)
+            if dist_info.is_root:
+                print(f"[fwi] grad_smooth (Gaussian) ON: sigma_z="
+                      f"{_gsmooth_spec.sigma_z_cells} sigma_x="
+                      f"{_gsmooth_spec.sigma_x_cells} sigma_y="
+                      f"{_gsmooth_spec.sigma_y_cells} every={_gsmooth_spec.every}")
 
         # 7) Resume from checkpoint if requested. Rank 0 loads + broadcasts state.
         # Two modes:
@@ -676,6 +771,7 @@ class FWIRunnerMixin:
                     stage_dt=state["dt"],
                     tv_prior=tv_prior,
                     smooth_weight=smooth_weight,
+                    grad_smoother=_gsmooth,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
                 )
@@ -1142,7 +1238,8 @@ class FWIRunnerMixin:
                         syn_bandpass=None, stage_dt: float | None = None,
                         state_for_dump: dict | None = None,
                         take_qc_snapshot: bool = True,
-                        tv_prior=None, smooth_weight: float = 0.0) -> float:
+                        tv_prior=None, smooth_weight: float = 0.0,
+                        grad_smoother=None, grad_smooth_every: int = 1) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1448,6 +1545,18 @@ class FWIRunnerMixin:
                         (smooth_weight * tv_prior(_vp)).backward()
                 else:
                     (smooth_weight * tv_prior(reparam_net())).backward()
+            # Gaussian gradient smoothing (grid-mode vp only), just before the
+            # step so it smooths the FINAL (data + TV) gradient.
+            if grad_smoother is not None and reparam_net is None:
+                _vp = inv_by_name.get("vp")
+                if _vp is not None and _vp.grad is not None:
+                    with torch.no_grad():
+                        _vp.grad.copy_(grad_smoother(_vp.grad))
+                    # Re-apply the top-row freeze AFTER smoothing: a Gaussian
+                    # z-conv smears gradient from unfrozen rows back into the
+                    # frozen top rows, which optimizer.step would then update
+                    # (silently defeating freeze_top_n_rows). Cheap re-zero.
+                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:

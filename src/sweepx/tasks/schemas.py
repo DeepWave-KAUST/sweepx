@@ -649,6 +649,43 @@ class SmoothRegSpec(_Forbid):
     velocity_scale_m_s: float = Field(gt=0, default=1000.0)
 
 
+class GradSmoothSpec(_Forbid):
+    """Gaussian smoothing of the vp gradient before the optimizer step.
+
+    The classic tomographic gradient preconditioner: a single-band
+    finite-frequency traveltime (e.g. ``cc_traveltime``) kernel back-projects
+    as an oscillatory, high-wavenumber "migration" pattern even though the
+    physical sensitivity is smooth. Convolving the gradient with a Gaussian
+    (separable, depthwise) each step removes that salt-and-pepper and leaves
+    the low-wavenumber (background) update — turning a reflection-traveltime
+    misfit into proper reflection-moveout tomography.
+
+    ``sigma_z_cells`` / ``sigma_x_cells`` are the Gaussian stddevs in grid
+    cells (z = depth axis, x = the fast lateral axis; ``sigma_y_cells`` used
+    only in 3-D). A sigma of ~half the dominant wavelength in cells is a good
+    starting point. Applied to the grid-mode vp gradient only (reparam nets
+    are smooth by construction). ``every`` applies it on every N-th step.
+    """
+
+    enabled: bool = True
+    sigma_z_cells: float = Field(ge=0, default=4.0)
+    sigma_x_cells: float = Field(ge=0, default=4.0)
+    sigma_y_cells: float = Field(ge=0, default=0.0)
+    every: int = Field(ge=1, default=1)
+    # Optional depth window (in grid rows) OUTSIDE which the vp gradient is
+    # zeroed, applied after smoothing. Use to confine a reflection-traveltime
+    # update to the overburden: a single reflector's finite-frequency kernel
+    # leaks spurious high-wavenumber junk BELOW the reflector (nothing to
+    # invert there) — masking rows below the reflector removes it without
+    # injecting any structure. -1 = no limit on that side.
+    mask_above_row: int = -1     # zero gradient for z-rows < this
+    mask_below_row: int = -1     # zero gradient for z-rows > this
+    # Linear taper width (rows) at the mask boundary. A hard cutoff makes the
+    # gradient pile up at the boundary row (a spurious velocity band); a taper
+    # spreads and removes it. 0 = hard cutoff.
+    mask_taper_rows: int = 0
+
+
 class FreezeWaterLayerSpec(_Forbid):
     """Mask the FWI gradient above the seabed (water column).
 
@@ -1583,6 +1620,12 @@ class FWISpec(BaseTaskSpec):
     # to the data misfit; the gradient propagates back into the vp
     # tensor (or net params in reparam mode).
     smooth_regularization: SmoothRegSpec | None = None
+
+    # Optional Gaussian smoothing of the vp gradient before the optimizer
+    # step (tomographic gradient preconditioner). See :class:`GradSmoothSpec`.
+    # Turns an oscillatory single-band traveltime kernel into a smooth,
+    # low-wavenumber background update. Grid-mode only.
+    grad_smooth: GradSmoothSpec | None = None
 
     # Optional water-column / seabed gradient freeze mask. See
     # :class:`FreezeWaterLayerSpec`. Built once at setup, applied to
