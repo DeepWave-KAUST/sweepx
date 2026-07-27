@@ -13,13 +13,13 @@ from __future__ import annotations
 # Always available — the inspect / run / discover backbone.
 CORE = [
     "inspect_file", "run_task", "read_status", "list_artifacts",
-    "list_equations", "describe_task_schema", "build_spec",
+    "list_equations", "describe_task_schema", "build_spec", "run_forward_sweep",
 ]
 
 # (trigger keywords, tool names) — a query adds every group whose keywords hit.
 GROUPS: list[tuple[tuple[str, ...], list[str]]] = [
     (("forward", "正演", "shot gather", "shot-gather", "炮记录", "合成记录", "record", "gather", "synthetic record"),
-     ["build_forward_spec", "run_forward_and_plot", "plot_shot_gather"]),
+     ["build_forward_spec", "run_forward_and_plot", "plot_shot_gather", "run_forward_sweep"]),
     (("wavefield", "波场", "snapshot", "快照", "animate", "animation", "动画", "movie", "gif", "propagat", "传播", "p wave", "s wave", "p波", "s波", "p-wave", "s-wave"),
      ["build_wavefield_spec", "animate_wavefield", "make_wavefield_gif", "plot_wavefield"]),
     (("anisotrop", "各向异性", "vti", "tti", "wavefront", "波前", "compare equation", "对比方程", "elastic", "弹性"),
@@ -40,7 +40,7 @@ GROUPS: list[tuple[tuple[str, ...], list[str]]] = [
 _FALLBACK = [
     "build_forward_spec", "run_forward_and_plot", "plot_shot_gather",
     "build_wavefield_spec", "animate_wavefield", "make_synthetic_model",
-    "plot_velocity_model", "run_fwi", "check_parameters",
+    "plot_velocity_model", "run_fwi", "check_parameters", "run_forward_sweep",
 ]
 
 

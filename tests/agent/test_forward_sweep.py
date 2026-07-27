@@ -61,3 +61,9 @@ def test_runs_a_shot_end_to_end(tmp_path):
     assert (tmp_path / "vp.npy").exists()
     if out.get("image_path"):
         assert len(open(out["image_path"], "rb").read(8)) == 8
+def test_selector_includes_run_forward_sweep():
+    """A forwrd shot query must surface run_forward_sweep to the model."""
+    from sweep_agent.tools.selection import select_tool_names
+
+    picked = select_tool_names("run a forward shot and plot the gather")
+    assert "run_forward_sweep" in picked
