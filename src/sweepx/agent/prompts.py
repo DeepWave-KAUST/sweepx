@@ -27,6 +27,12 @@ for you. Map what they want to a workflow:
 - forward modelling only (no plot) / 只正演不画  → build_forward_spec → run_task;
       to plot later, pass run_task's RETURNED task_dir to plot_shot_gather (never
       invent a task_dir).
+- SOLVER-ONLY forward (when the tools above report the spec/runner is "not
+      importable", i.e. only the core `sweep` solver is installed) →
+      run_forward_sweep(vp_path, dh, dt, nt|record_length_s, fm). It drives the
+      solver directly and is the ONLY way to run a shot without the sweep_tasks
+      tier — use it as the fallback whenever build_forward_spec /
+      run_forward_and_plot say "not importable".
 - WAVEFIELD — see the wave / snapshots / how it propagates / a movie or gif /
   波场 / 快照 / 看波怎么传播 / 动画
       • To ANIMATE one wavefield (a GIF/movie of the wave propagating) →
