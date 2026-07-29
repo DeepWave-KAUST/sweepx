@@ -324,6 +324,14 @@ class FromPlanGeometry(_Forbid):
     # Padding around the snap origin in cells (z, y, x). Used only when
     # ``grid_origin_xyz_m`` is None.
     auto_origin_pad_cells: tuple[int, int, int] = (0, 0, 0)
+    # When set (e.g. 1500.0 = water velocity), lift each CRG source down to the
+    # water cell just above the seabed: src_iz = min(src_iz, seabed_iz - 1),
+    # where seabed_iz is the first non-water cell (|vp - this| > 1) per (y, x)
+    # in the (sharp-seabed) init model. Keeps sources off the discretized seabed
+    # sediment cell, avoiding the source-on-interface near-field artifact. Uses
+    # ``min`` so sources already in the water column are left untouched. None
+    # (default) leaves snapped source depths unchanged.
+    lift_source_to_water_vp: float | None = None
 
 
 Geometry = Annotated[

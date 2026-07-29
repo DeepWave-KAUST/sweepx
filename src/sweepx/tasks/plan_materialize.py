@@ -240,6 +240,28 @@ def materialize_plan_dataset(
                   flush=True)
     t = _stamp("in-window filter", t, verbose=verbose)
 
+    # ---- 4b) lift CRG sources off the seabed sediment cell into water ------
+    # OBN node depths snap onto the discretized seabed (often the first sediment
+    # cell), which puts the source on a one-cell water->sediment interface and
+    # radiates a spurious near-field scattering. Clamp each source to the water
+    # cell just above the seabed (seabed_iz-1); ``min`` keeps sources already in
+    # water untouched. seabed_iz comes from the (sharp-seabed) init vp.
+    if getattr(geom, "lift_source_to_water_vp", None) is not None:
+        wv = float(geom.lift_source_to_water_vp)
+        nonwater = np.abs(init_vp_np - wv) > 1.0                      # (nz,ny,nx)
+        seabed_iz = np.where(nonwater.any(0), nonwater.argmax(0), nz)  # (ny,nx)
+        sx, sy = src_grid[:, 0], src_grid[:, 1]
+        inb = (sx >= 0) & (sx < nx) & (sy >= 0) & (sy < ny)
+        sb = np.full(src_grid.shape[0], nz, dtype=np.int64)
+        sb[inb] = seabed_iz[sy[inb], sx[inb]]
+        lifted = np.maximum(np.minimum(src_grid[:, 2], sb - 1), 0)
+        n_lifted = int((lifted < src_grid[:, 2]).sum())
+        src_grid[:, 2] = lifted
+        if verbose:
+            print(f"[materialize] lifted {n_lifted}/{src_grid.shape[0]} sources to water "
+                  f"(vp!={wv:g}); seabed_iz [{int(seabed_iz.min())},{int(seabed_iz.max())}]", flush=True)
+        t = _stamp("lift-source-to-water", t, verbose=verbose)
+
     # ---- 5) per-group fixed-receiver selection -----------------------------
     nrec = ocfg.n_receivers_per_shot
     rng = np.random.default_rng(int(ocfg.materialize_seed))
