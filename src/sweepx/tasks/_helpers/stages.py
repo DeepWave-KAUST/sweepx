@@ -76,8 +76,15 @@ def _prepare_stage(
     need_geom_resnap = (
         grid_changed
         or "sources" not in state
-        or (state.get("dedupe_grid_snap", False)
-            and state.get("_geom_applied_at_dh") != new_dh)
+        # Re-snap every stage when dedupe is on. The source-dedup step below
+        # destructively shrinks per_shot_keep_idx (fewer rows than pristine),
+        # while the obs is ALWAYS re-derived from pristine; on a FIXED grid
+        # (no grid_changed) the old guard skipped the re-snap, so the next
+        # stage masked pristine with a stale, too-short per_shot_keep_idx and
+        # raised IndexError. Re-snapping is idempotent at an unchanged dh, and
+        # multiscale already re-snaps on every grid change, so this only affects
+        # the fixed-grid frequency-continuation path (which it fixes).
+        or state.get("dedupe_grid_snap", False)
     )
     if need_geom_resnap:
         from sweep_io.geometry import PhysicalGeometry
@@ -167,7 +174,18 @@ def _prepare_stage(
         if reparam_net is not None:
             pristine_base = state["pristine_base_vp"]
             new_base = _resample_vp_tensor(pristine_base, state["shape"]).detach()
-            reparam_net.update_base_velocity(new_base)
+            # Rebuild the water-layer mask at the NEW grid and pass it in.
+            # Otherwise update_base_velocity drops the stale (old-shape) mask
+            # on the shape change and the water column is inverted freely from
+            # stage 1 on. The pristine base has water == water_vp_m_s exactly
+            # and bilinear resample preserves that in the water interior, so
+            # `new_base == water_vp` reproduces the initial mask at the new shape.
+            water_mask = None
+            rspec = getattr(spec, "reparam", None)
+            if rspec is not None and bool(getattr(rspec, "mask_water_layer", False)):
+                water_vp_val = float(getattr(rspec, "water_vp_m_s", 1500.0))
+                water_mask = (new_base == water_vp_val)
+            reparam_net.update_base_velocity(new_base, water_mask=water_mask)
             with torch.no_grad():
                 rendered = reparam_net().detach()
             state["inv_by_name"]["vp"] = rendered
@@ -278,48 +296,41 @@ def _prepare_stage(
     receiver_axis_pristine = state["pristine_obs_receiver_axis"]
     time_axis_pristine = state["pristine_obs_time_axis"]
 
-    # 1) receiver mask (apply along receiver axis)
-    obs_np = pristine_obs
-    per_shot_keep_idx = state.get("per_shot_keep_idx")
-    if per_shot_keep_idx is not None:
-        # Per-shot dedupe path: each shot keeps a different subset of
-        # receivers. Apply a per-shot fancy-indexing reduction to obs along
-        # the receiver axis. We do this in float32 numpy (CPU-friendly)
-        # before time-resampling so downstream operations work on the
-        # already-rectangular ``(nshots, ..., n_common, ...)`` tensor.
-        # Canonical layout (post-geophyai 21041c5) is always 4-D for
-        # solver-produced or SEG-Y-adapted obs.
-        if obs_np.ndim == 4:
-            # canonical: (nshots, nt, nrec, nchan). axis -2 = receiver.
-            nshots, nt_pristine, nrec_pristine, nchan = obs_np.shape
-            new = np.empty(
-                (nshots, nt_pristine, per_shot_keep_idx.shape[1], nchan),
-                dtype=obs_np.dtype,
-            )
-            # ``np.take`` keeps the receiver axis in place; plain fancy
-            # indexing ``obs_np[s, :, idx, :]`` would move it to axis 0 and
-            # give ``(n_keep, nt, nchan)`` instead of ``(nt, n_keep, nchan)``.
-            for s in range(nshots):
-                new[s] = np.take(obs_np[s], per_shot_keep_idx[s], axis=1)
-            obs_np = new
+    # Derive this stage's obs from the cached pristine obs, in three steps:
+    #   1) receiver mask (per-shot keep subset, or a uniform receiver_keep_idx)
+    #   2) time-resample pristine_dt -> new_dt (no-op when dt is unchanged)
+    #   3) trim/pad to new_nt
+    # Deterministic + identical on every rank, so each rank just recomputes it
+    # (the values match bit-for-bit). Returns a contiguous float32 copy that
+    # downstream is free to upload to device / bandpass / restack.
+    def _prep_obs_from_pristine():
+        _obs = pristine_obs
+        _keep_ps = state.get("per_shot_keep_idx")
+        if _keep_ps is not None:
+            # Per-shot dedupe: each shot keeps a different receiver subset.
+            # ``np.take`` keeps the receiver axis in place (axis -2 of the
+            # canonical 4-D ``(nshots, nt, nrec, nchan)``).
+            if _obs.ndim != 4:
+                raise NotImplementedError(
+                    f"per-shot keep on obs.ndim={_obs.ndim} not implemented "
+                    "(expected canonical 4-D (nshots, nt, nrec, nchan))"
+                )
+            _nshots, _nt_p, _nrec_p, _nchan = _obs.shape
+            _new = np.empty((_nshots, _nt_p, _keep_ps.shape[1], _nchan), dtype=_obs.dtype)
+            for s in range(_nshots):
+                _new[s] = np.take(_obs[s], _keep_ps[s], axis=1)
+            _obs = _new
         else:
-            raise NotImplementedError(
-                f"per-shot keep on obs.ndim={obs_np.ndim} not implemented "
-                "(expected canonical 4-D (nshots, nt, nrec, nchan))"
-            )
-    else:
-        # Uniform-mask path: existing behavior.
-        keep_idx = state.get("receiver_keep_idx")
-        if keep_idx is not None and keep_idx.size != obs_np.shape[receiver_axis_pristine]:
-            slicer = [slice(None)] * obs_np.ndim
-            slicer[receiver_axis_pristine] = keep_idx
-            obs_np = obs_np[tuple(slicer)]
+            _keep = state.get("receiver_keep_idx")
+            if _keep is not None and _keep.size != _obs.shape[receiver_axis_pristine]:
+                _slicer = [slice(None)] * _obs.ndim
+                _slicer[receiver_axis_pristine] = _keep
+                _obs = _obs[tuple(_slicer)]
+        _obs = _resample_obs_time(_obs, pristine_dt, new_dt, time_axis=time_axis_pristine)
+        _obs = _trim_or_pad_time(_obs, new_nt, time_axis=time_axis_pristine)
+        return np.ascontiguousarray(_obs.astype(np.float32, copy=False))
 
-    # 2) time resample
-    obs_np = _resample_obs_time(obs_np, pristine_dt, new_dt, time_axis=time_axis_pristine)
-
-    # 3) trim/pad to new_nt
-    obs_np = _trim_or_pad_time(obs_np, new_nt, time_axis=time_axis_pristine)
+    obs_np = _prep_obs_from_pristine()
 
     # Upload obs to the solver device. The per-iter loop does
     # ``obs[chunk].to(dev)`` which becomes a free no-op once obs is on
@@ -404,7 +415,7 @@ def _prepare_stage(
     #   - matches what a properly-deduped acquisition would naturally do
     # Per-stage (cheap: rerun from pristine each stage), so finer stages
     # automatically recover all shots if their source spacing >= dh.
-    if state.get("dedupe_grid_snap", False) and state.get("_source_dedup_at_dh") != new_dh:
+    if state.get("dedupe_grid_snap", False):  # re-run every stage (matches the always-re-snapped geometry + re-derived obs)
         src_arr = state["sources"]
         keys = [(int(src_arr[s, 0]), int(src_arr[s, 1])) for s in range(src_arr.shape[0])]
         groups: dict[tuple[int, int], list[int]] = {}
