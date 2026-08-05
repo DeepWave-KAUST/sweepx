@@ -126,3 +126,82 @@ def test_dump_run_metadata_resolved_yaml_expands_defaults(tmp_path):
     assert "seed" in cfg
     # Loss section default
     assert "loss" in cfg and cfg["loss"]["kind"] in ("mse", "l1", "huber", "trace_cosine")
+
+
+def test_dump_run_metadata_captures_dd_launch(tmp_path, monkeypatch):
+    """DD / SLURM / torchrun launch env is captured into run_meta.json and
+    summarised in the config_resolved.yaml comment header — the info needed to
+    reproduce a multi-GPU run, which the pydantic spec itself never carries."""
+    from sweep_tasks import load_task
+    from sweep_tasks.runner import _dump_run_metadata
+
+    # Simulate a 4x3 = 12-GPU DD launch under SLURM (3 nodes x 4 v100).
+    monkeypatch.setenv("SWEEP_DD_ENABLE", "1")
+    monkeypatch.setenv("SWEEP_DD_PY", "4")
+    monkeypatch.setenv("SWEEP_DD_PX", "3")
+    monkeypatch.setenv("SWEEP_DD_RENDER_CHUNK", "8")
+    monkeypatch.setenv("WORLD_SIZE", "12")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345678")
+    monkeypatch.setenv("SLURM_NNODES", "3")
+    monkeypatch.setenv("SLURM_GPUS_ON_NODE", "4")
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "batch")
+
+    true_path, init_path = _write_tiny_models(tmp_path)
+    spec_dict = _make_spec_dict(tmp_path, init_path, true_path, task_id="dd_dump")
+    yaml_path = tmp_path / "cfg_dd.yaml"
+    yaml_path.write_text(yaml.safe_dump(spec_dict, sort_keys=False))
+    spec = load_task(yaml_path)
+    target = tmp_path / "dd_out"
+    _dump_run_metadata(spec, target)
+
+    # 1) Structured capture in run_meta.json.
+    meta = json.loads((target / "run_meta.json").read_text())
+    assert "distributed" in meta, "run_meta.json must carry a distributed block"
+    dd = meta["distributed"]["dd"]
+    assert dd["enabled"] is True and dd["py"] == 4 and dd["px"] == 3
+    assert dd["mesh"] == 12 and dd["render_chunk"] == 8
+    assert meta["distributed"]["torchrun_env"]["WORLD_SIZE"] == "12"
+    assert meta["distributed"]["slurm"]["SLURM_JOB_ID"] == "12345678"
+    assert meta["distributed"]["slurm"]["SLURM_NNODES"] == "3"
+
+    # 2) Human-readable summary in the config header (reproduction recipe).
+    cfg_text = (target / "config_resolved.yaml").read_text()
+    assert "PY=4 x PX=3" in cfg_text and "= 12 tiles" in cfg_text
+    assert "SWEEP_DD_PY=4 SWEEP_DD_PX=3" in cfg_text
+    assert "job_id=12345678" in cfg_text and "nnodes=3" in cfg_text
+
+    # 3) The header MUST NOT break reload: comments are ignored, so the file
+    #    still parses as the original (runnable, extra='forbid') spec.
+    loaded = yaml.safe_load(cfg_text)
+    assert loaded["task_type"] == "fwi" and loaded["task_id"] == "dd_dump"
+    assert "distributed" not in loaded  # header is a comment, not a spec key
+
+
+def test_dump_run_metadata_single_process_header(tmp_path, monkeypatch):
+    """With no DD / torchrun env the header says single-process, the DD block
+    is disabled (mesh=1), and the file still round-trips."""
+    from sweep_tasks import load_task
+    from sweep_tasks.runner import _dump_run_metadata
+
+    for k in ("SWEEP_DD_ENABLE", "SWEEP_DD_PY", "SWEEP_DD_PX",
+              "SWEEP_DD_RENDER_CHUNK", "WORLD_SIZE", "LOCAL_RANK", "RANK"):
+        monkeypatch.delenv(k, raising=False)
+
+    true_path, init_path = _write_tiny_models(tmp_path)
+    spec_dict = _make_spec_dict(tmp_path, init_path, true_path, task_id="sp_dump")
+    yaml_path = tmp_path / "cfg_sp.yaml"
+    yaml_path.write_text(yaml.safe_dump(spec_dict, sort_keys=False))
+    spec = load_task(yaml_path)
+    target = tmp_path / "sp_out"
+    _dump_run_metadata(spec, target)
+
+    meta = json.loads((target / "run_meta.json").read_text())
+    assert meta["distributed"]["dd"]["enabled"] is False
+    assert meta["distributed"]["dd"]["mesh"] == 1
+    assert meta["distributed"]["torch_distributed"]["initialized"] is False
+
+    cfg_text = (target / "config_resolved.yaml").read_text()
+    assert "Single-process run" in cfg_text
+    loaded = yaml.safe_load(cfg_text)
+    assert loaded["task_id"] == "sp_dump"  # still a valid, runnable spec
