@@ -135,13 +135,10 @@ pip install torch
 git clone https://github.com/DeepWave-KAUST/sweep
 (cd sweep && pip install .)
 
-# 4. LLM backend — vLLM is CUDA-only, so use Ollama (native, Metal-accelerated)
-brew install ollama
-brew services start ollama             # background service; `ollama serve` ties up a terminal
-ollama pull qwen2.5:7b                 # 4.7 GB; must be a tool-calling capable model
-export SWEEP_AGENT_LLM_URL=http://localhost:11434/v1
-export SWEEP_AGENT_LLM_MODEL=qwen2.5:7b
-sweep-agent chat
+# 4. LLM backend. Install Ollama (no Homebrew needed) and start it, then chat.
+curl -fsSL https://ollama.com/install.sh | sh    # macOS or Linux (or the app: ollama.com/download)
+ollama serve                           # brew users can instead run: brew services start ollama
+sweep-agent chat                       # auto-detects Ollama and pulls qwen2.5:7b (~4.4 GB) on first run
 
 # 5. optional — the browser UI instead of the terminal (same LLM endpoint)
 pip install -e '.[ui]'
@@ -174,14 +171,24 @@ sweep-agent tools          # human-readable
 sweep-agent tools --json   # OpenAI tool-call specs (for wiring into other frameworks)
 ```
 
-### Chat (needs an LLM endpoint from step 4)
+### Chat
+
+With a local LLM server running (Ollama, or vLLM from step 4), just start it:
 
 ```bash
-export SWEEP_AGENT_LLM_URL=http://localhost:8000/v1        # vLLM; or …:11434/v1 for Ollama
-export SWEEP_AGENT_LLM_MODEL=qwen2.5-14b-instruct
 sweep-agent chat
 >>> make a smooth 2-D model and show me how the wave propagates
 >>> :reset                 # clear conversation history
+```
+
+`sweep-agent chat` is zero-config by default: it auto-detects a running Ollama (`:11434`) or vLLM
+(`:8000`/`:8001`), defaults to a 7B model, and pulls it via Ollama on first run if it isn't there.
+Override any of that explicitly when you need to:
+
+```bash
+export SWEEP_AGENT_LLM_URL=http://localhost:8000/v1        # or …:11434/v1 for Ollama
+export SWEEP_AGENT_LLM_MODEL=qwen2.5-14b-instruct
+sweep-agent chat --url http://localhost:8000/v1 --model qwen2.5-14b-instruct
 ```
 
 `--url` / `--model` flags override the env vars; `SWEEP_AGENT_MAX_STEPS` caps tool-call rounds per turn.

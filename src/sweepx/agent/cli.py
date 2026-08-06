@@ -14,6 +14,10 @@ from sweep_agent.llm.vllm_backend import (
     DEFAULT_URL,
     MODEL_ALIASES,
     VLLMBackend,
+    backend_hint,
+    default_model_for,
+    detect_endpoint,
+    ensure_ollama_model,
     resolve_model,
 )
 from sweep_agent.tools import registry
@@ -67,14 +71,19 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 def _cmd_ui(args: argparse.Namespace) -> int:
-    # The backend reads the endpoint from the environment; honour --url/--model
-    # so the web UI can be pointed at the right vLLM port (the default 8000 may
-    # collide with other local services).
-    if args.url:
-        os.environ["SWEEP_AGENT_LLM_URL"] = args.url
-    if args.model:
-        os.environ["SWEEP_AGENT_LLM_MODEL"] = args.model
+    # Resolve the endpoint/model once (explicit flag, then env, then auto-detect)
+    # and pin them in the environment so the web UI uses the same ones, and
+    # auto-pull the model if it's a missing Ollama model.
+    url = args.url or os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
+    hint = backend_hint(url)  # don't launch a UI that can't reach any LLM
+    if hint is not None:
+        print("[sweep-agent] " + hint, file=sys.stderr)
+        return 1
+    model = args.model or os.environ.get("SWEEP_AGENT_LLM_MODEL") or default_model_for(url)
+    os.environ["SWEEP_AGENT_LLM_URL"] = url
+    os.environ["SWEEP_AGENT_LLM_MODEL"] = model
     os.environ["SWEEP_AGENT_MAX_STEPS"] = str(args.max_steps)
+    ensure_ollama_model(url, resolve_model(model))
     # Single launch path: webui.launch() owns theme/css/js + allowed_paths.
     from sweep_agent.webui import launch
 
@@ -84,7 +93,13 @@ def _cmd_ui(args: argparse.Namespace) -> int:
 
 def _cmd_chat(args: argparse.Namespace) -> int:
     from sweep_agent.tools.selection import select_tool_names
-    backend = VLLMBackend(url=args.url, model=args.model)
+    url = args.url or os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
+    hint = backend_hint(url)  # nothing reachable? tell the user how to get an LLM
+    if hint is not None:
+        print("[sweep-agent] " + hint, file=sys.stderr)
+        return 1
+    backend = VLLMBackend(url=url, model=args.model)
+    ensure_ollama_model(backend.url, backend.model_id)  # one-time auto-pull on Ollama
     agent = Agent(llm=backend, max_steps=args.max_steps, tool_selector=select_tool_names)
     print(f"[sweep-agent] model={backend.model_id}  url={backend.url}")
     print("[sweep-agent] type your request, Ctrl-D to exit.\n")
