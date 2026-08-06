@@ -213,8 +213,10 @@ def run_agent_turn(agent, prompt: str, history: list):
                     md["log"] = os.path.basename(figs[0])
                 live_block = None
                 # Any figure a tool saved is shown INLINE in the conversation.
+                # Pass an absolute realpath so gradio's allowed_paths check matches
+                # (esp. on macOS where /tmp resolves to /private/tmp).
                 for fig in figs:
-                    history.append({"role": "assistant", "content": {"path": fig}})
+                    history.append({"role": "assistant", "content": {"path": os.path.realpath(fig)}})
                 yield history
             elif step.kind == "final":
                 # Figures already render inline; drop the model's local-path
@@ -601,10 +603,14 @@ def launch(server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = 
     import gradio as gr
 
     app = build_app(max_steps=int(os.environ.get("SWEEP_AGENT_MAX_STEPS", "24")))
-    # Tools save figures under /tmp/sweep_runs, /tmp/*.png, task dirs … — gradio
-    # only serves files from allowed roots, so whitelist /tmp (+ extras) or the
-    # inline images raise InvalidPathError.
-    kwargs.setdefault("allowed_paths", ["/tmp", os.getcwd()])
+    # Tools save figures under /tmp/sweep_runs, $TMPDIR, task dirs, cwd … — gradio
+    # only serves files from allowed roots, so whitelist them or the inline images
+    # raise InvalidPathError. Use REALPATHS: on macOS /tmp and $TMPDIR are symlinks
+    # (/private/tmp, /private/var/folders/…) and gradio resolves each served file
+    # to its realpath, so "/tmp" alone would never match and every figure breaks.
+    import tempfile
+    _roots = {os.path.realpath(p) for p in ("/tmp", tempfile.gettempdir(), os.getcwd())}
+    kwargs.setdefault("allowed_paths", sorted(_roots))
     # Gradio 6 takes theme/css/js on launch(), not on Blocks().
     kwargs.setdefault("theme", gr.themes.Base(
         primary_hue=gr.themes.colors.cyan,

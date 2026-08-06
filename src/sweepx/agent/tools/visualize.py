@@ -616,7 +616,8 @@ class PlotVelocityModelParams(BaseModel):
         "Plot a velocity/parameter model from a .npy FILE so the user can SEE what a model looks like "
         "BEFORE running anything (2-D heat-map, or three orthogonal slices for a 3-D cube). Use when the "
         "user uploads/points at a model and asks to see it / 看看这个模型 / what does this model look like. "
-        "Drawn via sweep_tasks.viz. Returns the saved image path and the model shape."
+        "Drawn with matplotlib (works without the sweep_tasks stack); 3-D orthogonal slices use "
+        "sweep_tasks.viz when it's installed. Returns the saved image path and the model shape."
     ),
     params_model=PlotVelocityModelParams,
 )
@@ -628,19 +629,42 @@ def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import model as vizmodel
 
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     if arr.ndim == 2:
+        # Plain matplotlib heat-map — NO sweep_tasks needed, so plotting a model
+        # works on a base install (e.g. right after make_synthetic_model).
+        nz, nx = arr.shape
+        extent = [0, nx * args.dh, nz * args.dh, 0] if args.dh else [0, nx, nz, 0]
+        unit = "m" if args.dh else "samples"
         fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-        dh = (args.dh, args.dh) if args.dh else None
-        vizmodel.plot_vp(arr, dh=dh, ax=ax, title=args.title or f"velocity model {arr.shape}", cbar_label=args.cbar_label)
+        im = ax.imshow(arr, aspect="auto", cmap="jet", extent=extent)
+        ax.set_title(args.title or f"velocity model {arr.shape}")
+        ax.set_xlabel(f"x ({unit})")
+        ax.set_ylabel(f"depth ({unit})")
+        fig.colorbar(im, ax=ax, label=args.cbar_label)
         fig.savefig(out, dpi=130)
         plt.close(fig)
     elif arr.ndim == 3:
-        dh = args.dh or 1.0
-        fig, axes = vizmodel.plot_vp_ortho_slices(arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
+        # 3-D: prefer sweep_tasks' orthogonal-slice helper; fall back to a plain
+        # 3-panel matplotlib view when sweep_tasks isn't installed.
+        try:
+            from sweep_tasks.viz import model as vizmodel
+            dh = args.dh or 1.0
+            fig, _axes = vizmodel.plot_vp_ortho_slices(
+                arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
+        except Exception:
+            nz, ny, nx = arr.shape
+            fig, axes = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
+            for ax, (plane, ttl) in zip(axes, (
+                    (arr[:, ny // 2, :], f"inline y={ny // 2}"),
+                    (arr[:, :, nx // 2], f"crossline x={nx // 2}"),
+                    (arr[nz // 2, :, :], f"depth z={nz // 2}"))):
+                im = ax.imshow(plane, aspect="auto", cmap="jet")
+                ax.set_title(ttl)
+            fig.colorbar(im, ax=list(axes), label=args.cbar_label)
+            fig.suptitle(args.title or f"velocity model {arr.shape}")
         fig.savefig(out, dpi=130)
         plt.close(fig)
     else:

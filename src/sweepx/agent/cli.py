@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import shutil
 import subprocess
 import sys
+import threading
 from typing import Sequence
 
 from sweep_agent.agent import Agent
@@ -21,6 +23,41 @@ from sweep_agent.llm.vllm_backend import (
     resolve_model,
 )
 from sweep_agent.tools import registry
+
+
+_SENTINEL = object()
+_SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _with_spinner(gen, message: str):
+    """Advance ``gen`` to its first item while showing a terminal spinner, then
+    yield that item and the rest. Used for the FIRST chat turn: the model is
+    loaded server-side on the first request (Ollama/vLLM) with no % to report, so
+    the prompt would otherwise sit frozen. The ``ollama pull`` download already has
+    its own progress bar; this covers the load/warm-up that follows."""
+    stop = threading.Event()
+
+    def _spin() -> None:
+        for frame in itertools.cycle(_SPIN_FRAMES):
+            if stop.is_set():
+                break
+            print(f"\r[sweep-agent] {frame} {message}", end="", file=sys.stderr, flush=True)
+            stop.wait(0.1)
+        print("\r" + " " * (len(message) + 24) + "\r", end="", file=sys.stderr, flush=True)
+
+    thread = threading.Thread(target=_spin, daemon=True)
+    thread.start()
+    first = _SENTINEL
+    try:
+        first = next(gen)
+    except StopIteration:
+        pass
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
+    if first is _SENTINEL:
+        return iter(())
+    return itertools.chain([first], gen)
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -115,6 +152,7 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     agent = Agent(llm=backend, max_steps=args.max_steps, tool_selector=select_tool_names)
     print(f"[sweep-agent] model={backend.model_id}  url={backend.url}")
     print("[sweep-agent] type your request, Ctrl-D to exit.\n")
+    warmed = False
     try:
         while True:
             try:
@@ -128,7 +166,13 @@ def _cmd_chat(args: argparse.Namespace) -> int:
                 agent.reset()
                 print("[sweep-agent] history cleared.")
                 continue
-            for step in agent.iter_chat(user):
+            steps = agent.iter_chat(user)
+            if not warmed:
+                # First request loads the model server-side (Ollama/vLLM) — spin so
+                # the terminal shows progress instead of a frozen prompt.
+                steps = _with_spinner(steps, "initialising the LLM (first request may take a while)…")
+                warmed = True
+            for step in steps:
                 if step.kind == "tool" and not args.quiet:
                     print(f"  · {step.tool_name}({step.tool_args}) → {step.tool_result_json[:200]}")
                 elif step.kind == "final":
