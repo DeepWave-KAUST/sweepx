@@ -9,4 +9,11 @@ from sweep_agent.llm.base import BaseLLM, ChatMessage, ToolCall
 from sweep_agent.tools import Tool, registry
 
 __all__ = ["Agent", "AgentStep", "BaseLLM", "ChatMessage", "ToolCall", "Tool", "registry"]
-__version__ = "0.0.1"
+
+# Read the installed distribution version so this never drifts from pyproject.
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("sweep-agent")
+except Exception:  # running from a source tree that isn't installed as a dist
+    __version__ = "0.0.0+source"
