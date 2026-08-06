@@ -1,6 +1,6 @@
 # sweep-agent
 
-Offline-LLM natural-language control for the [`sweep`](https://github.com/GeophyAI) stack.
+Offline-LLM natural-language control for the [`sweep`](https://github.com/DeepWave-KAUST/sweep) stack.
 
 > **Goal:** say *"here is `vp_init.npy` and `obs.segy`, run an FWI starting at 10 Hz"* and have a
 > **local** LLM turn that into a validated `sweep` task and run it — no cloud, no API keys.
@@ -24,230 +24,93 @@ user (natural language + files)
             └─ build + execute + viz  ──►  sweep_tasks.TaskRunner   (production runner)
 ```
 
-Tools that need the geophysics stack import it **lazily**: if `sweep` / `sweep_tasks` is not
-installed, the tool returns a clear `{"error": "... not importable"}` instead of crashing, so
-the agent always starts and the pure-Python tools always work.
+Tools import the geophysics stack **lazily**: if a layer is missing, the tool returns a clear
+`{"error": "... not importable"}` instead of crashing, so the agent always starts and the tools
+that don't need that layer always work.
 
 ## Install
 
-sweep-agent installs in **layers**. The base layer is pure-PyPI and runs anywhere
-(Linux / macOS, CPU, no GPU); you add the solver, the runner, and an LLM backend as you need them.
-
-### 1. Base — natural-language layer, file inspection, tool registry
-
 ```bash
-git clone https://github.com/GeophyAI/sweep-agent
-cd sweep-agent
-pip install -e .          # PyPI deps only: pydantic, httpx, PyYAML, numpy
+pip install sweep-agent          # the agent + the sweep solver
 ```
 
-This alone gives you the CLI, the full 30-tool registry, and every tool that doesn't need a
-solver — `inspect_file`, `check_parameters`, `make_synthetic_model`, plus the three plotting
-tools that only need matplotlib (`plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers`).
-Verify:
+or get it as part of the whole sweep umbrella:
 
 ```bash
-sweep-agent tools        # prints the 30 tools and what each does
+pip install sweepx               # sweep-solver + sweep-agent (+ future companions)
 ```
 
-### 2. The solver — `sweep` (equation discovery + wave modelling)
+Either path installs the `sweep-agent` CLI, the ~30-tool registry, and the core solver
+(`sweep-solver`, imports as `sweep`) — so natural-language **forward modelling, wavefields and
+shot gathers work out of the box**. Python 3.9+.
 
-`sweep` (the core wave-equation solver) is open source but **not on PyPI**. Install your backend
-framework **first** — sweep deliberately does not pull PyTorch/JAX for you, so that you control the
-CUDA build — then install sweep from the repo root:
+**To chat you also need a local LLM** — any OpenAI-compatible endpoint:
 
-```bash
-# 1. a working PyTorch (or JAX) environment — see pytorch.org / the JAX install docs
-# 2. then:
-git clone https://github.com/DeepWave-KAUST/sweep
-cd sweep
-pip install .
-```
+- **Ollama** (Mac / CPU): `ollama serve` then `ollama pull qwen2.5:7b` — `sweep-agent chat` auto-detects it.
+- **vLLM** (GPU node): `pip install "sweep-agent[vllm]"` then `sweep-agent serve-llm --model qwen2.5-14b-instruct`.
 
-That one command covers **both** the PyTorch-eager and the JAX paths — sweep uses lazy imports, so
-you only need the framework you actually use.
+**Full FWI / LSRTM** additionally needs `sweep-tasks` (the production runner: spec schemas, losses,
+optimizers, multi-GPU, IO). It is **not on PyPI yet** — install it from source for now. Forward
+modelling and the inspection tools don't need it; an FWI tool called without it just returns a clean
+`{"error": "sweep_tasks is not importable"}`.
 
-Note: `sweep`'s default branch is `dev`, so a plain `git clone` checks out the development head.
-Pin a tag or commit if you need a reproducible environment.
+Extras: `pip install "sweep-agent[ui]"` (Gradio web UI), `[vllm]`, `[animate]` (GIF export).
 
-Optionally, on **Linux + NVIDIA only**, you can additionally build the compiled C++/CUDA binding
-(`sweep._C`). sweep-agent's tools do not require it:
+<details>
+<summary><b>macOS (Apple Silicon)</b></summary>
 
-```bash
-SWEEP_BUILD_CUDA=1 pip install -v .[cuda] --no-build-isolation
-```
-
-Naming: the distribution is **`sweep-solver`** — that is what `pip list` and dependency errors call
-it — while the import name is **`sweep`**. Same package.
-
-Verify with `sweep list equations`. This enables `list_equations` and the wave-modelling tools.
-
-### 3. The production runner — `sweep-tasks` (optional, not yet released)
-
-The `build_*_spec`, `run_task`, and `plot_*` tools drive `sweep_tasks.TaskRunner` — the production
-task layer of the sweep stack (spec schemas, losses, optimizers, multi-GPU, IO, plotting). It is
-**not publicly released yet**, so for now those tools are unavailable outside our group.
-
-That is a soft limit, not a wall: every one of them imports `sweep_tasks` lazily and returns a
-plain `{"error": "sweep_tasks is not importable"}` when it is missing, so the agent still starts,
-still registers all 30 tools, and everything in steps 1–2 keeps working.
-
-### 4. An LLM backend — to actually *chat*
-
-The agent talks to any **OpenAI-compatible** endpoint. Pick one:
-
-- **GPU node — vLLM:**
-  ```bash
-  pip install -e '.[vllm]'
-  sweep-agent serve-llm --model qwen2.5-14b-instruct     # wraps `vllm serve` with tool-calling on
-  ```
-- **Mac / CPU — Ollama:** `ollama serve` then `ollama pull qwen2.5:7b`, and point the agent at
-  `http://localhost:11434/v1` (see env vars below).
-
-You do **not** need an LLM to develop or unit-test tools — call them directly (see Usage) or list
-them with `sweep-agent tools`.
-
-### Optional extras
-
-```bash
-pip install -e '.[ui]'       # Gradio web UI (drag-drop files, inline figures)
-pip install -e '.[animate]'  # imageio — GIF writing for animate_fwi_evolution
-pip install -e '.[test]'     # pytest
-pip install -e '.[dev]'      # pytest + ruff + black
-```
-
-### macOS (Apple Silicon) — end-to-end
-
-Verified on macOS 15.7 / Apple M3 Max / Python 3.11. The whole chat → tool → modelling → figure
-loop runs on an M-series Mac, with MPS acceleration; only large production runs still want a CUDA box.
-
-```bash
-# 1. Python 3.9+ (what the package requires); a venv or conda env keeps it isolated
-python3 -m venv .venv && source .venv/bin/activate
-
-# 2. Base layer — all deps ship arm64 wheels, so no compiler is needed
-pip install -e .
-sweep-agent tools                      # should list 30 tools
-
-# 3. The solver. Install PyTorch first (its arm64 wheels give you MPS), then sweep itself.
-#    Do NOT set SWEEP_BUILD_CUDA — that is the Linux+NVIDIA compiled-binding path.
-pip install torch
-git clone https://github.com/DeepWave-KAUST/sweep
-(cd sweep && pip install .)
-
-# 4. LLM backend. Install Ollama (no Homebrew needed) and start it, then chat.
-curl -fsSL https://ollama.com/install.sh | sh    # macOS or Linux (or the app: ollama.com/download)
-ollama serve                           # brew users can instead run: brew services start ollama
-sweep-agent chat                       # auto-detects Ollama and pulls qwen2.5:7b (~4.4 GB) on first run
-
-# 5. optional — the browser UI instead of the terminal (same LLM endpoint)
-pip install -e '.[ui]'
-sweep-agent ui --port 7860             # then open http://localhost:7860
-```
-
-Mac notes:
-
-- **Say "mps", not "GPU".** This is the one real trap. Ask the agent to *"run it on the GPU"* and the
-  LLM fills `device="cuda"`; the spec fails, the retry silently falls back to `cpu`, and the task
-  still reports `state=success` — so you cannot tell it ran on the CPU. Say *"on the mps device"*
-  and it sets `device=mps` correctly.
-- **MPS is worth it:** 256×384 grid, 8 shots, 1500 steps, eager backend —
-  **CPU 26.7 s → MPS 5.5 s (≈4.9× faster)**.
-- **Do not** set `SWEEP_BUILD_CUDA=1` — that is the Linux + NVIDIA build path and will fail here.
-- macOS runs `sweep`'s **eager torch** path; the compiled `sweep._C` backend is Linux/CUDA-only.
-- Ollama's OpenAI-compatible endpoint does real tool calling: `qwen2.5:7b` drives the full
-  `inspect_file → build_forward_spec → run_task → plot_shot_gather` chain end to end. It does
-  occasionally *say* it will call a tool without actually calling it — a nudge ("plot it") fixes
-  that, and `qwen2.5:14b` (~9 GB) is noticeably more reliable if you have the RAM.
-- The tool layer needs **neither an LLM nor a GPU**: `sweep-agent tools` and direct `.fn` calls
-  (see Usage) work on a bare Mac with just the base install.
+Runs end-to-end on M-series with MPS acceleration (CPU 26.7 s → MPS 5.5 s on a 256×384 / 8-shot /
+1500-step demo). Use Ollama for the LLM. Two traps: say *"on the mps device"* — not *"GPU"*, which
+makes the LLM fill `device="cuda"` and silently fall back to CPU; and do **not** set
+`SWEEP_BUILD_CUDA` (that's the Linux + NVIDIA compiled-binding path). macOS uses sweep's eager torch.
+</details>
 
 ## Usage
 
-### Inspect the tools (no LLM, no GPU)
-
 ```bash
-sweep-agent tools          # human-readable
-sweep-agent tools --json   # OpenAI tool-call specs (for wiring into other frameworks)
+sweep-agent chat        # interactive; auto-detects Ollama/vLLM, tells you if none is running
+sweep-agent ui          # same agent in a browser (needs [ui] + a running LLM), then open :7860
+sweep-agent tools       # list the ~30 tools — no LLM/GPU needed; --json emits OpenAI tool specs
 ```
 
-### Chat
-
-With a local LLM server running (Ollama, or vLLM from step 4), just start it:
-
-```bash
-sweep-agent chat
->>> make a smooth 2-D model and show me how the wave propagates
->>> :reset                 # clear conversation history
+```text
+$ sweep-agent chat
+>>> here is vp_init.npy — run a 2-D acoustic forward and show me the shot gather
+>>> :reset              # clear conversation history
 ```
 
-`sweep-agent chat` is zero-config by default: it auto-detects a running Ollama (`:11434`) or vLLM
-(`:8000`/`:8001`), defaults to a 7B model, and pulls it via Ollama on first run if it isn't there.
-Override any of that explicitly when you need to:
+`chat` / `ui` are **zero-config by default** — they auto-detect a running Ollama (`:11434`) or
+vLLM (`:8000`/`:8001`), pick a 7B model, and pull it on first run. **To switch to any other
+OpenAI-compatible backend** (a remote vLLM, a hosted endpoint, llama.cpp, LM Studio, …) pass
+`--url` / `--model` / `--api-key`, or set `SWEEP_AGENT_LLM_URL` / `SWEEP_AGENT_LLM_MODEL` /
+`SWEEP_AGENT_LLM_API_KEY`. For a fully custom backend, subclass `BaseLLM` from `sweep_agent.llm`.
 
-```bash
-export SWEEP_AGENT_LLM_URL=http://localhost:8000/v1        # or …:11434/v1 for Ollama
-export SWEEP_AGENT_LLM_MODEL=qwen2.5-14b-instruct
-sweep-agent chat --url http://localhost:8000/v1 --model qwen2.5-14b-instruct
-```
-
-`--url` / `--model` flags override the env vars; `SWEEP_AGENT_MAX_STEPS` caps tool-call rounds per turn.
-
-### Web UI (also needs an LLM endpoint from step 4)
-
-Same agent as `chat`, in a browser: drag files into the window, figures render inline.
-
-```bash
-pip install -e '.[ui]'
-
-# point it at the same endpoint `chat` uses — the UI does not start an LLM for you
-export SWEEP_AGENT_LLM_URL=http://localhost:11434/v1     # Ollama; …:8000/v1 for vLLM
-export SWEEP_AGENT_LLM_MODEL=qwen2.5:7b
-
-sweep-agent ui --port 7860        # then open http://localhost:7860
-```
-
-`--url` / `--model` override the environment, so you can skip the exports:
-
-```bash
-sweep-agent ui --url http://localhost:11434/v1 --model qwen2.5:7b
-```
-
-Note: the web UI holds **one globally shared conversation** — every open browser window sees the
-same history and each other's messages. Use the CLI (`sweep-agent chat`) if you want isolated sessions.
-
-### Call a tool directly from Python (no LLM)
-
-Every tool is a plain function reachable as `.fn`, with a pydantic params model — handy for
-scripting and tests:
+Every tool is also a plain function (`.fn`, with a pydantic params model) — handy for scripts and tests:
 
 ```python
 from sweep_agent.tools.inspect import inspect_file, InspectFileParams
 print(inspect_file.fn(InspectFileParams(path="vp_init.npy")))
-
-from sweep_agent.tools.analysis import check_parameters, CheckParametersParams
-print(check_parameters.fn(CheckParametersParams(dh=10, dt=1e-3, fm=8, vp_min=1500, vp_max=4500)))
 ```
 
 ## What works at each layer
 
-| tools | base (`pip install -e .`) | + `sweep` | + `sweep-tasks`<br>*(unreleased)* |
-|---|:--:|:--:|:--:|
-| `sweep-agent tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ | ✅ |
-| `plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers` *(matplotlib only)* | ✅ | ✅ | ✅ |
-| `list_equations` | error dict | ✅ | ✅ |
-| `build_*_spec`, `run_task`, the other `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | error dict | ✅ |
+| tools | `pip install sweep-agent` | `+ sweep-tasks`<br>*(from source)* |
+|---|:--:|:--:|
+| `sweep-agent tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ |
+| `plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers`, `list_equations` | ✅ | ✅ |
+| `run_forward_sweep` — forward modelling / wavefields / shot gathers | ✅ | ✅ |
+| `build_*_spec`, `run_task`, other `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | ✅ |
 
 A tool whose layer is missing returns `{"error": "… is not importable"}` — the agent stays up.
-Steps 1–2 are all publicly available today; the third column is our internal production tier.
+The last column (`sweep-tasks`) is our production FWI/LSRTM tier, not on PyPI yet.
 
 ## Tests
 
 ```bash
-pip install -e '.[test]'
-pytest                     # tests that need sweep / sweep_tasks auto-skip when the stack is absent
+pip install "sweep-agent[test]"
+pytest                  # tests that need sweep / sweep_tasks auto-skip when the stack is absent
 ```
 
 ## License
 
-MIT © Shaowen Wang. See `pyproject.toml` for details.
+MIT © Shaowen Wang.

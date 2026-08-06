@@ -25,11 +25,15 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-# Only deps that are actually on PyPI. The geophysics stack (`sweep` core solver and
-# `sweep-tasks`) is NOT on PyPI — install it separately (see README). Every tool that
-# needs it imports it lazily, so `pip install -e .` works standalone for the
-# natural-language + file-inspection + tool-registry layer.
+# `sweep-solver` (the core solver, imports as `sweep`) IS on PyPI, so it's a hard
+# dep — this makes natural-language forward modelling / wavefields / shot gathers
+# work out of the box (`run_forward_sweep` needs only the core solver). The
+# production runner `sweep-tasks` (FWI/LSRTM specs, TaskRunner) is NOT on PyPI yet;
+# the build_*/execute/introspect tools import it lazily and return a clean error
+# when it's missing, so everything else keeps working. Install sweep-tasks from
+# source for the full FWI pipeline (see README).
 dependencies = [
+    "sweep-solver>=0.1,<0.2",
     "pydantic>=2.0",
     "httpx>=0.25",
     "PyYAML>=6.0",
@@ -49,8 +53,8 @@ dev  = ["pytest>=7", "ruff", "black"]
 sweep-agent = "sweep_agent.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/GeophyAI/sweep-agent"
-Issues   = "https://github.com/GeophyAI/sweep-agent/issues"
+Homepage = "https://github.com/DeepWave-KAUST/sweep-agent"
+Issues   = "https://github.com/DeepWave-KAUST/sweep-agent/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
