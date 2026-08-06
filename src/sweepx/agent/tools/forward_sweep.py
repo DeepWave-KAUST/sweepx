@@ -57,7 +57,7 @@ def _require_sweep():
 class RunForwardSweepParams(BaseModel):
     vp_path: str = Field(..., description="Velocity model .npy, shape (nz, nx) in m/s. Call inspect_file first to learn its shape.")
     dh: float = Field(..., gt=0, description="Grid spacing in metres (isotropic).")
-    dt: float = Field(..., gt=0, description="Time step in seconds. Call check_parameters first — a too-large dt is unstable.")
+    dt: float | None = Field(None, gt=0, description="Time step in seconds. OPTIONAL — if omitted, a CFL-stable dt = 0.4·dh/vmax is computed from the model, so you only need dh, record_length_s (or nt), and fm.")
     nt: int | None = Field(None, gt=0, description="Number of time samples. Give either nt or record_length_s.")
     record_length_s: float | None = Field(None, gt=0, description="Record length in seconds; nt = round(record_length_s / dt).")
     fm: float = Field(8.0, gt=0, description="Ricker peak frequency in Hz.")
@@ -103,14 +103,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     #     sweep/examples/wavefields/topography/acoustic2d_hill_demo.py
     torch = mods["torch"]
     ricker = mods["ricker"]
-    # 1. Resolve nt: use args.nt, else round(args.record_length_s / args.dt).
-    #    Return {"error": ...} if neither was given.
-    nt = args.nt
-    if nt is None:
-        if args.record_length_s is None:
-            return {"error": "give either nt or record_length_s."}
-        nt = round(args.record_length_s / args.dt)
-    # 2. np.load the model, sanity-check it is 2-D, move it to args.device.
+    # 1. np.load the model first — its vmax fixes a stable dt when none was given.
     if not Path(args.vp_path).exists():
         return {"error": f"velocity model not found: {args.vp_path}"}
     vp_np = np.load(args.vp_path)
@@ -118,10 +111,22 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
         return {"error": f"vp must be 2-D (nz, nx); got shape {vp_np.shape}."}
     vp = torch.from_numpy(vp_np.astype(np.float32)).to(args.device)
     nz, nx = vp_np.shape
-    # 3. Build the Ricker wavelet with mods["ricker"] on a t axis of nt samples
+    # 2. Resolve dt: use args.dt, else a CFL-stable step (0.4·dh/vmax) so the caller
+    #    only needs dh + record_length_s/nt + fm.
+    dt = args.dt
+    if dt is None:
+        vmax = float(np.nanmax(np.abs(vp_np))) or 1500.0
+        dt = 0.4 * args.dh / vmax
+    # 3. Resolve nt: use args.nt, else round(args.record_length_s / dt).
+    nt = args.nt
+    if nt is None:
+        if args.record_length_s is None:
+            return {"error": "give either nt or record_length_s."}
+        nt = round(args.record_length_s / dt)
+    # 4. Build the Ricker wavelet with mods["ricker"] on a t axis of nt samples
     #    (give it a delay so the wavelet is causal).
     delay = 1.0 / args.fm
-    t = np.arange(nt, dtype=np.float32) * args.dt - delay
+    t = np.arange(nt, dtype=np.float32) * dt - delay
     wavelet = torch.tensor((1.0e3 * ricker(t, f=args.fm)).astype(np.float32)).to(args.device)
     # 4. Build source and receiver index tensors. sources is (nshot, 2) as
     #    (x, z); receivers is (nshot, nrec, 2). Default the source to the middle
@@ -153,7 +158,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     #        use_ckpt=False, impl="eager")
     #    record = prop(wavelet, sources, receivers, models=[vp])  under no_grad.
     prop = mods["PropTorch"](
-        equation, shape=(nz, nx), dh=args.dh, dt=args.dt,
+        equation, shape=(nz, nx), dh=args.dh, dt=dt,
         abcn=args.abcn, free_surface=args.free_surface, use_ckpt=False, impl="eager",
     )
     with torch.no_grad():
@@ -185,7 +190,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
             pct = np.percentile(np.abs(rec_np), 99.0) or 1.0
             fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
             ax.imshow(rec_np, cmap="seismic", vmin=-pct, vmax=pct,
-                      aspect="auto", extent=[rec_x.min(), rec_x.max(), nt * args.dt, 0])
+                      aspect="auto", extent=[rec_x.min(), rec_x.max(), nt * dt, 0])
             ax.set_xlabel("receiver x (cells)"); ax.set_ylabel("time (s)")
             ax.set_title(f"{args.equation} shot gather")
             png_path = out_dir / "shot_gather.png"
@@ -205,6 +210,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
         "shape": list(rec_np.shape),
         "device": args.device,
         "nt": nt,
+        "dt": dt,
         "summary": f"Ran {args.equation} forward: {rec_np.shape[0]} samples x "
-                   f"{rec_np.shape[1]} receivers on {args.device}.",
+                   f"{rec_np.shape[1]} receivers on {args.device} (dt={dt:.2e}s).",
     }
