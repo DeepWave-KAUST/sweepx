@@ -482,8 +482,10 @@ def build_app(max_steps: int = 24):
             f"(import error: {exc})"
         )
 
-    url = os.environ.get("SWEEP_AGENT_LLM_URL", "http://localhost:8001/v1")
-    model = os.environ.get("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+    from sweep_agent.llm.vllm_backend import default_model_for, detect_endpoint
+
+    url = os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
+    model = os.environ.get("SWEEP_AGENT_LLM_MODEL") or default_model_for(url)
     count = _make_token_counter(model)
     # Before the first turn we don't know the subset yet — estimate with the
     # keyword-router's no-match default (CORE + fallback), not all ~30 tools.
