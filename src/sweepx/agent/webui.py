@@ -621,7 +621,18 @@ def launch(server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = 
     ))
     kwargs.setdefault("css", _CSS)
     kwargs.setdefault("js", _FORCE_DARK_JS)
-    app.queue().launch(server_name=server_name, server_port=server_port, share=share, **kwargs)
+    demo = app.queue()
+    try:
+        demo.launch(server_name=server_name, server_port=server_port, share=share, **kwargs)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Ctrl-C otherwise leaves the gradio server thread holding the port, so the
+        # next `sweep-agent ui` fails with "address already in use". Close explicitly.
+        try:
+            demo.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":  # python -m sweep_agent.webui
