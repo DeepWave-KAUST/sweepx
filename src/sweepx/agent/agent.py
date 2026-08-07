@@ -19,6 +19,29 @@ from sweep_agent.tools import Registry, registry as default_registry
 # "stop repeating" message so the model finalizes instead of spinning.
 _REPEAT_LIMIT = 2
 
+# Weak local models sometimes reply with a PLAN ("I'll run the forward modelling…")
+# instead of emitting the tool call, ending the turn with nothing done. When a
+# text-only reply reads like such a promise and no tool has run yet this turn, nudge
+# once to actually call the tool.
+_NUDGE_CALL_TOOL = (
+    "You described what you would do but did not call any tool, so nothing has run. "
+    "Call the appropriate tool now to actually do it (for example run_forward_sweep). "
+    "If the request genuinely needs no tool, answer the user directly."
+)
+_ACTION_HINTS = (
+    "i will", "i'll", "let me", "let's", "i'm going to", "i am going to",
+    "going to run", "going to plot", "next, i", "first, i", "i can run", "i can plot",
+    "我将", "我会", "我来", "让我", "接下来", "首先", "现在我", "我先", "我可以", "我准备",
+)
+
+
+def _looks_like_narration(text) -> bool:
+    """True when a text-only reply reads like a promise to act — the model likely
+    meant to call a tool but forgot to emit the call."""
+    t = (text or "").strip().lower()
+    return bool(t) and any(h in t for h in _ACTION_HINTS)
+
+
 _BULKY_RESULT_KEYS = ("spec", "spec_attempted")
 # Cap roomy enough for the big *informational* results the LLM genuinely needs in
 # full (list_equations ≈ 7.2k chars, describe_task_schema sections). The real
@@ -134,6 +157,8 @@ class Agent:
             tool_specs = self.tools.openai_specs()
         self.last_tool_specs = tool_specs
         call_counts: dict[str, int] = {}
+        tool_used = False
+        nudged = False
 
         for _ in range(self.max_steps):
             self._prune_history()  # keep the request under the context window
@@ -141,9 +166,18 @@ class Agent:
             self.history.append(assistant)
 
             if not assistant.tool_calls:
+                # Narration guard: a weak model may promise an action ("I'll run the
+                # forward modelling…") without emitting the call, ending the turn
+                # with nothing done. If nothing has run yet this turn and the reply
+                # reads like such a promise, nudge once to actually call the tool.
+                if not tool_used and not nudged and _looks_like_narration(assistant.content):
+                    nudged = True
+                    self.history.append(ChatMessage(role="user", content=_NUDGE_CALL_TOOL))
+                    continue
                 yield AgentStep(kind="final", message=assistant)
                 return
 
+            tool_used = True
             # Models often narrate the plan in `content` next to the tool calls
             # ("I'll build the spec first…") — surface it like a chat message.
             if (assistant.content or "").strip():
