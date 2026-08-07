@@ -42,6 +42,17 @@ def _looks_like_narration(text) -> bool:
     return bool(t) and any(h in t for h in _ACTION_HINTS)
 
 
+def _english_reply_pin(text) -> str:
+    """qwen drifts to Chinese on an English message despite the standing
+    system-prompt rule. If the message has NO CJK characters (so the user is
+    writing English/Latin), append a terse reply-language reminder right next to
+    the message — recency makes the model actually follow it. Chinese messages are
+    left untouched."""
+    if (text or "").strip() and not any("一" <= c <= "鿿" for c in text):
+        return "\n\n(Reply in English.)"
+    return ""
+
+
 _BULKY_RESULT_KEYS = ("spec", "spec_attempted")
 # Cap roomy enough for the big *informational* results the LLM genuinely needs in
 # full (list_equations ≈ 7.2k chars, describe_task_schema sections). The real
@@ -146,7 +157,7 @@ class Agent:
 
     def iter_chat(self, user_message: str) -> Iterator[AgentStep]:
         """Stream each step (tool call + result, or final reply) of one turn."""
-        self.history.append(ChatMessage(role="user", content=user_message))
+        self.history.append(ChatMessage(role="user", content=user_message + _english_reply_pin(user_message)))
         if self.tool_selector is not None:
             names = self.tool_selector(user_message, self.tools.names())
             # Keep any tools already used this conversation so follow-ups
