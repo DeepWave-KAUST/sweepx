@@ -28,6 +28,8 @@ GROUPS: list[tuple[tuple[str, ...], list[str]]] = [
      ["build_fwi_spec", "run_fwi", "run_multiscale_fwi", "plot_model", "plot_convergence", "animate_fwi_evolution"]),
     (("model", "模型", "generate", "make a", "create", "生成", "造", "velocity", "速度", "slice", "切片", "profile", "剖面"),
      ["make_synthetic_model", "plot_velocity_model", "plot_velocity_slice"]),
+    (("benchmark", "基准", "dataset", "数据集", "marmousi", "overthrust", "bp-2004", "bp2004", "hess", "seg-eage", "salt", "real model", "真实模型", "样例模型", "example model", "standard model", "download model", "下载模型"),
+     ["list_benchmark_models", "get_benchmark_model", "make_synthetic_model", "plot_velocity_model"]),
     (("segy", "sgy", "observed", "观测", "real data", "真实数据", "field data", "misfit", "残差", "compare data", "对比观测"),
      ["plot_segy", "plot_observed_data", "compare_shot_gathers"]),
     (("parameter", "参数", "cfl", "stable", "稳定", "dispersion", "频散", "wavelet", "子波", "spectrum", "频谱", "frequency content"),
