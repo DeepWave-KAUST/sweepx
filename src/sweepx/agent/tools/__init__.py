@@ -26,6 +26,7 @@ _CORE_SAFE_TOOLS = frozenset({
     "inspect_file", "check_parameters", "make_synthetic_model", "list_equations",
     "run_forward_sweep", "read_status", "list_artifacts",
     "plot_velocity_model", "plot_velocity_slice", "plot_wavelet", "compare_shot_gathers",
+    "list_benchmark_models", "get_benchmark_model",
 })
 
 _sweep_tasks_ok: bool | None = None
@@ -35,7 +36,14 @@ def _sweep_tasks_available() -> bool:
     """Whether ``sweep_tasks`` (the production runner) is importable — cached."""
     global _sweep_tasks_ok
     if _sweep_tasks_ok is None:
-        _sweep_tasks_ok = importlib.util.find_spec("sweep_tasks") is not None
+        # A bare directory named "sweep_tasks" on sys.path — e.g. a task-output
+        # folder in the CWD (`/tmp/sweep_tasks/…`) — resolves as a *namespace
+        # package* with loader=None. That must NOT count as the real importable
+        # tier, or gating silently switches off and sweep_tasks-only tools get
+        # offered on a base install (then fail with a cryptic import error). A real
+        # package has a concrete loader.
+        spec = importlib.util.find_spec("sweep_tasks")
+        _sweep_tasks_ok = spec is not None and spec.loader is not None
     return _sweep_tasks_ok
 
 
@@ -147,5 +155,6 @@ import sweep_agent.tools.orchestrate      # noqa: E402,F401
 import sweep_agent.tools.synth            # noqa: E402,F401
 import sweep_agent.tools.analysis         # noqa: E402,F401
 import sweep_agent.tools.forward_sweep    # noqa: E402,F401
+import sweep_agent.tools.datasets         # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]

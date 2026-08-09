@@ -23,6 +23,7 @@ from sweep_agent.llm.vllm_backend import (
     resolve_model,
 )
 from sweep_agent.tools import registry
+from sweep_agent import __version__
 
 
 _SENTINEL = object()
@@ -62,6 +63,7 @@ def _with_spinner(gen, message: str):
 
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="sweep-agent", description=__doc__)
+    p.add_argument("--version", action="version", version=f"sweep-agent {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # chat ----------------------------------------------------------------

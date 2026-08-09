@@ -549,16 +549,22 @@ def build_app(max_steps: int = 24):
         with gr.Row():
             clear = gr.Button("🗑 Clear conversation", variant="secondary", scale=1, elem_id="sw-clear")
         # Quick-start example chips — click to fill the input box.
+        # Quick-start demos — all run on a base install (solver only, no sweep_tasks).
         with gr.Row(elem_classes=["sw-chips"]):
             ex_model = gr.Button("📈 Make a 2-layer model", size="sm")
             ex_fwd = gr.Button("🌊 Forward + shot gather", size="sm")
-            ex_wave = gr.Button("🎞 Elastic wavefield movie", size="sm")
-            ex_fwi = gr.Button("🔬 Hello-FWI", size="sm")
+            ex_marm = gr.Button("🏔 Marmousi + forward", size="sm")
+        with gr.Row(elem_classes=["sw-chips"]):
+            ex_list = gr.Button("📚 List benchmark models", size="sm")
+            ex_elastic = gr.Button("🪨 Elastic gather (vx/vz)", size="sm")
+            ex_wavelet = gr.Button("📐 Wavelet + CFL check", size="sm")
         _EXAMPLES = [
             (ex_model, "Generate a two-layer synthetic velocity model and show it."),
-            (ex_fwd, "Run forward modelling on /tmp/synthetic_vp.npy (dh=10 m, record 0.6 s, fm 10 Hz) and plot the shot gather."),
-            (ex_wave, "Make a homogeneous elastic model (vp/vs/rho), put the source at the centre, and animate how the P and S waves propagate."),
-            (ex_fwi, "Run a synthetic FWI: make a true two-layer model and a smooth starting model, invert, and show the inverted-vs-true model and the convergence curve."),
+            (ex_fwd, "Make a two-layer velocity model, run a forward simulation (dh=10 m, 0.6 s record, 10 Hz), and plot the shot gather."),
+            (ex_marm, "Load the Marmousi benchmark model and run a forward simulation on it, then show the shot gather."),
+            (ex_list, "List the benchmark velocity models that are available."),
+            (ex_elastic, "Make a homogeneous elastic model (vp, vs, rho) and run an Elastic forward simulation on it, then show the shot gather."),
+            (ex_wavelet, "Make a smooth gradient velocity model, check the CFL stability for dh=10 m, dt=1 ms, peak frequency 10 Hz, and plot the Ricker wavelet."),
         ]
         for _btn, _txt in _EXAMPLES:
             # Plain value patch — NOT gr.MultimodalTextbox(...): a full component
@@ -621,7 +627,18 @@ def launch(server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = 
     ))
     kwargs.setdefault("css", _CSS)
     kwargs.setdefault("js", _FORCE_DARK_JS)
-    app.queue().launch(server_name=server_name, server_port=server_port, share=share, **kwargs)
+    demo = app.queue()
+    try:
+        demo.launch(server_name=server_name, server_port=server_port, share=share, **kwargs)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Ctrl-C otherwise leaves the gradio server thread holding the port, so the
+        # next `sweep-agent ui` fails with "address already in use". Close explicitly.
+        try:
+            demo.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":  # python -m sweep_agent.webui
