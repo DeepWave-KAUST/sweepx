@@ -18,7 +18,7 @@ user (natural language + files)
             │  dispatches to one of ~30 registered tools
             ▼
    tools/  ── inspect_file · list_equations · check_parameters · make_synthetic_model
-            · build_forward_spec · build_fwi_spec · run_task · plot_* · run_fwi · ...
+            · get_benchmark_model · run_forward_sweep · build_fwi_spec · run_task · plot_* · run_fwi · ...
             │
             ├─ discovery / modelling  ──►  sweep            (core wave-equation solver)
             └─ build + execute + viz  ──►  sweep_tasks.TaskRunner   (production runner)
@@ -40,14 +40,16 @@ or get it as part of the whole sweep umbrella:
 pip install sweepx               # sweep-solver + sweep-agent (+ future companions)
 ```
 
-Either path installs the `sweep-agent` CLI, the ~30-tool registry, and the core solver
-(`sweep-solver`, imports as `sweep`) — so natural-language **forward modelling, wavefields and
-shot gathers work out of the box**. Python 3.9+.
+Either path installs the `sweep-agent` CLI, the tool registry, and the core solver
+(`sweep-solver`, imports as `sweep`) — so natural-language **forward modelling and shot gathers
+work out of the box**, including **elastic** (vp/vs/rho) as well as acoustic, and on **bundled
+benchmark models** (Marmousi, Overthrust — `get_benchmark_model`). Python 3.9+.
+(Wavefield *animations* and full FWI/LSRTM are the `sweep-tasks` tier — see below.)
 
 **To chat you also need a local LLM** — any OpenAI-compatible endpoint:
 
-- **Ollama** (Mac / CPU): `ollama serve` then `ollama pull qwen2.5:7b` — `sweep-agent chat` auto-detects it.
-- **vLLM** (GPU node): `pip install "sweep-agent[vllm]"` then `sweep-agent serve-llm --model qwen2.5-14b-instruct`.
+- **Ollama** (Mac / CPU): `ollama serve` then `ollama pull qwen2.5:14b`; run `sweep-agent chat --model qwen2.5:14b` (auto-detected). Tool-calling needs a capable model — the default Q4 quants are noticeably weaker; for better local quality use a `-q8_0` tag or a larger model (`qwen2.5:32b`), or point `--url` at a full-precision endpoint.
+- **vLLM** (GPU node): `pip install "sweep-agent[vllm]"` then `sweep-agent serve-llm --model qwen2.5-14b-instruct`. Full-precision — the most reliable for tool-calling.
 
 **Full FWI / LSRTM** additionally needs `sweep-tasks` (the production runner: spec schemas, losses,
 optimizers, multi-GPU, IO). It is **not on PyPI yet** — install it from source for now. Forward
@@ -60,9 +62,9 @@ Extras: `pip install "sweep-agent[ui]"` (Gradio web UI), `[vllm]`, `[animate]` (
 <summary><b>macOS (Apple Silicon)</b></summary>
 
 Runs end-to-end on M-series with MPS acceleration (CPU 26.7 s → MPS 5.5 s on a 256×384 / 8-shot /
-1500-step demo). Use Ollama for the LLM. Two traps: say *"on the mps device"* — not *"GPU"*, which
-makes the LLM fill `device="cuda"` and silently fall back to CPU; and do **not** set
-`SWEEP_BUILD_CUDA` (that's the Linux + NVIDIA compiled-binding path). macOS uses sweep's eager torch.
+1500-step demo). Use Ollama for the LLM. `run_forward_sweep` defaults to `device="auto"` (picks
+MPS → CPU automatically), so you no longer need to name the device. Do **not** set
+`SWEEP_BUILD_CUDA` (that's the Linux + NVIDIA compiled-binding path); macOS uses sweep's eager torch.
 </details>
 
 ## Usage
@@ -76,6 +78,8 @@ sweep-agent tools       # list the ~30 tools — no LLM/GPU needed; --json emits
 ```text
 $ sweep-agent chat
 >>> here is vp_init.npy — run a 2-D acoustic forward and show me the shot gather
+>>> load the Marmousi benchmark model and run a forward — show the shot gather
+>>> make an elastic model (vp/vs/rho) and run an Elastic forward
 >>> :reset              # clear conversation history
 ```
 
@@ -98,7 +102,8 @@ print(inspect_file.fn(InspectFileParams(path="vp_init.npy")))
 |---|:--:|:--:|
 | `sweep-agent tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ |
 | `plot_wavelet`, `plot_velocity_slice`, `compare_shot_gathers`, `list_equations` | ✅ | ✅ |
-| `run_forward_sweep` — forward modelling / wavefields / shot gathers | ✅ | ✅ |
+| `run_forward_sweep` — forward modelling (acoustic **+ elastic**) → shot gathers | ✅ | ✅ |
+| `list_benchmark_models`, `get_benchmark_model` — load Marmousi / Overthrust / … | ✅ | ✅ |
 | `build_*_spec`, `run_task`, other `plot_*`, `run_fwi`, `run_multiscale_fwi`, … | error dict | ✅ |
 
 A tool whose layer is missing returns `{"error": "… is not importable"}` — the agent stays up.
