@@ -167,6 +167,13 @@ class Agent:
         else:
             tool_specs = self.tools.openai_specs()
         self.last_tool_specs = tool_specs
+        # The exact tools offered to the model this turn. A weak model sometimes
+        # *hallucinates* a call to a tool it was never given — e.g. asking for an
+        # elastic wavefield makes it invent `animate_wavefield`, which is gated out
+        # on a base install. That tool is still in the registry, so running it
+        # anyway leaks a cryptic "sweep_tasks not importable" traceback. Only run
+        # what was actually offered.
+        exposed_names = {s["function"]["name"] for s in tool_specs}
         call_counts: dict[str, int] = {}
         tool_used = False
         nudged = False
@@ -211,6 +218,17 @@ class Agent:
                             f"Loop guard: '{call.name}' was already called with these exact arguments "
                             f"{_REPEAT_LIMIT}x (and any earlier result stands). Do NOT call it again — "
                             f"use the previous result(s) and write your final answer to the user now."
+                        )
+                    }, ensure_ascii=False)
+                elif call.name not in exposed_names:
+                    # Hallucinated / gated-out tool: it was NOT offered this turn.
+                    # Don't execute it (it may need an unreleased tier) — tell the
+                    # model to pick a real one instead of leaking a dependency error.
+                    result_json = json.dumps({
+                        "error": (
+                            f"'{call.name}' is not an available tool in this installation "
+                            f"(it may require the unreleased sweep_tasks tier, which is not present). "
+                            f"Do not call it again. Available tools: {sorted(exposed_names)}."
                         )
                     }, ensure_ascii=False)
                 elif (tool := self.tools.get(call.name)) is None:
