@@ -1,20 +1,17 @@
 # Marmousi 2-D — sweep-tasks getting started
 
-A 5-minute, three-step walkthrough of **how the sweep-tasks pipeline
-works** on a synthetic benchmark. The Marmousi-II velocity model
-(281 × 1361 cells at 12.5 m) is embedded in `sweep.datasets` — no
-external downloads, no SEG-Y, no environment-specific paths.
+A walkthrough of **how the sweep-tasks pipeline works**, on a synthetic
+benchmark. The Marmousi-II velocity model (281 × 1361 cells at 12.5 m) is
+embedded in `sweep.datasets`, so there is nothing to download, no SEG-Y, and
+no environment-specific path.
 
 ```
-prep → forward → fwi   (each step = one YAML, one CLI invocation)
+forward → FWI (easy start) → FWI (cold 1-D start, multiscale)
 ```
 
-The goal here is to show **what a sweep-tasks run looks like end-to-end**:
-how the YAML drives the solver, where outputs land, what kind of QC
-the runner produces. The walkthrough exercises a single-scale and a
-multiscale FWI variant so the schema features that matter for
-production runs (`stages:`, `bandpass:`, `backend.cuda_options`) all
-show up.
+Every step is one YAML and one command. The reference numbers and figures
+below come from actually running them, so you can check your own run against
+something.
 
 ---
 
@@ -24,28 +21,26 @@ show up.
 pip install sweep-tasks    # also pulls sweep + pydantic + torch + yaml
 ```
 
-That is the whole setup. The velocity models are read straight out of
-`sweep.datasets` (`marmousi:2d-demo`, embedded in the package), so there is
-nothing to download and no work directory to point at.
-
-A CUDA GPU is recommended — the templates default to `backend.impl: c`
-(sweep's fused CUDA kernels). On CPU-only machines flip to
-`backend.impl: eager` and expect ~30× the wall time.
-
----
+That is the whole setup. A CUDA GPU is recommended — the examples default to
+`backend.impl: c` (sweep's fused CUDA kernels). On a CPU-only machine flip to
+`backend.impl: eager` and expect roughly 30× the wall time.
 
 ## The velocity presets
 
-`ModelRef.dataset` names a `sweep.datasets` entry directly in the YAML, and
-`preset` picks which model within it:
+`ModelRef.dataset` names a `sweep.datasets` entry directly in the YAML and
+`preset` picks the model within it:
 
 | preset | role |
 |---|---|
-| `vp_true`   | true Marmousi-II vp — used to synthesise obs |
-| `vp_smooth` | low-pass-smoothed true model — the easy FWI start used by Step 2 |
-| `vp_linear` | 1-D linear gradient, zero lateral structure — the cycle-skip stress test used by Step 3 |
+| `vp_true` | true Marmousi-II vp — used to synthesise obs |
+| `vp_smooth` | low-pass-smoothed true model — the easy FWI start (Step 2) |
+| `vp_linear` | 1-D gradient, zero lateral structure |
 
-`sweep datasets list` prints the full catalogue.
+Step 3 deliberately does **not** use `vp_linear`. It builds its own 1-D ramp
+with `ModelRef.linear_gradient`, because the preset gets the water column
+wrong (it ramps to 1797 m/s where Marmousi is a flat 1500) and caps at
+3812 m/s, below the true deep section. `sweep datasets list` shows the full
+catalogue.
 
 ---
 
@@ -55,179 +50,145 @@ A CUDA GPU is recommended — the templates default to `backend.impl: c`
 sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
 ```
 
-Propagates an 8 Hz Ricker through `vp_true.npy` with 28 sources along
-the surface and 1361 streamer receivers, recording 7 s at dt=1 ms.
+Propagates an 8 Hz Ricker through `vp_true` with 114 shots at 150 m and a
+1361-channel fixed spread, recording 10 s at dt = 1 ms.
 
-**Reference wall-clock** (RTX 6000 Ada, `impl: c`): **~2.5 s**.
+**Reference (RTX 6000 Ada, seed 0): 34 s.** `output/record.npy` is
+`(114, 10000, 1361, 1)`.
 
-The YAML in 6 keys:
+Two properties of this acquisition drive the choices in Steps 2–3:
 
-```yaml
-task_type: forward
-grid:     { dh: 12.5 }
-time:     { dt: 0.001, nt: 7000 }
-wavelet:  { kind: ricker, fm: 8.0, delay: 1.0 }
-geometry: { kind: line, sources: { step: 50, depth: 1 }, receivers: { step: 1, depth: 18 } }
-backend:  { impl: c }
-models:
-  - { name: vp, dataset: marmousi:2d-demo, preset: vp_true }
-```
-
-A sample shot (mid-survey, all 1361 receivers):
-
-![forward shot](figures/forward_shot.png)
-
-Outputs land under `./sweep_runs/forward_marmousi/`:
-
-```
-output/
-├── record.npy      (28, 7000, 1361, 1)  float32 — synthetic obs
-├── sources.npy     shot positions
-└── receivers.npy   receiver positions per shot
-status.json          {"state": "success", ...}
-```
+* **obs dominant frequency is 7.10 Hz**, not the source's 8 Hz — propagation
+  and geometric spreading shift the peak down. Half a period is 70 ms.
+* **the latest first break lands at 8.59 s** of the 10 s record. A 7 s record
+  (the obvious first guess) cut the far offsets off *right after* their first
+  arrival: 31.7 % of the edge shots' traces kept under 1 s of coda. At 10 s
+  that figure is 0 %.
 
 ---
 
-## Step 2 — FWI (single-scale)
+## Step 2 — FWI from a smoothed start
 
 ```bash
 sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
 ```
 
-100 Adam epochs from `vp_linear_steep.npy`, broadband 8 Hz Ricker
-source, constant LR. The runner generates the obs internally from
-`vp_true.npy` (`obs.synthetic_from`), so Step 1 is *not* a hard
-prerequisite — you can run Step 2 standalone.
+`vp_smooth` keeps the right depth trend, so a **single broadband band**
+converges without cycle-skipping. Read this one first: it shows the FWI task
+shape, `obs.synthetic_from`, the boundary-saving adjoint and the per-epoch QC
+without the multiscale machinery on top.
 
-**Reference wall-clock**: **~2 min**.
+**Reference (RTX 6000 Ada, seed 0), 200 epochs, 29.6 min:**
 
-Key knobs added on top of Step 1's YAML:
+| | |
+|---|---|
+| misfit | 1.592e-02 → 1.564e-04 (min, epoch 115) → 2.575e-04 |
+| RMSE vs true | 357.3 (init) → **270.6** |
+| perturbation correlation `r` | 0.700 |
 
-```yaml
-task_type: fwi
-init_model: { name: vp, dataset: marmousi:2d-demo, preset: vp_smooth }
-obs:
-  synthetic_from: { name: vp, dataset: marmousi:2d-demo, preset: vp_true }
-optimizer: { kind: adam, lr: 25.0 }
-loss:      { kind: mse }                    # alt: l1, huber, trace_cosine
-backend:
-  impl: c
-  cuda_options:
-    memory:
-      strategy: boundary       # exact-adjoint boundary-saving wavefield storage
-      boundary: { storage: gpu }
-epochs: 100
-batchsize: 4
-qc:
-  every_n_epochs: 9999         # QC only fires at epoch 0 + final epoch
-  vp_png: true
-  shot_gather: true
-  loss_curve: true
-```
+![inverted vp](figures/02_vp_final.png)
 
-Final inverted vp:
+![misfit](figures/02_loss.png)
 
-![vp single-scale](figures/vp_final_single.png)
+The runner's obs/syn QC panel — interleaved gathers, the acquisition map, and
+a receiver-averaged amplitude spectrum where obs and syn sit on top of each
+other:
 
-Outputs land under `./sweep_runs/fwi_marmousi_single/`:
+![obs vs syn](figures/02_shot_gather.png)
 
-```
-output/
-├── inverted_vp.npy        final velocity
-├── loss.npy / loss.png    loss history
-└── epochs/vp_epoch_NNNN.npy   periodic snapshots (every show_every)
-qc/
-├── vp/iter_NNNN.png       velocity colourmaps
-├── shot_gather/iter_NNNN.png  4-panel obs vs syn + spectrum
-├── vp_diff/iter_NNNN.png  Δvp = current − initial
-└── loss_curve.png
-checkpoint.pt              full state for resume
-logs/
-status.json
-```
+> **`batchsize` is a fraction, not a count.** It is how many shots are drawn
+> at random per optimizer step, so what matters is `batchsize / nshots`. Keep
+> it near ~15 %. Measured here: 114 shots with `batchsize: 8` (7 %) gives RMSE
+> 297, and `batchsize: 16` (14 %) gives 271 — denser shots only pay off if the
+> batch grows with them.
 
 ---
 
-## Step 3 — FWI (multiscale)
+## Step 3 — FWI from a cold 1-D start, with frequency continuation
 
 ```bash
 sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
 ```
 
-Same setup with a `stages:` block — 4 frequency-continuation stages
-(Bunks 1995 recipe: low-pass the data to 2 Hz → 5 Hz → 10 Hz, then
-release the bandpass for a fourth broadband stage; 25 epochs each).
+Same grid, geometry and wavelet as Steps 1–2. What changes is the **start**: a
+1-D ramp with no lateral structure whatsoever, so nothing about the answer
+leaks in through the model. A single broadband band cycle-skips from there;
+the four-stage ladder (2 → 5 → 10 Hz → broadband, 50 epochs each) is what
+makes it work.
 
-**Reference wall-clock**: **~2 min** (same ballpark as single-scale; the extra per-stage CPU work has been moved to a GPU FFT zero-phase Butterworth, so stage transitions cost <1 s each).
+**Reference (RTX 6000 Ada, seed 0), 4 × 50 epochs, 11.5 min:**
 
-The relevant YAML delta:
+| after | RMSE vs true |
+|---|---|
+| init (1-D ramp 1500→4000, water pinned) | 473.7 |
+| stage 1 — 0.5–2 Hz | 402.6 |
+| stage 2 — 0.5–5 Hz | 347.6 |
+| stage 3 — 0.5–10 Hz | 325.3 |
+| stage 4 — broadband | **317.3** |
 
-```yaml
-stages:
-  - { epochs: 25, bandpass: { lo_hz: 0.5, hi_hz: 2.0,  target: wavelet }, lr_scale: 1.0 }
-  - { epochs: 25, bandpass: { lo_hz: 0.5, hi_hz: 5.0,  target: wavelet }, lr_scale: 0.7 }
-  - { epochs: 25, bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }, lr_scale: 0.4 }
-  - { epochs: 25,                                                         lr_scale: 0.2 }   # no bandpass — full broadband
+perturbation correlation `r` = 0.752; low-wavenumber RMSE (both smoothed by
+σ = 8 cells) 184.9, a **42.5 % improvement** on the starting model.
+
+![per-stage evolution](figures/03_by_stage.png)
+
+![inverted vp](figures/03_vp_final.png)
+
+### Why those rungs
+
+The ladder is not a magic sequence. A stage cycle-skips where the two-way
+traveltime error exceeds half a period, so the next rung must satisfy
+
+```
+f  <  1 / (2 |Δt|)
 ```
 
-Final inverted vp:
+Measured on this setup, the 1-D start is **−160 ms** off at 2 km depth in the
+flat-layered left half of the model. That forces the first rung below 3.1 Hz —
+2 Hz here. One 2 Hz stage pulls the error down to about −50 ms, which clears
+5 Hz (100 ms half-period), and so on up. Jumping straight from the 1-D start
+to 5 Hz reproducibly wrecks the left half, while the right half — which starts
+only +65 ms off — converges fine either way.
 
-![vp multiscale](figures/vp_final_multi.png)
+Two consequences worth internalising:
 
-Side-by-side with the initial model and ground truth (single panel per
-row, identical colour bar):
-
-![vp comparison](figures/vp_comparison.png)
-
-Loss curves (dashed lines mark stage transitions in the multiscale
-run):
-
-![loss comparison](figures/loss_comparison.png)
+* **RMSE against the true model is a poor progress metric here.** It is
+  dominated by thin-layer amplitudes FWI cannot resolve. Traveltime error and
+  the perturbation correlation `r` track what the inversion is actually doing;
+  RMSE rose through the stages in several configurations that were visibly
+  improving the background.
+* **A single 1-D gradient cannot suit both halves of Marmousi.** The left half
+  wants a slower start, the right half a faster one, and `|Δt_left| +
+  |Δt_right|` at 2 km is invariant (255 ms) whatever `vmax` you choose.
+  Raising it only moves error from one half to the other.
 
 ---
 
-## Reproducibility
+## Checking your own run
 
-All three tasks share the same grid, time grid, and geometry, so they
-compose freely. The canonical 5-line run:
+Everything above is reproducible: `seed` is set explicitly in each YAML, the
+models come from the embedded dataset, and two runs of the same file on the
+same machine come out **bit-identical** (verified — matching misfit to every
+digit, max model difference 0.0 m/s).
 
-```bash
-sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
-sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
+Each run directory is self-describing:
+
+```
+sweep_runs/<task_id>/
+  config_resolved.yaml     every default filled in — the exact spec that ran
+  run_meta.json            host, CUDA, package versions, git state
+  output/initial_vp.npy    the resolved STARTING model
+  output/inverted_vp.npy   the result
+  output/loss.npy          misfit per epoch
+  output/epochs/           per-`show_every` model snapshots
+  qc/                      vp, vp_diff, shot_gather, loss_curve figures
 ```
 
-Multi-GPU: append `--nproc-per-node N` to any `run` invocation. The
-runner re-execs under `torchrun` and shot-parallelises the batch.
+`output/initial_vp.npy` matters when the start is built in memory
+(`dataset:` or `linear_gradient:`): there is no input file to point at
+afterwards, so the runner writes the resolved array before training begins.
 
-Diagnostics: set `SWEEP_TASKS_TPROF=1` before the run for a
-millisecond-level per-iter breakdown (zero_grad / forward / bandpass /
-obs-H2D / loss / backward / item / snapshot-D2H / reduce / opt.step),
-useful for profiling new hardware or new YAML configurations.
-
----
-
-## Customising your own run
-
-Every parameter has a one-line annotation in the bundled templates;
-start from there and edit:
-
-```bash
-sweep-tasks init forward -o my_forward.yaml
-sweep-tasks init fwi     -o my_fwi.yaml
-sweep-tasks init rtm     -o my_rtm.yaml
-sweep-tasks run my_fwi.yaml
-```
-
-Larger Marmousi-class runs typically want:
-
-- `batchsize: 28` (full batch, with `train_shot_batchsize: 4` to keep
-  per-launch memory low)
-- more epochs per multiscale stage (200+ for crisp layer recovery)
-- the SIREN + hash-grid `reparam:` block from `sweep-tasks init fwi`
-  for regularised inversion
-
-See [`docs/datasets/viking/README.md`](../viking/README.md) for the
-2-D streamer / field-data flow (build-index → build-plan → wavelet
-estimation → FWI / RTM).
+**Scope of "reproducible":** bit-identical is a same-machine, same-build
+claim. A different GPU model or a rebuilt CUDA extension can reorder floating
+point atomics, so expect last-digit differences there. The numbers above
+should still land within a fraction of a percent, and none of the conclusions
+move.

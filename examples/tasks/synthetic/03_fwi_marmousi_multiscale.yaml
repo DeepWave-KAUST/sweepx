@@ -21,31 +21,51 @@
 #  - Obs AND wavelet are rebuilt from their pristine source at every stage
 #    entry, so per-stage filters never compose.
 #
-# Caveat worth knowing: `vp_linear` tops out at ~3812 m/s while Marmousi's deep
-# section reaches 4700, so the deepest layers stay under-recovered no matter
-# how many stages you add. That is a property of the starting model, not of the
-# ladder — raise the ceiling with your own init if you care about depth.
+# How the rungs were chosen — the part worth copying, not the numbers:
+# a stage cycle-skips where the two-way traveltime error exceeds half a period,
+# so the next rung must satisfy  f < 1 / (2 |dt|).  Measured on this setup, the
+# 1-D start is -160 ms off at 2 km in the flat-layered left half, so the FIRST
+# rung has to sit below 3.1 Hz — 2 Hz here. A 2 Hz stage then pulls that error
+# down to about -50 ms, which clears 5 Hz (100 ms half-period), and so on up.
+# Jumping straight to 5 Hz from the 1-D start reproducibly wrecks the left half.
+#
+# Reference result (RTX 6000 Ada, impl: c, seed 0):
+#   wall time      11.5 min (4 x 50 epochs)
+#   RMSE vs true   473.7 (init) -> 402.6 -> 347.6 -> 325.3 -> 317.3
+#                  (one number per stage; monotone, which is the point)
+#   perturbation correlation with the true update   r = 0.752
+#   low-wavenumber RMSE (both smoothed sigma=8 cells)  184.9, a 42.5%
+#                  improvement on the starting model
+#   left-half two-way traveltime error at 2 km: -160 ms (init) -> -13 ms
+# See docs/datasets/marmousi/README.md for the figures and for how to check
+# your own run against these numbers.
 
 task_type: fwi
 output_dir: ./sweep_runs
 task_id: fwi_marmousi_multiscale
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
 
 grid:
   dh: 12.5
 
 time:
   dt: 0.001
-  nt: 7000
+  nt: 10000                 # 10 s — see 01 on why 7 s was too short
 
 wavelet:
   kind: ricker
   fm: 8.0
-  delay: 1.0                # needed for stage 1's 0.5 Hz low cut: the filtered
-                            # Ricker's left tail runs ~1 s before its peak.
+  delay: 2.0                # sized by stage 1: low-passing an 8 Hz Ricker to 0.5-2 Hz
+                            # stretches its left lobe back ~2 s. With 1 s of lead-in the
+                            # lobe is clipped at t=0 and the step radiates a broadband
+                            # floor ~1e-3 across the whole spectrum, so the "2 Hz"
+                            # stage is not actually band-limited. 2 s drops that 5x.
 
 geometry:
   kind: line
-  sources:   { step: 50, depth: 1 }
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m
   receivers: { step: 1,  depth: 18 }
 
 physics:
@@ -58,10 +78,33 @@ backend:
       strategy: boundary
       boundary: { storage: gpu }
 
+# 1-D cold start, built in memory — no lateral structure at all, so nothing
+# about the answer leaks in through the starting model.
+#
+# Two things it fixes versus the `vp_linear` preset:
+#   * the water column. Marmousi's top 37 rows (462.5 m) are exactly 1500 m/s,
+#     but `vp_linear` already ramps to 1797 there. Water velocity is a known
+#     constant, so starting it wrong AND inverting it is pure contamination —
+#     `freeze_top_n_rows: 37` below then holds it fixed.
+#   * the deep ceiling. `vp_linear` tops out at 3812 while the true model's
+#     bottom 50 rows average 3926 and peak at 4700, so the deep section could
+#     never be reached from below. 4000 sits just above that 3926 mean.
+#
+#   Why not higher: the two halves of Marmousi pull in OPPOSITE directions.
+#   A single 1-D ramp is too FAST for the flat-layered left half and too
+#   SLOW for the structured right half, and |left|+|right| two-way
+#   traveltime error at 2 km is invariant (255 ms) whatever vmax you pick —
+#   raising it only trades one half against the other. 4000 keeps the
+#   right half inside the 5 Hz stage's 100 ms half-period while easing
+#   the left half by 30 ms versus 4200.
 init_model:
   name: vp
-  dataset: marmousi:2d-demo
-  preset: vp_linear         # 1-D gradient, no lateral structure
+  shape: [281, 1361]
+  linear_gradient:
+    vmin: 1500.0
+    vmax: 4000.0
+    water_rows: 37
+    water_vp: 1500.0
 
 obs:
   synthetic_from:
@@ -81,20 +124,25 @@ loss:
 # avoidance is driven by the `hi_hz` ladder. `lr_scale` decreases so the
 # high-frequency stages don't trash the kinematics the early stages locked in.
 stages:
-  - epochs: 25              # kinematic-only: smooth enough to land in the
+  - epochs: 50              # kinematic-only: smooth enough to land in the
     bandpass: { lo_hz: 0.5, hi_hz: 2.0,  target: wavelet }   # right basin
     lr_scale: 1.0
-  - epochs: 25              # long-wavelength reflectors
+  - epochs: 50              # long-wavelength reflectors
     bandpass: { lo_hz: 0.5, hi_hz: 5.0,  target: wavelet }
     lr_scale: 0.7
-  - epochs: 25              # mid-resolution layer structure
+  - epochs: 50              # mid-resolution layer structure
     bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
     lr_scale: 0.4
-  - epochs: 25              # no bandpass — broadband finish
+  - epochs: 50              # no bandpass — broadband finish
     lr_scale: 0.2
 
-epochs: 100                 # required by the schema; ignored when `stages:` is set
-batchsize: 4
+# Hold the water column fixed: its velocity is a known constant, not
+# something to solve for. Zeroes the gradient in the top 37 rows.
+freeze_top_n_rows: 37
+
+epochs: 200                 # required by the schema; ignored when `stages:` is set
+batchsize: 8                # shots drawn per optimizer step (stochastic
+                            # mini-batch, not a pass over the survey)
 show_every: 5
 
 qc:

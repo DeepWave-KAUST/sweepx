@@ -43,22 +43,27 @@
 task_type: fwi
 output_dir: ./sweep_runs
 task_id: fwi_marmousi_backends
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
 
 grid:
   dh: 12.5
 
 time:
   dt: 0.001
-  nt: 7000
+  nt: 10000                 # 10 s — a 7 s record cut the 17 km far offsets
+                            # off right after their first arrival (see 01)
 
 wavelet:
   kind: ricker
   fm: 8.0
-  delay: 1.0
+  delay: 2.0                # matches 01-03 so the whole synthetic set is
+                            # directly comparable (see 03 on why 2 s)
 
 geometry:
   kind: line
-  sources:   { step: 50, depth: 1 }
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m
   receivers: { step: 1,  depth: 18 }
 
 physics:

@@ -11,27 +11,42 @@
 # Pairs with 02 / 03, which invert this same setup. Grid, wavelet and
 # geometry are kept identical across all three so the synthetic obs is
 # consistent.
+#
+# Reference result (RTX 6000 Ada, impl: c, seed 0):
+#   wall time      34 s
+#   output/record.npy   (114, 10000, 1361, 1)
+#   obs dominant freq   7.10 Hz peak / 7.60 Hz centroid (source is 8 Hz;
+#                       propagation and spreading shift it down)
+#   latest first break  8.59 s of the 10 s record -> every trace keeps >1 s
+#                       of coda after its first arrival
 
 task_type: forward
 output_dir: ./sweep_runs
 task_id: forward_marmousi
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
 
 grid:
   dh: 12.5
 
 time:
   dt: 0.001
-  nt: 7000                  # 7 s record (1 s pre-source headroom + 6 s propagation)
+  nt: 10000                 # 10 s. The far offsets need it: the first break at the
+                            # 17 km maximum offset lands near 8 s, and a 7 s record
+                            # cut those traces off right after their first arrival.
 
 wavelet:
   kind: ricker
   fm: 8.0
-  delay: 1.0                # 1 s — large enough that 03's 0.5 Hz low-cut does not
-                            # truncate the filtered Ricker's left tail at t=0.
+  delay: 2.0                # 2 s of lead-in. Sized by 03's 0.5-2 Hz stage: low-passing
+                            # an 8 Hz Ricker that far stretches its left lobe back ~2 s,
+                            # and clipping that lobe at t=0 puts a broadband step into
+                            # what is supposed to be a 2 Hz source.
 
 geometry:
   kind: line
-  sources:   { step: 50, depth: 1 }    # ~28 shots along the top
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m spacing
   receivers: { step: 1,  depth: 18 }   # streamer at z=18 cells
 
 physics:

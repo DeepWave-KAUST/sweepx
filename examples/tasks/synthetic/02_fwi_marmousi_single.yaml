@@ -13,26 +13,37 @@
 # Starting model is `vp_smooth` — the low-pass-filtered true model. It keeps
 # the right depth trend, so a SINGLE band converges without cycle-skipping.
 # For the harder 1-D start that needs frequency continuation, see 03.
+#
+# Reference result (RTX 6000 Ada, impl: c, seed 0):
+#   wall time      29.6 min (200 epochs)
+#   misfit         1.592e-02 -> 1.564e-04 (min, epoch 115) -> 2.575e-04 (end)
+#   RMSE vs true   357.3 (init) -> 270.6
+#   perturbation correlation with the true update   r = 0.700
+# See docs/datasets/marmousi/README.md for the figures and for how to check
+# your own run against these numbers.
 
 task_type: fwi
 output_dir: ./sweep_runs
 task_id: fwi_marmousi_single
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
 
 grid:
   dh: 12.5
 
 time:
   dt: 0.001
-  nt: 7000
+  nt: 10000                 # 10 s — see 01 on why 7 s was too short
 
 wavelet:
   kind: ricker
   fm: 8.0
-  delay: 1.0
+  delay: 2.0                # see 01
 
 geometry:
   kind: line
-  sources:   { step: 50, depth: 1 }
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m
   receivers: { step: 1,  depth: 18 }
 
 physics:
@@ -71,8 +82,12 @@ optimizer:
 loss:
   kind: mse                 # alt: l1, huber, trace_cosine
 
-epochs: 100
-batchsize: 4                # shots per gradient step; 4 fits ~16 GB cards
+epochs: 200
+batchsize: 16               # shots drawn per optimizer step (stochastic mini-batch,
+                            # NOT a pass over the survey). Keep it near ~15% of the
+                            # shot count: at 114 shots a batch of 8 samples only 7%
+                            # per step and the extra gradient noise costs more than
+                            # the denser shots gain (measured: RMSE 277 -> 297).
 
 qc:
   every_n_epochs: 9999      # >> epochs => QC fires only at epoch 0 and the last

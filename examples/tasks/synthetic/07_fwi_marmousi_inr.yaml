@@ -26,22 +26,25 @@
 task_type: fwi
 output_dir: ./sweep_runs
 task_id: fwi_marmousi_inr
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
 
 grid:
   dh: 12.5
 
 time:
   dt: 0.001
-  nt: 7000
+  nt: 10000                 # 10 s — see 01 on why 7 s was too short
 
 wavelet:
   kind: ricker
   fm: 8.0
-  delay: 1.0
+  delay: 2.0                # see 03 — sized by the 0.5-2 Hz stage
 
 geometry:
   kind: line
-  sources:   { step: 50, depth: 1 }
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m
   receivers: { step: 1,  depth: 18 }
 
 physics:
@@ -54,10 +57,15 @@ backend:
       strategy: boundary
       boundary: { storage: gpu }
 
+# 1-D cold start with the water column at its known 1500 m/s — see 03.
 init_model:
   name: vp
-  dataset: marmousi:2d-demo
-  preset: vp_linear          # 1-D start — the INR has real work to do
+  shape: [281, 1361]
+  linear_gradient:
+    vmin: 1500.0
+    vmax: 4000.0
+    water_rows: 37
+    water_vp: 1500.0
 
 obs:
   synthetic_from:
@@ -101,14 +109,19 @@ loss:
 # everywhere rather than locally. Frequency continuation matters MORE here
 # than in the grid-parametrised run, not less.
 stages:
-  - epochs: 40
+  - epochs: 50
     bandpass: { lo_hz: 0.5, hi_hz: 4.0,  target: wavelet }
-  - epochs: 40
+  - epochs: 50
     bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
-  - epochs: 40
+  - epochs: 50
 
-epochs: 120
-batchsize: 4
+# Hold the water column fixed: its velocity is a known constant, not
+# something to solve for. Zeroes the gradient in the top 37 rows.
+freeze_top_n_rows: 37
+
+epochs: 150
+batchsize: 8                # shots drawn per optimizer step (stochastic
+                            # mini-batch, not a pass over the survey)
 show_every: 5
 
 qc:
