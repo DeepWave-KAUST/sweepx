@@ -1,0 +1,47 @@
+# Marmousi 2-D — synthetic forward modelling.
+#
+# Teaches:  the shape of a task YAML, and that models can come straight from
+#           `sweep.datasets` — nothing to download, no .npy to prepare.
+# Needs:    nothing. `marmousi:2d-demo` ships inside the sweep package.
+# Produces: output/record.npy + a shot-gather PNG.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+#
+# Pairs with 02 / 03, which invert this same setup. Grid, wavelet and
+# geometry are kept identical across all three so the synthetic obs is
+# consistent.
+
+task_type: forward
+output_dir: ./sweep_runs
+task_id: forward_marmousi
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000                  # 7 s record (1 s pre-source headroom + 6 s propagation)
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0                # 1 s — large enough that 03's 0.5 Hz low-cut does not
+                            # truncate the filtered Ricker's left tail at t=0.
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }    # ~28 shots along the top
+  receivers: { step: 1,  depth: 18 }   # streamer at z=18 cells
+
+physics:
+  equation: Acoustic         # every other physics knob uses its schema default
+
+backend:
+  impl: c                    # fused CUDA kernels. No GPU / no built extension?
+                             # switch to `eager` and expect ~30x the wall time.
+
+models:
+  - name: vp
+    dataset: marmousi:2d-demo   # embedded preset — see `sweep datasets list`
+    preset: vp_true

@@ -21,10 +21,12 @@ show up.
 ## Prerequisites
 
 ```bash
-pip install sweep-tasks                       # also pulls sweep + pydantic + torch + yaml
-export MARMOUSI_HOME=$HOME/marmousi           # any writable work dir, ~50 MB
-mkdir -p "$MARMOUSI_HOME"
+pip install sweep-tasks    # also pulls sweep + pydantic + torch + yaml
 ```
+
+That is the whole setup. The velocity models are read straight out of
+`sweep.datasets` (`marmousi:2d-demo`, embedded in the package), so there is
+nothing to download and no work directory to point at.
 
 A CUDA GPU is recommended — the templates default to `backend.impl: c`
 (sweep's fused CUDA kernels). On CPU-only machines flip to
@@ -32,27 +34,25 @@ A CUDA GPU is recommended — the templates default to `backend.impl: c`
 
 ---
 
-## Step 0 — materialise the velocity models
+## The velocity presets
 
-```bash
-bash examples/tasks/marmousi_prepare.sh
-```
+`ModelRef.dataset` names a `sweep.datasets` entry directly in the YAML, and
+`preset` picks which model within it:
 
-Writes four `.npy` files into `$MARMOUSI_HOME`:
-
-| file | role |
+| preset | role |
 |---|---|
-| `vp_true.npy`         | true Marmousi-II vp — used to synthesise obs |
-| `vp_smooth.npy`       | low-pass-smoothed true model (an easy FWI init) |
-| `vp_linear.npy`       | sweep.datasets's built-in 1-D linear gradient |
-| `vp_linear_steep.npy` | 1500 m/s water layer (top 37 rows) + linear ramp 1500→4000 m/s — used by the bundled FWI yamls as a "hard but realistic" init |
+| `vp_true`   | true Marmousi-II vp — used to synthesise obs |
+| `vp_smooth` | low-pass-smoothed true model — the easy FWI start used by Step 2 |
+| `vp_linear` | 1-D linear gradient, zero lateral structure — the cycle-skip stress test used by Step 3 |
+
+`sweep datasets list` prints the full catalogue.
 
 ---
 
 ## Step 1 — forward modelling
 
 ```bash
-sweep-tasks run examples/tasks/marmousi_forward.yaml
+sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
 ```
 
 Propagates an 8 Hz Ricker through `vp_true.npy` with 28 sources along
@@ -70,14 +70,14 @@ wavelet:  { kind: ricker, fm: 8.0, delay: 1.0 }
 geometry: { kind: line, sources: { step: 50, depth: 1 }, receivers: { step: 1, depth: 18 } }
 backend:  { impl: c }
 models:
-  - { name: vp, path: ${MARMOUSI_HOME}/vp_true.npy }
+  - { name: vp, dataset: marmousi:2d-demo, preset: vp_true }
 ```
 
 A sample shot (mid-survey, all 1361 receivers):
 
 ![forward shot](figures/forward_shot.png)
 
-Outputs land under `$MARMOUSI_HOME/sweep_runs/marmousi_forward/`:
+Outputs land under `./sweep_runs/forward_marmousi/`:
 
 ```
 output/
@@ -92,7 +92,7 @@ status.json          {"state": "success", ...}
 ## Step 2 — FWI (single-scale)
 
 ```bash
-sweep-tasks run examples/tasks/marmousi_fwi.yaml
+sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
 ```
 
 100 Adam epochs from `vp_linear_steep.npy`, broadband 8 Hz Ricker
@@ -106,9 +106,9 @@ Key knobs added on top of Step 1's YAML:
 
 ```yaml
 task_type: fwi
-init_model: { name: vp, path: ${MARMOUSI_HOME}/vp_linear_steep.npy }
+init_model: { name: vp, dataset: marmousi:2d-demo, preset: vp_smooth }
 obs:
-  synthetic_from: { name: vp, path: ${MARMOUSI_HOME}/vp_true.npy }
+  synthetic_from: { name: vp, dataset: marmousi:2d-demo, preset: vp_true }
 optimizer: { kind: adam, lr: 25.0 }
 loss:      { kind: mse }                    # alt: l1, huber, trace_cosine
 backend:
@@ -130,7 +130,7 @@ Final inverted vp:
 
 ![vp single-scale](figures/vp_final_single.png)
 
-Outputs land under `$MARMOUSI_HOME/sweep_runs/marmousi_fwi/`:
+Outputs land under `./sweep_runs/fwi_marmousi_single/`:
 
 ```
 output/
@@ -152,7 +152,7 @@ status.json
 ## Step 3 — FWI (multiscale)
 
 ```bash
-sweep-tasks run examples/tasks/marmousi_fwi_multiscale.yaml
+sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
 ```
 
 Same setup with a `stages:` block — 4 frequency-continuation stages
@@ -193,11 +193,9 @@ All three tasks share the same grid, time grid, and geometry, so they
 compose freely. The canonical 5-line run:
 
 ```bash
-export MARMOUSI_HOME=$HOME/marmousi
-bash examples/tasks/marmousi_prepare.sh
-sweep-tasks run examples/tasks/marmousi_forward.yaml
-sweep-tasks run examples/tasks/marmousi_fwi.yaml
-sweep-tasks run examples/tasks/marmousi_fwi_multiscale.yaml
+sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
+sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
 ```
 
 Multi-GPU: append `--nproc-per-node N` to any `run` invocation. The

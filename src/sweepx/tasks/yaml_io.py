@@ -3,7 +3,7 @@
 Relative paths inside the YAML are resolved against the YAML file's parent
 directory at load time. ``$VAR`` / ``${VAR}`` inside path-like values is
 expanded against the current process environment first (so a portable
-template can be authored with ``path: ${MARMOUSI_HOME}/vp_true.npy``).
+template can be authored with ``path: ${DATA_ROOT}/vp_true.npy``).
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _resolve_one(v: Any, base: Path) -> Any:
     if not isinstance(v, str):
         return v
     # Expand $VAR / ${VAR} against the current environment first so templates
-    # like ``${MARMOUSI_HOME}/vp_true.npy`` work without pre-`envsubst`.
+    # like ``${DATA_ROOT}/vp_true.npy`` work without pre-`envsubst`.
     # Unset variables are left as-is (matches expandvars semantics) — they
     # then fall through to the relative-path branch, which gives a clear
     # FileNotFoundError downstream rather than silently dropping the prefix.

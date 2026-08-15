@@ -1,0 +1,82 @@
+# Marmousi 2-D — single-scale FWI from a smoothed starting model.
+#
+# Teaches:  the FWI task shape, `obs.synthetic_from`, boundary-saving adjoint,
+#           and the QC the runner drops per epoch.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/inverted_vp.npy, loss.npy, per-epoch QC PNGs.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
+# Multi-GPU:
+#   sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
+#
+# Starting model is `vp_smooth` — the low-pass-filtered true model. It keeps
+# the right depth trend, so a SINGLE band converges without cycle-skipping.
+# For the harder 1-D start that needs frequency continuation, see 03.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_single
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      # Boundary-saving adjoint (Symes 2007): store only the PML-zone slab per
+      # time step and reconstruct the wavefield backwards during the adjoint
+      # pass. Exact gradient at O(nt x N_boundary) memory instead of
+      # O(nt x N_total). `storage: cpu` / `disk` trade bandwidth for capacity.
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
+
+# `synthetic_from`: the runner re-runs forward modelling from vp_true at task
+# start, so this file is self-contained. To consume 01's output instead, swap
+# in `npy_path: sweep_runs/forward_marmousi/output/record.npy`.
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16              # schema default is 1e-22; 1e-16 is steadier at this obs scale
+
+loss:
+  kind: mse                 # alt: l1, huber, trace_cosine
+
+epochs: 100
+batchsize: 4                # shots per gradient step; 4 fits ~16 GB cards
+
+qc:
+  every_n_epochs: 9999      # >> epochs => QC fires only at epoch 0 and the last
+                            # epoch (the runner always forces the last). Set to
+                            # e.g. 10 to watch the inversion evolve.
+  shot_gather: true
+  shot_gather_n_shots: 2

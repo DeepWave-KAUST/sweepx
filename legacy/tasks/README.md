@@ -27,16 +27,14 @@ pip install sweep-tasks    # also pulls sweep (the solver) and pydantic+torch+ya
 
 Or via the ecosystem meta-package: `pip install sweep[full]`.
 
-## Quick example — Marmousi synthetic (3 commands, no SEG-Y required)
+## Quick example — Marmousi synthetic (2 commands, nothing to download)
 
-A minimal end-to-end forward → FWI test using the Marmousi velocity
-preset embedded inside `sweep.datasets`:
+The models come from `sweep.datasets`, so the YAMLs are self-contained —
+no `.npy` to prepare, no env vars, no SEG-Y:
 
 ```bash
-export MARMOUSI_HOME=$HOME/marmousi
-bash examples/tasks/marmousi_prepare.sh                    # dump vp_*.npy → $MARMOUSI_HOME
-sweep-tasks run examples/tasks/marmousi_forward.yaml       # synthesise obs (~50 s, eager)
-sweep-tasks run examples/tasks/marmousi_fwi.yaml           # invert (defaults: 100 epoch)
+sweep-tasks run examples/synthetic/01_forward_marmousi.yaml   # synthesise obs
+sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml  # invert (100 epochs)
 ```
 
 Or hand-write your own task YAML using the bundled templates:
@@ -49,9 +47,10 @@ sweep-tasks init viking  -o viking.yaml       # full pipeline config (build-inde
 ```
 
 Every template comes with per-parameter comments explaining what each
-key controls. See `examples/tasks/` for dataset-specific examples
-(Marmousi, Viking, OBN-3D) and `docs/datasets/viking/README.md` for
-the full Viking workflow walkthrough.
+key controls. See `examples/README.md` for the example index —
+`examples/synthetic/` runs with no downloads, `examples/field/` works on
+real SEG-Y — and `docs/datasets/viking/README.md` for the full Viking
+workflow walkthrough.
 
 ## Quick example — task YAML by hand
 

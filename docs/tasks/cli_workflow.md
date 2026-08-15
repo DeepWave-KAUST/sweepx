@@ -137,7 +137,7 @@ sub-block (`PlanSamplingConfig`) that enables the per-iter
 plan-streaming supershot loop with ±1 source encoding. The runner auto-
 detects this and dispatches to the dedicated plan-streaming training loop;
 no separate `from_crg_plan` / `obs.crg_plan` / `build-crg-plan` symbols
-exist anymore. See `examples/tasks/obn3d_fwi_encoded.yaml` for the canonical
+exist anymore. See `src/sweep_tasks/templates/fwi.yaml` for the canonical
 shape.
 
 ### Filter knobs

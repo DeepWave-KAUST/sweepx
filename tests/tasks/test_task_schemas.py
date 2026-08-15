@@ -296,26 +296,48 @@ def test_new_template_rejects_ckpt_disk():
         new_template("fwi", backend="c", memory="ckpt", storage="disk")
 
 
-@pytest.mark.parametrize(
-    "yaml_name",
-    [
-        "fwi_marmousi_eager_compile.yaml",
-        "fwi_marmousi_cuda_boundary_gpu.yaml",
-        "fwi_marmousi_cuda_boundary_cpu.yaml",
-        "fwi_marmousi_cuda_ckpt_chunk.yaml",
-        "fwi_marmousi_multistage_advanced.yaml",
-    ],
-)
-def test_shipped_backend_variant_yaml_validates(yaml_name):
-    """The 4 backend-variant sample YAMLs under examples/tasks/ must validate."""
+def _example_task_yamls():
+    """Every shipped example that is meant to be a TASK spec.
 
+    Globbed, not listed: a hardcoded list is exactly how eight examples rotted
+    into pointing at a ``../models/marmousi/`` directory that does not exist,
+    without anything ever going red. Pipeline configs (no ``task_type``) are
+    skipped — they feed the build-index / build-plan CLI, not TaskRunner.
+    """
     from pathlib import Path as _Path
 
     repo_root = _Path(__file__).resolve().parents[1]
-    yaml_path = repo_root / "examples" / "tasks" / yaml_name
-    assert yaml_path.exists(), f"missing sample yaml: {yaml_path}"
+    out = []
+    for p in sorted((repo_root / "examples").rglob("*.yaml")):
+        try:
+            doc = yaml.safe_load(p.read_text())
+        except Exception:                                  # noqa: BLE001
+            doc = None
+        if isinstance(doc, dict) and "task_type" in doc:
+            out.append(p)
+    assert out, "no example task YAMLs found — did examples/ move?"
+    return out
+
+
+@pytest.mark.parametrize(
+    "yaml_path", _example_task_yamls(),
+    ids=lambda p: p.name,
+)
+def test_shipped_example_yaml_validates(yaml_path, monkeypatch):
+    """Every example YAML carrying a `task_type` must pass schema validation.
+
+    The path env vars the field-data examples interpolate get throwaway values
+    via monkeypatch, so this exercises the schema rather than the caller's
+    shell AND the values do not leak into later tests. (``FWI_SEGY_ROOT`` is
+    deliberately absent: it re-roots SEG-Y resolution at runtime, so setting it
+    globally breaks any later test that reads a SEG-Y it just wrote.)
+    """
+    for var in ("VIKING_HOME", "PROJECT_DATA_ROOT", "SWEEP_RUNS_ROOT",
+                "SWEEP_REPOS_ROOT", "MARMOUSI_HOME"):
+        monkeypatch.setenv(var, "/tmp/sweep-tasks-example-validation")
     spec = load_task(yaml_path)
-    assert spec.task_type == "fwi"
+    assert spec.task_type in {"fwi", "lsrtm", "rtm", "forward",
+                              "wavefield", "introspect"}
 
 
 # ---------- A/B/C-tier FWI feature schemas -------------------------------

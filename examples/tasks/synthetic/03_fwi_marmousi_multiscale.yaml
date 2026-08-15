@@ -1,0 +1,103 @@
+# Marmousi 2-D FWI — 4-stage multiscale (Bunks 1995 frequency continuation).
+#
+# Teaches:  `stages:` — per-stage bandpass and lr_scale, and why a 1-D start
+#           needs them at all.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/inverted_vp.npy + per-stage QC.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
+#
+# Same grid / geometry / 8 Hz Ricker as 01 and 02. The difference is the START:
+# `vp_linear` is a 1-D gradient with ZERO lateral structure, so a single
+# broadband band would cycle-skip. Each stage low-passes the data to a higher
+# cutoff, letting the loss see a smooth view of the wavefield first.
+#
+# How the bandpass works (StageSpec.bandpass + StageBandpass):
+#  - At stage entry the runner low-passes the PRISTINE obs once.
+#  - `target: wavelet` (used here) filters the source wavelet instead of syn,
+#    so syn comes out naturally band-limited and the per-iteration filtfilt on
+#    syn is skipped. Cheaper than the default `target: syn`.
+#  - Obs AND wavelet are rebuilt from their pristine source at every stage
+#    entry, so per-stage filters never compose.
+#
+# Caveat worth knowing: `vp_linear` tops out at ~3812 m/s while Marmousi's deep
+# section reaches 4700, so the deepest layers stay under-recovered no matter
+# how many stages you add. That is a property of the starting model, not of the
+# ladder — raise the ceiling with your own init if you care about depth.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_multiscale
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0                # needed for stage 1's 0.5 Hz low cut: the filtered
+                            # Ricker's left tail runs ~1 s before its peak.
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_linear         # 1-D gradient, no lateral structure
+
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16
+
+loss:
+  kind: mse
+
+# `lo_hz: 0.5` is a numerical-safety low cut (kills DC drift); cycle-skip
+# avoidance is driven by the `hi_hz` ladder. `lr_scale` decreases so the
+# high-frequency stages don't trash the kinematics the early stages locked in.
+stages:
+  - epochs: 25              # kinematic-only: smooth enough to land in the
+    bandpass: { lo_hz: 0.5, hi_hz: 2.0,  target: wavelet }   # right basin
+    lr_scale: 1.0
+  - epochs: 25              # long-wavelength reflectors
+    bandpass: { lo_hz: 0.5, hi_hz: 5.0,  target: wavelet }
+    lr_scale: 0.7
+  - epochs: 25              # mid-resolution layer structure
+    bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
+    lr_scale: 0.4
+  - epochs: 25              # no bandpass — broadband finish
+    lr_scale: 0.2
+
+epochs: 100                 # required by the schema; ignored when `stages:` is set
+batchsize: 4
+show_every: 5
+
+qc:
+  every_n_epochs: 9999
+  shot_gather: true
+  shot_gather_n_shots: 2

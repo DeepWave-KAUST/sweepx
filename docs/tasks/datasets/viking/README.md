@@ -659,7 +659,7 @@ without modifying the in-repo example:
 SWEEP_TASKS=$(python -c "import sweep_tasks, pathlib; print(pathlib.Path(sweep_tasks.__file__).parent.parent.parent)")
 
 # Production config (6 stages, 300 iter, 2-5 → 2-30 Hz).
-cp ${SWEEP_TASKS}/examples/tasks/viking_siren_hash_6stage_30hz.yaml \
+cp ${SWEEP_TASKS}/examples/field/viking/viking_siren_hash_6stage_30hz.yaml \
    $VIKING_HOME/run/viking_6stage.yaml
 ```
 
@@ -785,7 +785,7 @@ sweep-tasks init rtm -o $VIKING_HOME/run/viking_rtm.yaml
 ```
 
 (Or copy the in-repo Viking-specific example
-`${SWEEP_TASKS}/examples/tasks/viking_rtm_legacy_match.yaml`.)
+`${SWEEP_TASKS}/examples/field/viking/viking_rtm_legacy_match.yaml`.)
 
 Point its `velocity_model.path` at your Step 5 output:
 
@@ -899,13 +899,13 @@ fwi build-initial-model -d viking
 
 # === Step 5: FWI on one GPU (6-stage production) ===========================
 SWEEP_TASKS=$(python -c "import sweep_tasks, pathlib; print(pathlib.Path(sweep_tasks.__file__).parent.parent.parent)")
-cp ${SWEEP_TASKS}/examples/tasks/viking_siren_hash_6stage_30hz.yaml $VIKING_HOME/run/viking_6stage.yaml
+cp ${SWEEP_TASKS}/examples/field/viking/viking_siren_hash_6stage_30hz.yaml $VIKING_HOME/run/viking_6stage.yaml
 # …edit the wavelet / plan / init_model paths in the YAML, then:
 sweep-tasks run $VIKING_HOME/run/viking_6stage.yaml
 # (multi-GPU on the same box: append --nproc-per-node N)
 
 # === Step 6: RTM ===========================================================
-cp ${SWEEP_TASKS}/examples/tasks/viking_rtm_legacy_match.yaml $VIKING_HOME/run/viking_rtm.yaml
+cp ${SWEEP_TASKS}/examples/field/viking/viking_rtm_legacy_match.yaml $VIKING_HOME/run/viking_rtm.yaml
 # …edit velocity_model.path + plan_path, then:
 sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
 
@@ -1001,7 +1001,7 @@ scripts and trying to map field names:
 
 - [`docs/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
   build-plan / run reference (covers all datasets).
-- [`examples/tasks/viking_*.yaml`](../../../examples/tasks/) — every
+- [`examples/field/viking/*.yaml`](../../../examples/field/viking/) — every
   Viking task YAML, including the 6-stage and 8-stage FWI ladders
   and the legacy-matching RTM.
 - [`examples/sbatch/viking_*.sbatch`](../../../examples/sbatch/) —
