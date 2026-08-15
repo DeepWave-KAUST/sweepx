@@ -867,7 +867,7 @@ class SourceEncodingSpec(_Forbid):
     4. Calls the propagator once with ``source_encoding=True``.
 
     One forward + adjoint per iter regardless of ``batchsize``: the OBN
-    1-GPU production path. Re-seeding the signs every iter (the default)
+    1-GPU production path. The signs are re-drawn every iter, which
     de-correlates the cross-talk and keeps the long-run gradient close
     to the per-shot expectation.
 
@@ -879,7 +879,6 @@ class SourceEncodingSpec(_Forbid):
     enabled: bool = False
     min_coverage: int = Field(ge=0, default=0)
     sign_seed: int | None = None
-    reseed_every_iter: bool = True
     # "random": the ±1 path above. "frequency_selection": deterministic
     # frequency-division comb encoding (see FreqSelectionSpec); requires
     # ``frequency`` to be set. Default keeps existing YAMLs unchanged.
@@ -1389,9 +1388,10 @@ class PlanSamplingConfig(_Forbid):
     source_lines_per_group, max_traces_per_sourceline
         Hierarchical sub-sampling caps inside the shared-shot intersection.
         ``0`` disables the corresponding cap.
-    num_workers, prefetch_factor, persistent_workers
-        Forwarded to the prefetching DataLoader the runner builds for the
-        per-iter SEG-Y reads. Defaults tuned for compute > I/O.
+    num_workers
+        Sizes the inner ThreadPoolExecutor that performs the per-iter
+        SEG-Y reads (no torch DataLoader is involved). Defaults tuned
+        for compute > I/O.
     dedup_mode
         Per-iter dedupe at the grid level. When multiple physical shots in
         an encoded supershot snap to the same ``(gx, gy, gz)`` cell, keep
@@ -1422,7 +1422,6 @@ class PlanSamplingConfig(_Forbid):
     max_traces_per_sourceline: int = Field(ge=0, default=0)
     num_workers: int = Field(ge=0, default=4)
     prefetch_factor: int = Field(ge=1, default=2)
-    persistent_workers: bool = True
     dedup_mode: Literal["none", "first", "nearest"] = "none"
     receiver_first: bool = False
     receiver_first_max_retries: int = Field(ge=1, default=20)

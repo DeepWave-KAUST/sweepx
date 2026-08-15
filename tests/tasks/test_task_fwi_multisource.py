@@ -193,7 +193,7 @@ def _build_multisource_spec(
         "loss": {"kind": "trace_cosine"},
         "source_encoding": {
             "enabled": True, "min_coverage": 0,
-            "sign_seed": 7, "reseed_every_iter": True,
+            "sign_seed": 7,
         },
     }
     if extra:

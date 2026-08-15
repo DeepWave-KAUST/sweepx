@@ -79,7 +79,6 @@ obs:
       max_traces_per_sourceline: 1000
       num_workers: 4
       prefetch_factor: 2
-      persistent_workers: true
 
 # SIREN reparam — the OBN production path uses a hash-encoded SIREN net.
 reparam:
@@ -114,7 +113,6 @@ source_encoding:
   enabled: true
   min_coverage: 50000
   sign_seed: 0
-  reseed_every_iter: true
 
 # Illumination preconditioning (sqrt variant matches the legacy in-flight
 # OBN feature). Requires backend.impl='c' to actually fire.

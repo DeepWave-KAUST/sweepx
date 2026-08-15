@@ -121,7 +121,6 @@ obs:
     #                                 #   source_encoding.enabled=false)
     #   num_workers: 4
     #   prefetch_factor: 2
-    #   persistent_workers: true
 # ── ALTERNATIVES (other obs sources) ──
 # obs:
 #   synthetic_from_models: [{name: vp, path: /path/true_vp.npy}]  # gen obs from a true model
@@ -300,7 +299,6 @@ reparam:
 # source_encoding:                 # --- ① random ±1 (pm1) ---
 #   enabled: true
 #   mode: random
-#   reseed_every_iter: true        # redraw signs each iter (de-correlate crosstalk)
 #   sign_seed: null
 #   min_coverage: 0
 #
