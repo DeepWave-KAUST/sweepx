@@ -9,9 +9,11 @@ Synthesises a tiny ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`
   the eager Acoustic3D backend;
 * the auto grid-origin computation produces a snapped grid that fits
   all sources + receivers;
-* missing pieces (no ``obs.plan.sampling``, encoding off,
-  ``shared_shots_per_iter=0``, multi-GPU launch, wrong grouping) error
-  out with clear messages.
+* missing pieces (encoding off, ``shared_shots_per_iter=0``, multi-GPU
+  launch) error out with clear messages;
+* dropping ``obs.plan.sampling`` is NOT an error — it routes to the
+  static reciprocal ``plan_materialize`` path; the CSG-only grouping
+  guard belongs to the geometry-only route instead.
 
 Replaces the deprecated ``test_task_fwi_crg.py`` which exercised the
 ``from_crg_plan`` + ``obs.crg_plan`` shape now removed in TASK 019.
@@ -214,16 +216,48 @@ def test_multisource_fwi_encoded_smoke_runs(tmp_path):
     assert result.status.summary["n_virtual_sources"] == 2
 
 
-def test_multisource_fwi_requires_sampling_block(tmp_path):
-    """obs.plan without `sampling` should fall through to the CSG static-obs
-    path, which then rejects the CRG-grouped plan with a clear error."""
+def test_crg_plan_without_sampling_runs_static_reciprocal_path(tmp_path):
+    """``obs.plan`` without ``sampling`` is NOT an error on a CRG plan.
+
+    Dropping ``sampling`` routes away from ``_run_fwi_multisource`` into the
+    static single-source path, which materialises the plan by reciprocity
+    (``plan_materialize``: group = OBN node = virtual source, its recorded
+    air-gun positions = receivers). That is a supported shape, so the run must
+    SUCCEED — the grouping guard in ``_load_seismic_plan_payload`` belongs to a
+    different route (see the geometry-only test below).
+
+    ``min_receivers`` is lowered because this fixture gives each node only 2
+    shots; the default floor of 8 would drop every group.
+    """
     fixture = _build_tiny_multisource_fixture(tmp_path)
     spec = _build_multisource_spec(tmp_path, fixture)
     spec["obs"]["plan"].pop("sampling")
-    result = TaskRunner().run(load_task(_write(spec, tmp_path / "bad.yaml")))
+    spec["obs"]["plan"]["min_receivers"] = 2
+    spec.pop("source_encoding", None)
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "static.yaml")))
+    assert result.status.state == "success", result.status.error
+    assert (result.task_dir / "output" / "inverted_vp.npy").exists()
+    loss = np.load(result.task_dir / "output" / "loss.npy")
+    assert loss.size == 2 and np.all(np.isfinite(loss))
+
+
+def test_crg_plan_geometry_only_rejects_csg_static_loader(tmp_path):
+    """The CSG-only guard fires when the plan is used for GEOMETRY alone.
+
+    ``geometry.kind='from_plan'`` with obs coming from somewhere else (here
+    ``synthetic_from``) resolves geometry through
+    ``_load_seismic_plan_payload``, which supports ``grouping='csg'`` only.
+    A CRG plan on that route must fail with a message naming the grouping.
+    """
+    fixture = _build_tiny_multisource_fixture(tmp_path)
+    spec = _build_multisource_spec(tmp_path, fixture)
+    spec.pop("source_encoding", None)
+    spec["obs"] = {"synthetic_from": {"name": "vp",
+                                      "path": str(fixture["init_vp"])}}
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "geom.yaml")))
     assert result.status.state == "failed"
     err = (result.status.error or "").lower()
-    assert "csg" in err or "grouping" in err
+    assert "csg" in err and "crg" in err
 
 
 def test_multisource_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):

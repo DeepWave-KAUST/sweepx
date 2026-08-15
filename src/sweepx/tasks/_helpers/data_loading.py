@@ -74,11 +74,16 @@ def _load_seismic_plan_payload(
 
     This helper serves the static-obs CSG path (``grouping="csg"`` only,
     every group's row count must be uniform — typical for rigid
-    streamers). CRG-grouped plans go through the per-iter multisource
-    sampler in :meth:`TaskRunner._run_fwi_multisource` (dispatched when
-    ``obs.plan.sampling`` is set), which calls
-    :func:`sweep_io.seismic_plan.sample_shared_shots_from_plan` +
-    :meth:`PlanReader.read_rows` directly instead of going through here.
+    streamers). CRG-grouped plans never come through here; they take one of
+    two other routes, both via ``obs.plan``:
+
+    * ``obs.plan.sampling`` set → the per-iter multisource sampler in
+      :meth:`TaskRunner._run_fwi_multisource`, which calls
+      :func:`sweep_io.seismic_plan.sample_shared_shots_from_plan` +
+      :meth:`PlanReader.read_rows` directly.
+    * ``obs.plan.sampling`` unset → :func:`plan_materialize.
+      materialize_plan_dataset`, which builds a static reciprocal dataset
+      (node = virtual source, its air-gun positions = receivers).
 
     ``grid_ndim``: 2 → keep (x, z) only (drop y); 3 → keep (x, y, z).
     ``geometry_only``: when True, skip the eager ``PlanReader.read_all`` so
@@ -100,10 +105,14 @@ def _load_seismic_plan_payload(
     if plan.grouping != "csg":
         raise ValueError(
             f"_load_seismic_plan_payload (CSG static-obs path) requires "
-            f"grouping='csg' (got {plan.grouping!r}). For CRG-grouped "
-            "plans the runner uses the multisource pipeline instead — "
-            "set obs.plan.sampling (PlanSamplingConfig) on the YAML so "
-            "the runner routes to _run_fwi_multisource."
+            f"grouping='csg' (got {plan.grouping!r}). This route resolves "
+            "GEOMETRY from the plan while obs comes from elsewhere, so it "
+            "has no CRG reciprocity. A CRG plan has two supported routes, "
+            "both driven by obs.plan pointing at the same plan: set "
+            "obs.plan.sampling (PlanSamplingConfig) for the per-iter "
+            "supershot pipeline (_run_fwi_multisource), or leave sampling "
+            "unset for a static reciprocal dataset (plan_materialize: node "
+            "= virtual source, its air-gun positions = receivers)."
         )
     counts = plan.per_group_row_counts()
     if counts.size == 0:
