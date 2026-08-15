@@ -579,8 +579,11 @@ class MultisourceRunnerMixin:
                 _unsup.append("lr_scale")
             if abs(float(getattr(_st, "inr_lr_scale", 1.0)) - 1.0) > 1e-12:
                 _unsup.append("inr_lr_scale")
-            if getattr(_st, "batch_size", None) is not None:
-                _unsup.append("batch_size")
+            # ``batch_size`` IS supported here (see _bs_for_epoch below): with
+            # per_crg_independent the batch is accumulated shot by shot, so B
+            # costs time but not memory — a per-stage B lets the cheap coarse
+            # bands take many small steps and the expensive fine bands take
+            # fewer, better-averaged ones.
             if _unsup:
                 raise NotImplementedError(
                     f"stage {_si}: the encoded OBN path supports per stage "
@@ -589,6 +592,20 @@ class MultisourceRunnerMixin:
                 )
         stage_epochs = [int(_st.epochs) for _st in stage_list]
         stage_starts = [int(s) for s in np.cumsum([0] + stage_epochs[:-1])]
+
+        # Per-stage batch size. Resolved from the EPOCH (not from mutable stage
+        # state) because the prefetcher submits iteration e+1 before the stage
+        # switch for e+1 has run — reading a "current stage" variable would give
+        # the first iteration of every stage the previous stage's B.
+        _stage_bs = [int(_st.batch_size) if getattr(_st, "batch_size", None)
+                     is not None else int(spec.batchsize) for _st in stage_list]
+
+        def _bs_for_epoch(e):
+            _i = int(np.searchsorted(stage_starts, int(e), side="right")) - 1
+            return _stage_bs[max(0, min(_i, len(_stage_bs) - 1))]
+
+        if len(set(_stage_bs)) > 1:
+            print(f"[crg] per-stage batchsize: {_stage_bs}")
         wavelet_orig = wavelet_t.detach().clone()  # pristine, pre-bandpass
         # Pristine wavelet (numpy) + its dt, kept immutable so a per-stage dt
         # change re-resamples from the ORIGINAL (no cumulative drift). Consumed
@@ -1024,7 +1041,7 @@ class MultisourceRunnerMixin:
         # Each entry is one iter's dict; reset by main loop after read.
         prefetch_timings: list[dict] = []
 
-        def _load_iter_payload(rng_state):
+        def _load_iter_payload(rng_state, bs_iter=None):
             """Sample shared-shots + read all per-group traces. Returns
             ``(batch, traces_per_group)`` where ``traces_per_group`` is a
             ``(B, n_shared, nt_segy)`` ``float32`` numpy array.
@@ -1051,7 +1068,7 @@ class MultisourceRunnerMixin:
                 _bs_iter = 1
             else:
                 _elig_iter = eligible_groups
-                _bs_iter = int(spec.batchsize)
+                _bs_iter = int(spec.batchsize) if bs_iter is None else int(bs_iter)
             _percrg_iter = bool(per_crg_independent and _bs_iter > 1)
             if _percrg_iter:
                 # Per-CRG independent: B random nodes, each keeps its OWN
@@ -1209,7 +1226,9 @@ class MultisourceRunnerMixin:
             """Sampler arg for iter ``iter_idx``: the group ordinal in
             enumerate mode (SWEEP_ENUM_GROUPS=1), else a fresh random seed."""
             if os.environ.get("SWEEP_ENUM_GROUPS") == "1":
-                return int(iter_idx)
+                # SWEEP_ENUM_START shards the enumeration across jobs: job k
+                # covers ordinals [start, start + epochs). Default 0 = unchanged.
+                return int(iter_idx) + int(os.environ.get("SWEEP_ENUM_START", "0"))
             return _next_rng_state()
 
         # --- 7b) Optional priors: TVPrior + SeabedFreezeMask.
@@ -1385,7 +1404,7 @@ class MultisourceRunnerMixin:
 
         # Prime the prefetcher with iter 0's load so the first iter's
         # ``wait_io`` is also overlapped (with setup work above, ideally).
-        next_future = prefetch_pool.submit(_load_iter_payload, _iter_seed(0))
+        next_future = prefetch_pool.submit(_load_iter_payload, _iter_seed(0), _bs_for_epoch(0))
         for epoch in range(total_epochs):
             # Stage entry: re-bandpass the PRISTINE wavelet + switch the obs
             # bandpass spec when crossing into a new frequency-continuation
@@ -1458,7 +1477,8 @@ class MultisourceRunnerMixin:
                     # the in-flight prefetch for THIS iter was loaded at the OLD
                     # dt/nt; redo it at the new time axis (same seed → same shots).
                     next_future = prefetch_pool.submit(
-                        _load_iter_payload, _iter_seed(epoch))
+                        _load_iter_payload, _iter_seed(epoch),
+                        _bs_for_epoch(epoch))
             # Coarse-to-fine hash: advance the encoder level mask by whole-run
             # progress each epoch (base_levels -> final_levels over [warmup,
             # ramp_end], epoch fraction). The multisource path NEVER drove this, so
@@ -1486,6 +1506,7 @@ class MultisourceRunnerMixin:
             if epoch + 1 < total_epochs:
                 next_future = prefetch_pool.submit(
                     _load_iter_payload, _iter_seed(epoch + 1),
+                    _bs_for_epoch(epoch + 1),
                 )
             B = int(batch.group_indices.size)
             n_shared = int(batch.n_shared)
@@ -1861,6 +1882,30 @@ class MultisourceRunnerMixin:
                                     node_xy=sources_super[_j][:2] * _cur_dh)
                             except Exception as _e:      # QC must never kill a run
                                 print(f"[multisource] diving-window QC failed: {_e}")
+                    # SWEEP_DUMP_LOSS_IO=1: save the EXACT tensors handed to
+                    # loss_fn (post bandpass / prepad-shift / window), so the
+                    # misfit input can be inspected rather than reconstructed
+                    # on the side — the same reasoning as the diving-window QC
+                    # above (a side reconstruction can silently disagree).
+                    if (os.environ.get("SWEEP_DUMP_LOSS_IO") == "1"
+                            and _j == 0 and dist_info.is_root
+                            and epoch % max(int(spec.show_every), 1) == 0):
+                        _sy = (_syn_j if _w is None else _syn_j * _w)
+                        _ob = (_obs_4d if _w is None else _obs_4d * _w)
+                        _nd = int(batch.group_indices[local_start + _j])
+                        _offd = (np.linalg.norm(
+                            np.asarray(receivers_super[_j, :_nij], dtype=np.float64)
+                            - np.asarray(sources_super[_j], dtype=np.float64), axis=1)
+                            * _cur_dh)
+                        np.savez(
+                            f"{qc_dir}/lossio_ep{epoch:04d}_node{_nd}.npz",
+                            syn=_sy.detach().float().cpu().numpy(),
+                            obs=_ob.detach().float().cpu().numpy(),
+                            offset_m=_offd.astype(np.float32),
+                            dt=float(effective_dt), node=_nd, epoch=int(epoch),
+                            loss=float(_loss_j.detach().cpu()) / float(global_norm))
+                        print(f"[lossio] epoch {epoch} node {_nd}: dumped "
+                              f"syn/obs {tuple(_sy.shape)} -> {qc_dir}", flush=True)
                     (_loss_j / global_norm).backward()
                     loss_t = loss_t + _loss_j.detach()
                     if _j == _B_loc - 1:
