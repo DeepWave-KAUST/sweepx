@@ -154,6 +154,22 @@ def _model_array(ref: ModelRef, base_dir: Path | None = None, *,
     """
     if ref.constant is not None:
         arr = np.full(tuple(ref.shape), float(ref.constant), dtype=np.float32)
+    elif ref.linear_gradient is not None:
+        lg = ref.linear_gradient
+        shape = tuple(int(v) for v in ref.shape)
+        nz = shape[0]
+        n_water = min(int(lg.water_rows), nz)
+        col = np.empty(nz, dtype=np.float32)
+        col[:n_water] = float(lg.water_vp)
+        if nz > n_water:
+            # Ramp spans the rows BELOW the water layer, so water_rows does not
+            # eat into the velocity range the gradient has to cover.
+            col[n_water:] = np.linspace(float(lg.vmin), float(lg.vmax),
+                                        nz - n_water, dtype=np.float32)
+        # laterally constant: broadcast the column over every remaining axis
+        arr = np.ascontiguousarray(
+            np.broadcast_to(col.reshape((nz,) + (1,) * (len(shape) - 1)), shape),
+            dtype=np.float32)
     elif ref.dataset is not None:
         payload = _dataset_payload(ref)
         fields = sorted(k for k, v in payload.items() if hasattr(v, "shape"))

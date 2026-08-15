@@ -1,8 +1,13 @@
-"""``ModelRef.dataset`` — reference a sweep.datasets benchmark straight from YAML.
+"""``ModelRef`` sources that need no file on disk.
 
-Covers the source validator, the array resolution (preset / field pick /
-smoothing) and one end-to-end run through ``TaskRunner`` so the new source is
-exercised on a real task path rather than only in the helper.
+``dataset`` pulls a benchmark out of :mod:`sweep.datasets`; ``linear_gradient``
+builds a 1-D ramp in memory. Both exist so a task YAML is self-contained, and
+both are covered here at three levels: the source validator, the array the
+helper resolves, and one end-to-end ``TaskRunner`` run each — a source that
+only works in the helper is the failure mode worth guarding against.
+
+Also pins ``output/initial_vp.npy``: with an in-memory source there is no input
+file to point at afterwards, so the run dir has to record its own start.
 
 Only EMBEDDED catalogue entries are used (``marmousi:2d-demo``,
 ``overthrust:2d-demo``) so the suite never touches the network.
@@ -130,3 +135,46 @@ def test_forward_task_runs_from_dataset_only_yaml(tmp_path):
     # grid.shape is unset, so the (187, 801) grid was inferred from the
     # dataset — receivers at x up to 780 would be out of bounds otherwise.
     assert rec.shape[2] == 38
+
+
+# ----- linear_gradient source ---------------------------------------------
+
+def test_linear_gradient_builds_water_layer_over_a_ramp():
+    ref = ModelRef(name="vp", shape=(281, 1361),
+                   linear_gradient={"vmin": 1500.0, "vmax": 4000.0,
+                                    "water_rows": 37, "water_vp": 1500.0})
+    a = _model_array(ref)
+    assert a.shape == (281, 1361) and a.dtype == np.float32
+    assert np.allclose(a[:37], 1500.0)              # flat water column
+    assert a[37, 0] == pytest.approx(1500.0)        # ramp starts below it
+    assert a[-1, 0] == pytest.approx(4000.0)
+    assert np.allclose(a, a[:, :1])                 # laterally constant
+    below = a[37:, 0]
+    assert np.all(np.diff(below) > 0)               # monotone ramp
+
+
+def test_linear_gradient_is_3d_capable():
+    a = _model_array(ModelRef(name="vp", shape=(40, 30, 50),
+                              linear_gradient={"vmin": 1500.0, "vmax": 4000.0,
+                                               "water_rows": 5}))
+    assert a.shape == (40, 30, 50)
+    assert np.allclose(a[:5], 1500.0)
+    assert np.allclose(a, a[:, :1, :1])
+
+
+def test_linear_gradient_requires_shape():
+    with pytest.raises(ValueError, match="`shape` is required"):
+        ModelRef(name="vp", linear_gradient={"vmin": 1500.0, "vmax": 4000.0})
+
+
+def test_linear_gradient_rejects_inverted_range():
+    with pytest.raises(ValueError, match="vmax"):
+        ModelRef(name="vp", shape=(10, 10),
+                 linear_gradient={"vmin": 4000.0, "vmax": 1500.0})
+
+
+def test_linear_gradient_is_exclusive_with_other_sources():
+    with pytest.raises(ValueError, match="exactly one of"):
+        ModelRef(name="vp", shape=(10, 10), dataset="marmousi:2d-demo",
+                 linear_gradient={"vmin": 1500.0, "vmax": 4000.0})
+

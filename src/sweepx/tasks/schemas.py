@@ -104,6 +104,33 @@ class CUDAOptionsModel(_Forbid):
 
 # ----- model reference ---------------------------------------------------
 
+class LinearGradientSpec(_Forbid):
+    """A laterally-constant 1-D depth gradient, optionally over a water layer.
+
+    The standard FWI cold start: no lateral structure at all, so nothing about
+    the answer is smuggled into the starting model. Built in memory, so a task
+    YAML stays self-contained.
+
+    ``water_rows`` top rows are held at ``water_vp``; the remaining rows ramp
+    linearly from ``vmin`` to ``vmax``. Pair it with ``freeze_top_n_rows`` to
+    keep the inversion from touching the water column, whose velocity is a
+    known constant rather than something to solve for.
+    """
+
+    vmin: float = Field(gt=0)
+    vmax: float = Field(gt=0)
+    water_rows: int = Field(ge=0, default=0)
+    water_vp: float = Field(gt=0, default=1500.0)
+
+    @model_validator(mode="after")
+    def _ordered(self):
+        if self.vmax < self.vmin:
+            raise ValueError(
+                f"linear_gradient: vmax ({self.vmax}) must be >= vmin ({self.vmin})."
+            )
+        return self
+
+
 class ModelRef(_Forbid):
     """Reference to a model tensor by name (must appear in equation.MODEL_SPECS).
 
@@ -141,6 +168,11 @@ class ModelRef(_Forbid):
     # applies to every axis; a tuple is per-axis. Cuts both grid size and dh.
     downsample: int | tuple[int, ...] | None = None
 
+    # ----- synthetic 1-D gradient source ---------------------------------
+    # Built in memory from (vmin, vmax, water_rows); ``shape`` is required
+    # because there is no file to take it from.
+    linear_gradient: LinearGradientSpec | None = None
+
     # ----- post-processing (any source) ----------------------------------
     # Gaussian-smooth the loaded array by this sigma in CELLS. The standard
     # way to derive a starting model from a true one without shipping a
@@ -150,17 +182,23 @@ class ModelRef(_Forbid):
     @model_validator(mode="after")
     def _exactly_one_source(self):
         sources = [self.path is not None, self.constant is not None,
-                   self.dataset is not None]
+                   self.dataset is not None, self.linear_gradient is not None]
         if sum(sources) != 1:
             raise ValueError(
-                f"ModelRef '{self.name}': exactly one of `path`, `constant` or "
-                f"`dataset` must be set (got "
+                f"ModelRef '{self.name}': exactly one of `path`, `constant`, "
+                f"`dataset` or `linear_gradient` must be set (got "
                 f"path={self.path!r}, constant={self.constant!r}, "
-                f"dataset={self.dataset!r})."
+                f"dataset={self.dataset!r}, "
+                f"linear_gradient={'set' if self.linear_gradient else None})."
             )
         if self.constant is not None and self.shape is None:
             raise ValueError(
                 f"ModelRef '{self.name}': `shape` is required when `constant` is set."
+            )
+        if self.linear_gradient is not None and self.shape is None:
+            raise ValueError(
+                f"ModelRef '{self.name}': `shape` is required when "
+                f"`linear_gradient` is set (nothing else defines the grid)."
             )
         if self.dataset is None:
             for f in ("dataset_field", "preset", "downsample"):
