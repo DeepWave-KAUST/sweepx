@@ -15,7 +15,6 @@ from sweep_tasks._helpers.run_checkpoint import (
 from sweep_tasks._helpers.data_loading import (
     _load_segy_index_payload,
     _load_segy_single_file_payload,
-    _load_seismic_plan_payload,
 )
 from sweep_tasks._helpers.dd import (
     _compute_local_window,
@@ -1022,24 +1021,16 @@ class FWIRunnerMixin:
                 )
             return _adapt_segy_obs_to_backend(obs_aligned)
 
+        # ``obs.plan`` never reaches here: FWI materialises it earlier
+        # (``_obs_plan_mat``) or dispatches to ``_run_fwi_multisource``, and
+        # RTM opens its own PlanReader. Guard the invariant so a future
+        # re-route fails loudly instead of falling into the synthetic branch.
         if obs_spec.plan is not None:
-            cfg = obs_spec.plan
-            grid_ndim = len(spec.grid.shape) if spec.grid.shape is not None else None
-            payload = _load_seismic_plan_payload(
-                cfg.plan_path,
-                cache_all=bool(cfg.cache_all),
-                grid_ndim=grid_ndim,
-                cache=segy_cache,
+            raise AssertionError(
+                "_fwi_generate_obs reached with obs.plan set — the plan paths "
+                "produce obs themselves (plan_materialize / _run_fwi_multisource "
+                "/ rtm PlanReader). This call site should not be routed here."
             )
-            _, _, obs_aligned = _segy_geometry_to_grid_indices(
-                payload, float(spec.grid.dh), dedupe=False, dedup_method="nearest",
-            )
-            if obs_aligned.shape[0] != nshots:
-                raise ValueError(
-                    f"obs.plan gave {obs_aligned.shape[0]} shots but "
-                    f"geometry-derived nshots={nshots}."
-                )
-            return _adapt_segy_obs_to_backend(obs_aligned)
 
         # synthetic: collect true models in equation MODEL_SPECS order
         if obs_spec.synthetic_from_models is not None:
