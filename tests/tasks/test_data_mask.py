@@ -3,7 +3,8 @@ mask off -> bit-identical to legacy; mask on -> excludes window-outside samples.
 import numpy as np
 import torch
 from types import SimpleNamespace
-from sweep_tasks.runner import _compute_loss, _loss_sum, TaskRunner
+from sweep_tasks.runner import TaskRunner
+from sweep_tasks._helpers.loss import _compute_loss, _loss_sum
 from sweep_tasks.schemas import LossSpec
 
 

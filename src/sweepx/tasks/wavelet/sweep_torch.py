@@ -1004,7 +1004,8 @@ def save_wavelet_outputs(
         # inferring from ``time_s``).
         "dt_s": np.float64(dt_s),
         # FWI runner reads ``source_delay_s`` via
-        # :func:``sweep_tasks.runner._get_wavelet_source_delay_s`` and right-
+        # :func:``sweep_tasks._helpers.wavelet_build._get_wavelet_source_delay_s``
+        # and right-
         # shifts obs by that many seconds at iter time.
         "source_delay_s": np.float32(src_delay_s),
         # Informational mirrors of the legacy SIREN-pipeline schema —

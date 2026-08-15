@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from sweep_tasks import load_task, TaskRunner
-from sweep_tasks.runner import _compute_local_window, _rebase_geometry_to_window
+from sweep_tasks._helpers.dd import _compute_local_window, _rebase_geometry_to_window
 
 
 # ---------------------------------------------------------------------------

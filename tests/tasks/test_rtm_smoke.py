@@ -133,7 +133,9 @@ def test_rtm_dispatcher_registered(tmp_path):
     )
     # Touch the underlying helper too so a typo would surface here, not in
     # an end-to-end run.
-    from sweep_tasks.runner import _crop_padded_volume_to_model, _save_rtm_qc_pngs
+    from sweep_tasks._helpers.plotting import (
+        _crop_padded_volume_to_model, _save_rtm_qc_pngs,
+    )
     assert callable(_crop_padded_volume_to_model)
     assert callable(_save_rtm_qc_pngs)
 

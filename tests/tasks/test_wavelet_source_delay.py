@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_tasks.runner import _get_wavelet_source_delay_s
+from sweep_tasks._helpers.wavelet_build import _get_wavelet_source_delay_s
 from sweep_tasks.schemas import (
     FromNpyWavelet,
     FromSirenPipelineNpzWavelet,

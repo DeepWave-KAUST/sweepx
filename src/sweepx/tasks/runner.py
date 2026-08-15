@@ -15,133 +15,23 @@ schema, not as a runtime kwarg.
 from __future__ import annotations
 
 import json
-import math
-import os
-import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 
-import sweep
-import sweep.equations as eq_mod
-from sweep.signal import ricker
 
 # Canonical filter primitives — used across every FWI / RTM bandpass site
 # in this module. ``bandpass`` is scipy ``sosfiltfilt`` on numpy (CPU);
 # ``bandpass_torch`` is the FFT |H(z)|² Butterworth on torch (GPU/CPU,
 # autograd-friendly). Importing once at module load avoids the ~50 µs
 # import-on-call cost previously paid by half a dozen inline imports.
-from sweep_tasks.preproc.filter import bandpass as _bandpass_cpu
-from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
 from sweep_tasks.schemas import (
-    BaseTaskSpec,
-    ForwardSpec,
-    FWISpec,
-    IntrospectSpec,
-    LSRTMSpec,
-    LineSet,
-    ModelRef,
-    PhysicsSpec,
-    RTMSpec,
     TaskSpec,
-    WavefieldSpec,
 )
-from sweep_tasks._helpers.bounds import _apply_bounds, _effective_bound
-from sweep_tasks._helpers.illumination import (
-    _accumulate_illumination,
-    _apply_illumination_precond,
-)
-from sweep_tasks._helpers.loss import (
-    _compute_loss,
-    _diving_window_mask,
-    _loss_sum,
-    _mask_chunk,
-)
-from sweep_tasks._helpers.data_loading import (
-    _load_segy_index_payload,
-    _load_segy_single_file_payload,
-    _load_seismic_plan_payload,
-)
-from sweep_tasks._helpers.dd import (
-    _compute_local_window,
-    _dd_backward_tile,
-    _dd_config,
-    _dd_render_tile,
-    _dd_tile_bounds,
-    _dd_wrap,
-    _rebase_geometry_to_window,
-)
-from sweep_tasks._helpers.geometry import (
-    _build_geometry,
-    _build_geometry_2d,
-    _explicit_geometry_arrays,
-    _from_file_geometry_arrays,
-    _line_array,
-    _segy_geometry_to_grid_indices,
-)
-from sweep_tasks._helpers.model import (
-    _gardner_z,
-    _get_equation_class,
-    _infer_shape,
-    _load_model_tensor,
-    _model_names_for_equation,
-    _read_class_property,
-    _solver_models,
-    _wavefield_names_for_equation,
-)
-from sweep_tasks._helpers.plan_apply import (
-    _apply_data_plan_to_fwi,
-    _apply_model_plan_to_fwi,
-    _build_inv_tensors,
-    _normalize_fwi_init_models,
-)
-from sweep_tasks._helpers.reparam import (
-    _advance_hash_schedule,
-    _build_reparam_net,
-    _has_hash_schedule,
-    _render_full_to_cpu_tiled,
-)
-from sweep_tasks._helpers.solver_build import (
-    _build_solver,
-    _cfl_check,
-    _resolve_modeling_inputs,
-    _solver_models_in_order,
-    _validate_single_model,
-)
-from sweep_tasks._helpers.run_checkpoint import (
-    _load_checkpoint,
-    _save_checkpoint,
-    _zero_top_rows,
-)
-from sweep_tasks._helpers.plotting import (
-    _crop_padded_volume_to_model,
-    _dump_receiver_rotation_qc,
-    _lsrtm_background_equation,
-    _plot_loss_curve,
-    _plot_wavefield_snapshots,
-    _save_illumination,
-    _save_rtm_qc_pngs,
-)
-from sweep_tasks._helpers.stages import (
-    _bandpass_syn_torch,
-    _normalise_stage_list,
-    _prepare_stage,
-    _resample_obs_time,
-    _resample_obs_to_solver_dt,
-    _resample_vp_tensor,
-    _shape_for_dh,
-    _trim_or_pad_time,
-)
-from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import (
-    _apply_seed,
-    _is_cuda_dev,
     _make_task_id,
     _now_iso,
-    _resolve_device,
 )
 from sweep_tasks.tasks.forward import ForwardRunnerMixin
 from sweep_tasks.tasks.lsrtm import LSRTMRunnerMixin
@@ -150,17 +40,6 @@ from sweep_tasks.tasks.rtm import RTMRunnerMixin
 from sweep_tasks.tasks.fwi import FWIRunnerMixin
 from sweep_tasks.tasks.fwi_multisource import MultisourceRunnerMixin
 from sweep_tasks._helpers.metadata import _dump_run_metadata
-from sweep_tasks._helpers.optimizer import (
-    _apply_stage_lr_scale,
-    _build_optimizer,
-    _build_reparam_optimizer,
-    _build_scheduler,
-    _remember_initial_lrs,
-)
-from sweep_tasks._helpers.wavelet_build import (
-    _build_wavelet,
-    _get_wavelet_source_delay_s,
-)
 
 
 # ---------- result + status containers -----------------------------------
