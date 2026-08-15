@@ -657,6 +657,70 @@ class SmoothRegSpec(_Forbid):
     velocity_scale_m_s: float = Field(gt=0, default=1000.0)
 
 
+class DiffusionPriorSpec(_Forbid):
+    """Plug-and-play DDPM diffusion prior added to the FWI objective.
+
+    Wraps :class:`sweep_nn.diffusion.DiffusionVelocityPrior` — a DDPM trained on
+    a velocity-model corpus (e.g. OpenFWI CurveVel-A, 64x64, 1500-4500 m/s)
+    reused as a denoiser ``D(vp)`` — and adds a plug-and-play regularizer to the
+    per-iter loss whose gradient flows into vp (or the reparam-net params):
+
+    * ``kind="red"`` : ``0.5*mean((norm(vp) - D(vp).detach())**2)``
+      (RED / proximal; deterministic DiffPIR/DDIM denoise, so DDP-safe added
+      after the data-gradient all-reduce — identical on every rank).
+    * ``kind="sds"`` : ``<score-distillation surrogate>`` (stochastic; the runner
+      reseeds the RNG identically per rank each apply for DDP sync).
+
+    ``weight_mode`` sets how ``weight`` scales that gradient before it is added
+    to the data gradient:
+
+    * ``"relative"`` (default): rescale the diffusion gradient so its norm is
+      ``weight * ||accumulated data gradient||`` at each apply. ``weight`` is then
+      a dimensionless fraction ("nudge the model 5% toward the prior") that is
+      invariant to the misfit scale, grid size, and parametrization — the robust
+      choice, since the raw RED gradient magnitude (normalised + mean-reduced)
+      is tiny and dataset-dependent.
+    * ``"absolute"``: add ``weight * grad(loss)`` directly. ``weight`` then lives
+      on the (very small) raw scale — typically needs to be ``O(1e3-1e4)``.
+
+    The denoiser bridges the size/distribution gap between the small generative
+    model and the FWI grid via ``mode="patch"`` (slide a ``patch`` x ``patch``
+    window at ``stride`` — native training size, in-distribution, preferred) or
+    ``mode="resize"`` (bilinearly resize the whole field to the training size).
+    ``strength`` sets the DiffPIR start time ``t_start = strength*T``; larger =
+    stronger projection onto the prior.
+
+    OUT-OF-DISTRIBUTION CAVEAT: a prior trained on synthetic models, applied
+    in-loop to field data, can pull vp toward the training distribution. Keep
+    ``weight`` small (~1e-4) and use ``every`` / ``start_band`` to apply it
+    gently and only after the low frequencies have done the heavy lifting. The
+    FWI is the main driver; the prior is a polish.
+    """
+
+    enabled: bool = True
+    # sweep_nn-format DDPM checkpoint (a dict with ``config`` / ``ema`` (or
+    # ``model``) / ``stats`` keys, as written by the sweep_nn diffusion trainer).
+    ckpt_path: Path
+    # In "relative" mode (default) this is the diffusion-to-data gradient-norm
+    # ratio per apply (0.05 = a 5% nudge); in "absolute" mode it is the raw
+    # loss weight (needs ~1e3-1e4). See ``weight_mode``.
+    weight: float = Field(ge=0, default=0.05)
+    weight_mode: Literal["relative", "absolute"] = "relative"
+    kind: Literal["red", "sds"] = "red"
+    mode: Literal["patch", "resize"] = "patch"
+    strength: float = Field(gt=0, le=1.0, default=0.3)
+    ddim_steps: int = Field(ge=1, default=10)
+    patch: int = Field(ge=8, default=64)
+    stride: int = Field(ge=1, default=32)
+    vmin: float | None = None                     # None -> ckpt stats (typically 1500)
+    vmax: float | None = None                     # None -> ckpt stats (typically 4500)
+    use_ema: bool = True
+    every: int = Field(ge=1, default=1)           # apply every N optimizer steps (epochs)
+    start_band: int = Field(ge=0, default=0)      # apply only from this multiscale stage index onward
+    sds_t_lo: float = Field(gt=0, lt=1.0, default=0.02)
+    sds_t_hi: float = Field(gt=0, le=1.0, default=0.5)
+
+
 class GradSmoothSpec(_Forbid):
     """Gaussian smoothing of the vp gradient before the optimizer step.
 
@@ -1628,6 +1692,14 @@ class FWISpec(BaseTaskSpec):
     # to the data misfit; the gradient propagates back into the vp
     # tensor (or net params in reparam mode).
     smooth_regularization: SmoothRegSpec | None = None
+
+    # Optional plug-and-play DDPM diffusion prior on vp. See
+    # :class:`DiffusionPriorSpec`. The runner builds a
+    # ``sweep_nn.diffusion.DiffusionVelocityPrior`` from ``ckpt_path`` and adds
+    # ``weight * red_loss(vp)`` (or ``sds_loss``) to the data misfit every
+    # ``every`` steps from stage ``start_band`` on; the gradient propagates back
+    # into vp (or net params in reparam mode), exactly like smooth_regularization.
+    diffusion_prior: DiffusionPriorSpec | None = None
 
     # Optional Gaussian smoothing of the vp gradient before the optimizer
     # step (tomographic gradient preconditioner). See :class:`GradSmoothSpec`.

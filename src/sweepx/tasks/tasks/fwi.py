@@ -472,6 +472,44 @@ class FWIRunnerMixin:
                 print(f"[fwi] smooth_regularization (TVPrior) ON: "
                       f"weight={smooth_weight:.2e} order={_smooth_spec.order}")
 
+        # Plug-and-play DDPM diffusion prior (sweep-nn). Built once here and
+        # threaded into _fwi_train_step, mirroring tv_prior: a scalar
+        # ``weight * red_loss(vp)`` (or sds_loss) whose .backward() accumulates
+        # onto the data gradient before the optimizer step. RED is deterministic
+        # (DiffPIR/DDIM) so it is DDP-safe added post all-reduce; SDS is reseeded
+        # identically per rank. Applied every ``every`` steps from ``start_band``.
+        diff_prior = None
+        diff_weight = 0.0
+        diff_weight_mode = "relative"
+        diff_kind = "red"
+        diff_every = 1
+        diff_start_band = 0
+        diff_sds_t = (0.02, 0.5)
+        _diff_spec = getattr(spec, "diffusion_prior", None)
+        if _diff_spec is not None and getattr(_diff_spec, "enabled", True) \
+                and float(_diff_spec.weight) > 0.0:
+            from sweep_nn.diffusion import DiffusionVelocityPrior
+            diff_prior = DiffusionVelocityPrior(
+                ckpt_path=str(_diff_spec.ckpt_path), device=str(dev),
+                mode=_diff_spec.mode, strength=float(_diff_spec.strength),
+                ddim_steps=int(_diff_spec.ddim_steps), patch=int(_diff_spec.patch),
+                stride=int(_diff_spec.stride), vmin=_diff_spec.vmin,
+                vmax=_diff_spec.vmax, use_ema=bool(_diff_spec.use_ema),
+            )
+            diff_weight = float(_diff_spec.weight)
+            diff_weight_mode = _diff_spec.weight_mode
+            diff_kind = _diff_spec.kind
+            diff_every = int(_diff_spec.every)
+            diff_start_band = int(_diff_spec.start_band)
+            diff_sds_t = (float(_diff_spec.sds_t_lo), float(_diff_spec.sds_t_hi))
+            if dist_info.is_root:
+                print(f"[fwi] diffusion_prior ({diff_kind}, {diff_weight_mode}) ON: "
+                      f"weight={diff_weight:.3g} mode={_diff_spec.mode} "
+                      f"strength={_diff_spec.strength} every={diff_every} "
+                      f"start_band={diff_start_band} "
+                      f"vmin={diff_prior.vmin:.0f} vmax={diff_prior.vmax:.0f} "
+                      f"ckpt={_diff_spec.ckpt_path.name}")
+
         # Gaussian gradient smoother (tomographic preconditioner). Built once as
         # separable 1-D kernels; applied to the grid-mode vp gradient each step.
         _gsmooth_spec = getattr(spec, "grad_smooth", None)
@@ -757,6 +795,14 @@ class FWIRunnerMixin:
                     epoch_global % spec.qc.every_n_epochs == 0
                     or epoch_global == total_epochs - 1
                 )
+                # Diffusion prior fires every ``diff_every`` steps, only from
+                # stage ``diff_start_band`` on (let the low bands invert freely
+                # before projecting onto the — possibly OOD — prior manifold).
+                _diff_apply = (
+                    diff_prior is not None
+                    and (epoch_global % diff_every == 0)
+                    and (stage_idx >= diff_start_band)
+                )
                 loss_value = self._fwi_train_step(
                     spec, state["solver"], state["wavelet"],
                     state["sources"], state["receivers"],
@@ -771,6 +817,13 @@ class FWIRunnerMixin:
                     stage_dt=state["dt"],
                     tv_prior=tv_prior,
                     smooth_weight=smooth_weight,
+                    diff_prior=diff_prior,
+                    diff_weight=diff_weight,
+                    diff_weight_mode=diff_weight_mode,
+                    diff_kind=diff_kind,
+                    diff_apply=_diff_apply,
+                    diff_sds_t=diff_sds_t,
+                    diff_seed=epoch_global,
                     grad_smoother=_gsmooth,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
@@ -1231,6 +1284,67 @@ class FWIRunnerMixin:
         self._data_mask_cache = (path, m)
         return m
 
+    def _apply_diffusion_prior(self, diff_prior, diff_kind, diff_weight,
+                               diff_weight_mode, diff_sds_t, diff_seed,
+                               leaves, render, dist_info):
+        """Accumulate the diffusion-prior gradient IN-PLACE onto each leaf's
+        ``.grad`` (which already holds the data gradient). Called once per
+        optimizer step, only when the prior fires.
+
+        ``leaves`` are the tensors whose ``.grad`` receives the contribution and
+        the relative-scale reference; ``render()`` returns the velocity tensor
+        the diffusion loss consumes. Three call shapes:
+          * grid mode        — leaves ``[vp]``,        render ``lambda: vp``
+          * reparam single   — leaves net params,      render ``lambda: net()``
+          * reparam two-pass — leaves ``[base_leaf]``, render ``lambda: base_leaf``
+            (the velocity leaf; its ``.grad`` is later pushed through the net).
+
+        ``weight_mode="relative"`` (default): scale the diffusion gradient so its
+        norm equals ``weight * ||current data gradient||`` (the raw RED gradient
+        is normalised + mean-reduced, hence tiny and dataset-dependent, so an
+        absolute weight is unintuitive). ``"absolute"``: add ``weight * grad``.
+
+        Uses ``torch.autograd.grad`` (returns the isolated diffusion gradient
+        without touching ``.grad``) then accumulates in place with ``add_`` — so
+        any external alias of ``.grad`` (e.g. two-pass ``v_grad``) stays valid.
+
+        RED (deterministic DiffPIR/DDIM) gives an identical gradient on every
+        rank, so adding it post all-reduce keeps DDP params in sync; SDS is
+        stochastic, so its RNG is reseeded identically per rank first.
+        """
+        import math
+        import torch  # fwi.py imports torch per-method, not at module scope
+        leaves = [p for p in leaves if p is not None and p.requires_grad]
+        if not leaves:
+            return
+        if diff_kind == "sds":
+            torch.manual_seed(int(diff_seed))
+            loss = diff_prior.sds_loss(render(), diff_sds_t[0], diff_sds_t[1])
+        else:
+            loss = diff_prior.red_loss(render())
+        grads = torch.autograd.grad(loss, leaves, allow_unused=True)
+        if diff_weight_mode == "absolute":
+            scale = float(diff_weight)
+            g_ref = g_diff = float("nan")
+        else:
+            g_ref = math.sqrt(sum(
+                float(p.grad.detach().pow(2).sum())
+                for p in leaves if p.grad is not None))
+            g_diff = math.sqrt(sum(
+                float(g.detach().pow(2).sum()) for g in grads if g is not None))
+            scale = (diff_weight * g_ref / g_diff) if g_diff > 0.0 else 0.0
+        for p, g in zip(leaves, grads):
+            if g is None:
+                continue
+            if p.grad is None:
+                p.grad = g.mul(scale)
+            else:
+                p.grad.add_(g, alpha=scale)      # in-place -> preserves aliases
+        if dist_info is not None and getattr(dist_info, "is_root", True):
+            print(f"[diff] {diff_kind}/{diff_weight_mode}: |g_data|={g_ref:.3e} "
+                  f"|g_diff_raw|={g_diff:.3e} scale={scale:.3e} "
+                  f"(target {diff_weight:.3g}x |g_data|)")
+
     def _fwi_train_step(self, spec, solver, wavelet, sources, receivers,
                         inv_in_order, inv_by_name, obs, optimizer, nshots, dev,
                         *, dist_info=None, stage_batchsize: int | None = None,
@@ -1239,6 +1353,10 @@ class FWIRunnerMixin:
                         state_for_dump: dict | None = None,
                         take_qc_snapshot: bool = True,
                         tv_prior=None, smooth_weight: float = 0.0,
+                        diff_prior=None, diff_weight: float = 0.0,
+                        diff_weight_mode: str = "relative",
+                        diff_kind: str = "red", diff_apply: bool = False,
+                        diff_sds_t=(0.02, 0.5), diff_seed: int = 0,
                         grad_smoother=None, grad_smooth_every: int = 1) -> float:
         """One outer optimizer step.
 
@@ -1545,6 +1663,21 @@ class FWIRunnerMixin:
                         (smooth_weight * tv_prior(_vp)).backward()
                 else:
                     (smooth_weight * tv_prior(reparam_net())).backward()
+            # Diffusion (DDPM) prior — accumulate its gradient onto the (already
+            # all-reduced) data gradient, gated by diff_apply (every N steps /
+            # from start_band). Deterministic RED is identical on every rank so
+            # it keeps params in sync; SDS is reseeded per rank inside the helper.
+            if diff_prior is not None and diff_apply:
+                if reparam_net is None:
+                    _dvp = inv_by_name.get("vp")
+                    _dleaves, _drender = [_dvp], (lambda: _dvp)
+                else:
+                    _dleaves = list(reparam_net.parameters())
+                    _drender = (lambda: reparam_net())
+                self._apply_diffusion_prior(
+                    diff_prior, diff_kind, diff_weight, diff_weight_mode,
+                    diff_sds_t, diff_seed, _dleaves, _drender, dist_info,
+                )
             # Gaussian gradient smoothing (grid-mode vp only), just before the
             # step so it smooths the FINAL (data + TV) gradient.
             if grad_smoother is not None and reparam_net is None:
@@ -1765,6 +1898,18 @@ class FWIRunnerMixin:
                 [p for p in reparam_net.parameters() if p.grad is not None],
                 dist_info,
             )
+            # Diffusion (DDPM) prior at the PARAM level, AFTER the all-reduce so
+            # the reference gradient is global and the (deterministic RED)
+            # contribution is identical on every rank -> params stay in sync.
+            # Equivalent to a leaf-level term pushed through the net (J^T dL/dvp),
+            # but correct under two-pass DDP (base_leaf.grad is a per-rank
+            # partial before the network backward).
+            if diff_prior is not None and diff_apply:
+                self._apply_diffusion_prior(
+                    diff_prior, diff_kind, diff_weight, diff_weight_mode,
+                    diff_sds_t, diff_seed, list(reparam_net.parameters()),
+                    (lambda: reparam_net()), dist_info,
+                )
             optimizer.step()
             # Two-pass leaks references to the leaf's grad tensor across
             # Adam steps unless we explicitly drop the leaf. Without this,
