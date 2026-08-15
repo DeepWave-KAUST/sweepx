@@ -130,7 +130,6 @@ class ForwardRunnerMixin:
     # -- wavefield ---------------------------------------------------------
 
     def _run_wavefield(self, spec: WavefieldSpec, task_dir: Path):
-        import torch
 
         _apply_seed(spec.seed)
         dev = _resolve_device(spec.device)

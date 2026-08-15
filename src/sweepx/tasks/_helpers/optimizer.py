@@ -1,5 +1,4 @@
 """Optimizer / scheduler construction + per-stage lr scaling. Verbatim from runner.py."""
-import torch
 
 def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
     """Construct a torch optimizer; supports per-model lr via dict."""

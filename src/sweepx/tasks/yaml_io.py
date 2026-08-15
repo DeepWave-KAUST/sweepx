@@ -15,7 +15,6 @@ from typing import Any
 import yaml
 from pydantic import TypeAdapter
 
-from sweep_tasks.registry import TASK_TYPES
 from sweep_tasks.schemas import TaskSpec
 
 _task_adapter: TypeAdapter[TaskSpec] = TypeAdapter(TaskSpec)

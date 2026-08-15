@@ -576,7 +576,6 @@ def _resample_vp_tensor(vp: "torch.Tensor", new_shape: tuple[int, ...]) -> "torc
     Returns a fresh leaf tensor (requires_grad=True) — caller is responsible
     for re-initialising the optimizer because Adam state is shape-bound.
     """
-    import torch
     import torch.nn.functional as F
 
     if tuple(vp.shape) == tuple(new_shape):

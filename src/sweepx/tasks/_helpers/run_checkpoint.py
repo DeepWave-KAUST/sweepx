@@ -1,7 +1,6 @@
 """Checkpoint save/load + top-row freeze. Verbatim from runner.py."""
 from pathlib import Path
 
-import torch
 
 def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
     if n_rows <= 0:

@@ -1,5 +1,4 @@
 """Reparameterisation network (VelocityINR) build + hash schedule + tiled render. Verbatim from runner.py."""
-import torch
 
 
 def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,

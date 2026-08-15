@@ -1108,7 +1108,6 @@ class FWIRunnerMixin:
         evenly across the current obs to give a representative cross-section
         of acquisition geometry.
         """
-        import torch
 
         try:
             from sweep_tasks import qc as qc_mod

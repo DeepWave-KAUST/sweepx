@@ -16,7 +16,6 @@ def _accumulate_illumination(solver, sill_sum, rill_sum):
     Either buffer may start as ``None``; the helper detach-clones the
     first snapshot and adds in-place thereafter.
     """
-    import torch
 
     sill = getattr(solver, "source_illumination", None)
     rill = getattr(solver, "receiver_illumination", None)

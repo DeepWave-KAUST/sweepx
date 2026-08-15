@@ -2,7 +2,6 @@
 import numpy as np
 import torch
 
-from sweep_tasks.schemas import ModelRef
 from sweep_tasks._helpers.model import _load_model_tensor, _model_names_for_equation
 
 def _apply_model_plan_to_fwi(

@@ -604,7 +604,7 @@ def _cmd_build_index(args) -> int:
     """``sweep-tasks build-index`` — scan raw SEG-Y → SEGYIndex npz."""
     import time
 
-    from sweep_io.segy_index import SEGYIndex, build_segy_index
+    from sweep_io.segy_index import build_segy_index
 
     # When invoked with -n N at the shell prompt (not already under MPI),
     # re-exec self via `mpiexec -n N sweep-tasks build-index --mpi ...`

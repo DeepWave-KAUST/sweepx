@@ -2,7 +2,6 @@
 import numpy as np
 from pathlib import Path
 
-from sweep_io.seismic_plan import PlanReader, SeismicPlan
 
 def _load_segy_single_file_payload(
     path: Path,
@@ -22,7 +21,6 @@ def _load_segy_single_file_payload(
     same file the runner reads it once.
     """
     from sweep_io.segy_index import (
-        SEGYIndex,
         build_segy_index,
         IndexedShotGatherDataset,
     )
