@@ -1,8 +1,9 @@
-"""Atomic checkpoint save/load for ``(model, optimizer, epoch, ...)``.
+"""Atomic checkpoint save/load.
 
-`model` is treated generically — anything with ``state_dict()`` /
-``load_state_dict()`` works. The same goes for `optimizer`. Plain tensors
-also work via a tiny adapter.
+:func:`save_payload` / :func:`load_payload` are the schema-free primitives
+(write ``.tmp`` then rename). :func:`save_run_checkpoint` /
+:func:`load_run_checkpoint` wrap them for a task directory, which is what
+the FWI and LSRTM runners use to checkpoint and resume.
 """
 
 from __future__ import annotations
@@ -12,69 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
-
-def _state_dict(obj: Any) -> Any:
-    if isinstance(obj, torch.Tensor):
-        return obj.detach().clone()
-    if hasattr(obj, "state_dict"):
-        return obj.state_dict()
-    raise TypeError(
-        f"Don't know how to serialize {type(obj).__name__}; needs state_dict() or be a Tensor."
-    )
-
-
-def _load_state(obj: Any, sd: Any) -> None:
-    if isinstance(obj, torch.Tensor):
-        with torch.no_grad():
-            obj.copy_(sd)
-        return
-    if hasattr(obj, "load_state_dict"):
-        obj.load_state_dict(sd)
-        return
-    raise TypeError(
-        f"Don't know how to restore {type(obj).__name__}; needs load_state_dict() or be a Tensor."
-    )
-
-
-def save_state(
-    path: str | Path,
-    *,
-    model: Any,
-    optimizer: Any | None = None,
-    epoch: int | None = None,
-    **extras: Any,
-) -> None:
-    """Save a checkpoint atomically (write to ``path.tmp`` then rename).
-
-    `extras` are stored verbatim and returned by ``load_state``.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {"model": _state_dict(model)}
-    if optimizer is not None:
-        payload["optimizer"] = _state_dict(optimizer)
-    if epoch is not None:
-        payload["epoch"] = int(epoch)
-    payload.update(extras)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    torch.save(payload, tmp)
-    os.replace(tmp, path)
-
-
-def load_state(
-    path: str | Path,
-    *,
-    model: Any,
-    optimizer: Any | None = None,
-    map_location: Any = "cpu",
-) -> dict[str, Any]:
-    """Restore a checkpoint. Returns the full payload (less ``model`` / ``optimizer``)."""
-    payload = torch.load(str(path), map_location=map_location)
-    _load_state(model, payload["model"])
-    if optimizer is not None and "optimizer" in payload:
-        _load_state(optimizer, payload["optimizer"])
-    return {k: v for k, v in payload.items() if k not in ("model", "optimizer")}
 
 
 def save_payload(
@@ -123,4 +61,15 @@ def load_payload(
     return torch.load(str(path), map_location=map_location, weights_only=weights_only)
 
 
-__all__ = ["save_state", "load_state", "save_payload", "load_payload"]
+def save_run_checkpoint(task_dir: "str | Path", payload: dict[str, Any]) -> Path:
+    """Write ``<task_dir>/checkpoint.pt`` atomically."""
+    return save_payload(Path(task_dir) / "checkpoint.pt", payload)
+
+
+def load_run_checkpoint(prev_task_dir: "str | Path") -> dict[str, Any]:
+    """Read ``<task_dir>/checkpoint.pt``. Raises FileNotFoundError if absent."""
+    return load_payload(Path(prev_task_dir) / "checkpoint.pt", weights_only=False)
+
+
+__all__ = ["save_payload", "load_payload",
+           "save_run_checkpoint", "load_run_checkpoint"]

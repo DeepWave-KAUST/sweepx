@@ -3,10 +3,10 @@ from pathlib import Path
 import numpy as np
 from sweep_tasks.schemas import LSRTMSpec, PhysicsSpec
 from sweep_tasks._helpers.bounds import _apply_bounds
-from sweep_tasks._helpers.run_checkpoint import (
-    _load_checkpoint,
-    _save_checkpoint,
-    _zero_top_rows,
+from sweep_tasks._helpers.bounds import _zero_top_rows
+from sweep_tasks.runtime.checkpoint import (
+    load_run_checkpoint as _load_checkpoint,
+    save_run_checkpoint as _save_checkpoint,
 )
 from sweep_tasks._helpers.geometry import _build_geometry_2d
 from sweep_tasks._helpers.loss import (

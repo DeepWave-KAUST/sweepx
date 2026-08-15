@@ -7,10 +7,10 @@ from sweep_tasks._helpers.bounds import (
     _apply_bounds,
     _effective_bound,
 )
-from sweep_tasks._helpers.run_checkpoint import (
-    _load_checkpoint,
-    _save_checkpoint,
-    _zero_top_rows,
+from sweep_tasks._helpers.bounds import _zero_top_rows
+from sweep_tasks.runtime.checkpoint import (
+    load_run_checkpoint as _load_checkpoint,
+    save_run_checkpoint as _save_checkpoint,
 )
 from sweep_tasks._helpers.data_loading import (
     _load_segy_index_payload,

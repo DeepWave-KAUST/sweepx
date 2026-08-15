@@ -41,3 +41,20 @@ def _apply_bounds(inv_tensors_by_name, bounds_by_name, *, skip_names=()) -> None
         if bound is None:
             continue
         t.data.clamp_(min=bound.min, max=bound.max)
+
+
+def _zero_top_rows(inv_tensors_in_order, n_rows: int) -> None:
+    """Freeze the top ``n_rows`` grid rows by zeroing their gradient in place.
+
+    Lives here rather than with the checkpoint helpers it used to share a
+    module with: it constrains the model, it has nothing to do with saving.
+    """
+    if n_rows <= 0:
+        return
+    for t in inv_tensors_in_order:
+        if t.grad is None:
+            continue
+        if t.grad.dim() >= 2:
+            t.grad[:n_rows].zero_()
+        else:
+            t.grad[:n_rows] = 0
