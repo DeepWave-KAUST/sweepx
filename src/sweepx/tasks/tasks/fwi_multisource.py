@@ -363,6 +363,38 @@ class MultisourceRunnerMixin:
         src_grid_xyz = np.stack([src_grid_x, src_grid_y, src_grid_z], axis=-1)
         _t = _stage("grid index projection (rint + stack)", _t)
 
+        # Lift CRG virtual sources (OBN nodes) into the water column. An OBN node
+        # snapped onto the discretized SEABED cell sits on a sharp impedance jump
+        # and radiates spurious near-field scattering; the estimated wavelet is
+        # also calibrated in water (1500 m/s), so the source medium must be water
+        # for its amplitude/phase to mean what it says. Clamp each source to the
+        # cell just above the seabed (``seabed_iz - 1``); ``min`` leaves sources
+        # already in water untouched. Mirrors plan_materialize._materialize_plan
+        # (the static-obs path) — without this the knob was silently ignored on
+        # the streaming multisource path.
+        _lift_water_vp = getattr(spec.geometry, "lift_source_to_water_vp", None)
+        _lift_seabed_m = None
+        if _lift_water_vp is not None:
+            _wv = float(_lift_water_vp)
+            _nonwater = np.abs(init_vp_np - _wv) > 1.0                  # (nz,ny,nx)
+            _seabed_iz = np.where(_nonwater.any(0), _nonwater.argmax(0), nz)
+            # Seabed depth in METRES on the base grid — grid-independent, so the
+            # per-stage re-projection in ``_grid_for_dh`` can re-apply the lift.
+            _lift_seabed_m = _seabed_iz.astype(np.float64) * float(dz_m) + origin_z
+            _sx, _sy = src_grid_xyz[:, 0], src_grid_xyz[:, 1]
+            _inb = (_sx >= 0) & (_sx < nx) & (_sy >= 0) & (_sy < ny)
+            _sb = np.full(src_grid_xyz.shape[0], nz, dtype=np.int64)
+            _sb[_inb] = _seabed_iz[_sy[_inb], _sx[_inb]]
+            _lifted = np.maximum(np.minimum(src_grid_xyz[:, 2], _sb - 1), 0)
+            _n_lift = int((_lifted < src_grid_xyz[:, 2]).sum())
+            src_grid_xyz[:, 2] = _lifted
+            if dist_info.is_root:
+                print(f"[multisource] lift_source_to_water_vp={_wv:g}: lifted "
+                      f"{_n_lift}/{src_grid_xyz.shape[0]} nodes into the water "
+                      f"column (seabed_iz [{int(_seabed_iz.min())},"
+                      f"{int(_seabed_iz.max())}])", flush=True)
+            _t = _stage("lift sources to water", _t)
+
         # When the grid is smaller than the rotated survey extent, drop
         # rows/groups whose source position falls outside.
         row_in = (
@@ -415,6 +447,19 @@ class MultisourceRunnerMixin:
                 np.rint((src_model_xy[:, 1] - origin_y) / dy_m).astype(np.int64),
                 np.rint((plan.group_xyz[:, 2] - origin_z) / dz_m).astype(np.int64),
             ], axis=-1)
+            # Re-apply the water lift: this re-derivation rebuilds the source z
+            # from the raw node depths, which would otherwise silently undo it.
+            if _lift_water_vp is not None and _lift_seabed_m is not None:
+                _by = np.clip(src_grid_xyz[:, 1], 0, _lift_seabed_m.shape[0] - 1)
+                _bx = np.clip(src_grid_xyz[:, 0], 0, _lift_seabed_m.shape[1] - 1)
+                _zmax = np.ceil((_lift_seabed_m[_by, _bx] - origin_z) / dz_m
+                                ).astype(np.int64) - 1
+                _nl = int((np.minimum(src_grid_xyz[:, 2], _zmax) < src_grid_xyz[:, 2]).sum())
+                src_grid_xyz[:, 2] = np.maximum(
+                    np.minimum(src_grid_xyz[:, 2], _zmax), 0)
+                if dist_info.is_root:
+                    print(f"[multisource] re-applied source lift after in-window "
+                          f"filter: {_nl}/{src_grid_xyz.shape[0]} nodes", flush=True)
             # Everything left is in-window by construction.
             row_in = np.ones(plan.n_rows, dtype=bool)
             slot_in = np.ones(plan.n_groups, dtype=bool)
@@ -700,6 +745,19 @@ class MultisourceRunnerMixin:
                 np.rint((_mr_src_model_xy[:, 1] - oy) / dh).astype(np.int64),
                 np.rint((_mr_grp_z - oz) / dh).astype(np.int64),
             ], axis=-1)
+            # Lift CRG virtual sources into the water column, re-applied HERE so
+            # every stage's re-projection keeps it (doing it once on the base grid
+            # is undone by this function). Uses the METRE-domain seabed depth, so
+            # it is grid-independent: clamp z to the last cell strictly above the
+            # seabed. ``min`` leaves sources already in water untouched.
+            if _lift_water_vp is not None and _lift_seabed_m is not None:
+                _bz = np.clip(np.rint((_mr_src_model_xy[:, 1] - oy) / _mr_base_dh
+                                      ).astype(np.int64), 0, _lift_seabed_m.shape[0] - 1)
+                _bx = np.clip(np.rint((_mr_src_model_xy[:, 0] - ox) / _mr_base_dh
+                                      ).astype(np.int64), 0, _lift_seabed_m.shape[1] - 1)
+                _sb_m = _lift_seabed_m[_bz, _bx]                       # seabed depth (m)
+                _zmax = np.ceil((_sb_m - oz) / dh).astype(np.int64) - 1
+                sg[:, 2] = np.maximum(np.minimum(sg[:, 2], _zmax), 0)
             return sh, pg, sg
 
         def _apply_stage_dh(dh, si):

@@ -832,6 +832,14 @@ class FreqSelectionSpec(_Forbid):
     # subset of this many nodes each iteration (matches the random ±1 path's
     # per-iter resampling). Must be <= number of comb bins (k_hi-k_lo+1).
     random_batch: int | None = Field(default=None, gt=0)
+    # When set (e.g. 1500.0 = water velocity), lift each freqsel node source off
+    # the seabed sediment cell into the water cell just above (per-node min):
+    # node_iz = min(node_iz, seabed_iz - 1), where seabed_iz is the first
+    # non-water cell (|vp - this| > 1) per (y, x) in the init vp. Keeps sources
+    # off the discretized seabed (source-on-interface near-field artifact); uses
+    # ``min`` so nodes already in water are left untouched. None (default) leaves
+    # the shard node_grid_xyz z unchanged.
+    lift_source_to_water_vp: float | None = None
 
     @model_validator(mode="after")
     def _one_source(self):

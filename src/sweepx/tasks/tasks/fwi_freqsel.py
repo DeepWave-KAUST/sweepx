@@ -190,6 +190,22 @@ class FreqselRunnerMixin:
             shards_glob = fspec.coeff_shards
         targets = fsl.FreqSelTargets(shards_glob, comb, ny_ or 1,
                                      verbose=rank == 0)
+        # node-clamp: lift freqsel node sources off the seabed sediment cell into
+        # the water cell just above (per-node min), from the init vp's seabed.
+        _lift = getattr(fspec, "lift_source_to_water_vp", None)
+        if _lift is not None and spec.init_model is not None and spec.init_model.path:
+            _iv = np.load(spec.init_model.path)                       # (nz, ny, nx)
+            _nw = np.abs(_iv - float(_lift)) > 1.0
+            _sb = np.where(_nw.any(0), _nw.argmax(0), _iv.shape[0])    # (ny, nx)
+            _ng = targets.node_grid
+            _yy = np.clip(_ng[:, 1].astype(int), 0, _sb.shape[0] - 1)
+            _xx = np.clip(_ng[:, 0].astype(int), 0, _sb.shape[1] - 1)
+            _sbn = _sb[_yy, _xx]
+            _nl = int((_ng[:, 2] > _sbn - 1).sum())
+            _ng[:, 2] = np.maximum(np.minimum(_ng[:, 2], _sbn - 1), 0)
+            if rank == 0:
+                print(f"[freqsel] lifted {_nl}/{len(_ng)} sources to water "
+                      f"(vp!={_lift:g}); seabed_iz [{int(_sb.min())},{int(_sb.max())}]", flush=True)
         sched = fsl.PoolScheduler(targets.node_grid, int(fspec.n_pools),
                                   comb.n_bins, seed=int(spec.seed) + 17,
                                   random_batch=getattr(fspec, "random_batch", None))
