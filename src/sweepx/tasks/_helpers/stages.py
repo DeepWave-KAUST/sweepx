@@ -182,7 +182,11 @@ def _prepare_stage(
             # `new_base == water_vp` reproduces the initial mask at the new shape.
             water_mask = None
             rspec = getattr(spec, "reparam", None)
-            if rspec is not None and bool(getattr(rspec, "mask_water_layer", False)):
+            # In water_reset_each_stage mode we do NOT re-pin here — the reset
+            # block below clears the render pin and re-bakes the water base so
+            # the water inverts freely within the stage.
+            if rspec is not None and bool(getattr(rspec, "mask_water_layer", False)) \
+                    and not bool(getattr(rspec, "water_reset_each_stage", False)):
                 water_vp_val = float(getattr(rspec, "water_vp_m_s", 1500.0))
                 water_mask = (new_base == water_vp_val)
             reparam_net.update_base_velocity(new_base, water_mask=water_mask)
@@ -203,6 +207,47 @@ def _prepare_stage(
                 new_by_name[name] = new_t
             state["inv_in_order"] = new_inv
             state["inv_by_name"] = new_by_name
+
+    # ---- Water reset-each-stage (free within stage) ------------------------
+    # reparam.water_reset_each_stage: snap the water column back to water_vp at
+    # the START of every stage, then let it invert FREELY within the stage. The
+    # INR is a GLOBAL additive net, so resetting the base alone is not enough —
+    # the net's learned water delta persists across stages. So (a) clear the
+    # render-time pin and (b) re-bake the base in the water region so the current
+    # render there equals water_vp (``base[water] += water_vp - render[water]``);
+    # as the net evolves the water drifts from water_vp, and the next stage snaps
+    # it back. Runs EVERY stage (incl. the fixed-grid path, where grid_changed is
+    # False and the block above is skipped). Deterministic → DDP-consistent.
+    _rspec = getattr(spec, "reparam", None)
+    _net = state.get("reparam_net")
+    if _net is not None and _rspec is not None \
+            and bool(getattr(_rspec, "water_reset_each_stage", False)):
+        _water_vp = float(getattr(_rspec, "water_vp_m_s", 1500.0))
+        _wr = state.get("water_region_mask")
+        if _wr is None or tuple(_wr.shape) != tuple(_net.base_velocity.shape):
+            # Prefer the seabed-based mask the net was built with; else fall back
+            # to pristine == water_vp resampled to the current shape.
+            _built = getattr(_net, "water_mask", None)
+            if _built is not None and tuple(_built.shape) == tuple(_net.base_velocity.shape):
+                _wr = _built.clone()
+            else:
+                _pri = _resample_vp_tensor(state["pristine_base_vp"], state["shape"])
+                _wr = (_pri == _water_vp)
+            state["water_region_mask"] = _wr
+        _net.water_mask = None  # free within the stage: drop the render-time pin
+        with torch.no_grad():
+            _render = _net()
+            _net.base_velocity[_wr] += (_water_vp - _render[_wr])
+            _render_post = _net().detach()
+        state["inv_by_name"]["vp"] = _render_post
+        state["inv_in_order"] = [
+            _render_post if n == "vp" else state["inv_by_name"][n]
+            for n in required_names
+        ]
+        if getattr(dist_info, "is_root", True):
+            print(f"[stage {stage_idx}] water reset-each-stage: snapped "
+                  f"{int(_wr.sum())} water cells to {_water_vp:.0f} m/s, "
+                  f"free within stage", flush=True)
 
     # ---- Rebuild solver ----------------------------------------------------
     if grid_changed or time_changed or "solver" not in state:

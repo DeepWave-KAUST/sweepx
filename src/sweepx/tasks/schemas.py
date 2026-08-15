@@ -1134,6 +1134,19 @@ class ReparamSpec(_Forbid):
     mask_water_layer: bool = False
     water_vp_m_s: float = Field(gt=0, default=1500.0)
     seabed_depth_path: Path | None = None
+    # Water-layer handling across multiscale stages. When False (default) and
+    # ``mask_water_layer`` is True, the water column is PINNED to ``water_vp_m_s``
+    # for the whole run (render-time ``where(mask, water_vp, vp)``). When True,
+    # the water is instead RESET to ``water_vp_m_s`` at the START of each stage
+    # (band) and then inverted FREELY within the stage — the runner clears the
+    # render-time pin and re-bakes the base in the water region so the first
+    # render of the stage equals ``water_vp_m_s`` (``base[water] += water_vp -
+    # render[water]``), after which the INR delta there evolves unconstrained.
+    # Prevents water drift from ACCUMULATING across bands (the failure mode of
+    # never-masked water) while still letting each band's data shape the water /
+    # near-seabed. Requires ``mask_water_layer=True`` (to define the water region
+    # via seabed_depth_path). Reparam mode only.
+    water_reset_each_stage: bool = False
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
     fourier: ReparamFourierSpec = Field(default_factory=ReparamFourierSpec)
     # Anisotropic lateral downsampling of the INR render: evaluate the
