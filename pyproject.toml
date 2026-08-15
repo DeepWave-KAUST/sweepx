@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweepx"
+version = "0.1.1"
+description = "Install handle for the sweep engine: `pip install sweepx`, then `import sweep`."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Shaowen Wang", email = "shaowen.wang@kaust.edu.sa"},
+]
+keywords = ["fwi", "geophysics", "seismic", "wave-equation", "meta-package"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+# The umbrella pulls the engine (`sweep-solver`) plus every companion that is
+# published. Now shipping: sweep-solver + sweep-agent (natural-language control
+# layer). Still unpublished: sweep-io/nn/opt/loss/viz/preproc/tasks/runner — add
+# them here when they ship; users keep the same `pip install sweepx`.
+# NOTE: sweep-agent depends on sweep-solver (not on sweepx) — no dependency cycle.
+dependencies = [
+    "sweep-solver>=0.1,<0.2",
+    "sweep-agent>=0.0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/DeepWave-KAUST/sweepx"
+Issues   = "https://github.com/DeepWave-KAUST/sweepx/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["sweepx*"]
