@@ -182,7 +182,7 @@ def _segy_geometry_to_grid_indices(payload, dh: float, *, dedupe: bool, dedup_me
     """
     pg = payload["physical_geometry"]
     obs = payload["obs"]
-    gg, mask = pg.to_grid(dh=(dh, dh), dedupe=dedupe, dedup_method=dedup_method)
+    gg, mask = pg.to_grid(dh=dh, dedupe=dedupe, dedup_method=dedup_method)
     uniform = bool(np.all(mask == mask[0:1]))
     if not dedupe or uniform:
         keep = np.flatnonzero(mask[0])
