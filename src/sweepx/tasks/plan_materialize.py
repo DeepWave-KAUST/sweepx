@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+from sweep_tasks._helpers.model import _model_array
 
 
 def _stamp(msg: str, t0: float, *, verbose: bool) -> float:
@@ -51,8 +52,14 @@ def _cache_key(spec, init_models, *, effective_dt, effective_nt, source_delay_s)
         "dh_xyz": list(geom.dh_xyz_m) if geom.dh_xyz_m else None,
         "origin": (list(geom.grid_origin_xyz_m) if geom.grid_origin_xyz_m else None),
         "pad": list(geom.auto_origin_pad_cells or (0, 0, 0)),
-        "init_vp": str(next((m.path for m in init_models if m.name == "vp"
-                             and m.path is not None), "const")),
+        # Identify the vp source in a way that is stable across all three
+        # ModelRef sources, so a dataset-backed run gets its own cache slot.
+        "init_vp": next((f"path:{m.path}" if m.path is not None else
+                         f"dataset:{m.dataset}:{m.preset}:{m.downsample}"
+                         if m.dataset is not None else f"const:{m.constant}")
+                        for m in init_models if m.name == "vp"),
+        "smooth": next((m.smooth_sigma_cells for m in init_models
+                        if m.name == "vp"), None),
         "nrec": ocfg.n_receivers_per_shot,
         "select": ocfg.receiver_select,
         "max_shots": ocfg.max_shots,
@@ -142,10 +149,7 @@ def materialize_plan_dataset(
 
     # ---- 3) load vp, auto-origin, model_plan crop --------------------------
     vp_ref = next((m for m in init_models if m.name == "vp"), init_models[0])
-    if vp_ref.constant is not None:
-        init_vp_np = np.full(tuple(vp_ref.shape), float(vp_ref.constant), dtype=np.float32)
-    else:
-        init_vp_np = np.load(vp_ref.path).astype(np.float32)
+    init_vp_np = _model_array(vp_ref)
 
     dh_xyz = geom.dh_xyz_m or (float(spec.grid.dh),) * 3
     dz_m, dy_m, dx_m = (float(dh_xyz[0]), float(dh_xyz[1]), float(dh_xyz[2]))
@@ -194,10 +198,7 @@ def materialize_plan_dataset(
     # Crop every inverted/aux model the same way.
     cropped_models: dict = {}
     for m in init_models:
-        if m.constant is not None:
-            arr = np.full(tuple(m.shape), float(m.constant), dtype=np.float32)
-        else:
-            arr = np.load(m.path).astype(np.float32)
+        arr = _model_array(m)
         cropped_models[m.name] = arr[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi].copy()
     init_vp_np = cropped_models["vp"] if "vp" in cropped_models else init_vp_np[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi]
     nz, ny, nx = init_vp_np.shape

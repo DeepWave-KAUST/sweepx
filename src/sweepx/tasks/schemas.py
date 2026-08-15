@@ -105,25 +105,70 @@ class CUDAOptionsModel(_Forbid):
 # ----- model reference ---------------------------------------------------
 
 class ModelRef(_Forbid):
-    """Reference to a model tensor by name (must appear in equation.MODEL_SPECS)."""
+    """Reference to a model tensor by name (must appear in equation.MODEL_SPECS).
+
+    Exactly one SOURCE must be given:
+
+    * ``path``     — an ``.npy`` file on disk.
+    * ``constant`` — a uniform value (``shape`` then required).
+    * ``dataset``  — a benchmark model from :mod:`sweep.datasets`, so a task
+      YAML is self-contained and needs no pre-dumped ``.npy``. Embedded
+      entries (``marmousi:2d-demo``, ``overthrust:2d-demo``) need no network;
+      the rest download once into ``$SWEEP_DATASETS_CACHE`` (default
+      ``~/.cache/sweep-datasets``). ``sweep datasets list`` shows the catalog.
+
+    Any source may be post-processed by ``smooth_sigma_cells``.
+    """
 
     name: str
     path: Path | None = None
     constant: float | None = None
     shape: tuple[int, ...] | None = None
 
+    # ----- dataset source ------------------------------------------------
+    # ``"<name>"`` or ``"<name>:<variant>"`` — e.g. "marmousi:2d-demo",
+    # "overthrust" (resolves to its default variant), "overthrust:3d-acoustic".
+    dataset: str | None = None
+    # Which key of the loader's returned dict to take. Defaults to ``name``,
+    # which is already the equation's model name ("vp" / "vs" / "rho"), so it
+    # only needs setting for off-label picks.
+    dataset_field: str | None = None
+    # Preset selector for the embedded demo entries — forwarded as the
+    # loader's ``name=`` kwarg ("vp_true" / "vp_smooth" / "vp_linear" for
+    # marmousi:2d-demo, "true" / "smooth" for overthrust:2d-demo).
+    preset: str | None = None
+    # Decimation forwarded to the loader (full-size benchmarks only). Scalar
+    # applies to every axis; a tuple is per-axis. Cuts both grid size and dh.
+    downsample: int | tuple[int, ...] | None = None
+
+    # ----- post-processing (any source) ----------------------------------
+    # Gaussian-smooth the loaded array by this sigma in CELLS. The standard
+    # way to derive a starting model from a true one without shipping a
+    # second file: ``dataset: overthrust`` + ``smooth_sigma_cells: 8``.
+    smooth_sigma_cells: float | None = Field(default=None, gt=0)
+
     @model_validator(mode="after")
     def _exactly_one_source(self):
-        has_path = self.path is not None
-        has_const = self.constant is not None
-        if has_path == has_const:
+        sources = [self.path is not None, self.constant is not None,
+                   self.dataset is not None]
+        if sum(sources) != 1:
             raise ValueError(
-                f"ModelRef '{self.name}': exactly one of `path` or `constant` must be set."
+                f"ModelRef '{self.name}': exactly one of `path`, `constant` or "
+                f"`dataset` must be set (got "
+                f"path={self.path!r}, constant={self.constant!r}, "
+                f"dataset={self.dataset!r})."
             )
-        if has_const and self.shape is None:
+        if self.constant is not None and self.shape is None:
             raise ValueError(
                 f"ModelRef '{self.name}': `shape` is required when `constant` is set."
             )
+        if self.dataset is None:
+            for f in ("dataset_field", "preset", "downsample"):
+                if getattr(self, f) is not None:
+                    raise ValueError(
+                        f"ModelRef '{self.name}': `{f}` only applies together "
+                        f"with `dataset`."
+                    )
         return self
 
 

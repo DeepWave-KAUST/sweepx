@@ -89,15 +89,115 @@ def _read_class_property(cls: type, name: str):
     return None
 
 
+# Loader results are cached per (dataset, preset, downsample): a single run
+# resolves the same ModelRef several times (shape inference, vmax probe, the
+# actual load), and a full-size benchmark costs a decode — or a download — each
+# time. Keyed by the resolved kwargs, so two refs sharing a dataset share the
+# decode.
+_DATASET_CACHE: dict = {}
+
+
+def _dataset_payload(ref: ModelRef) -> dict:
+    """Resolve ``ref.dataset`` to a :mod:`sweep.datasets` payload dict (cached).
+
+    Goes through ``info()`` + ``entry.loader()`` rather than ``load()``: the
+    embedded demo loaders select their preset with a ``name=`` kwarg, which
+    collides with ``load(name, variant, **kwargs)``'s own first parameter. The
+    license/citation announcement that ``load`` performs is reproduced here so
+    the terms still print once per process.
+    """
+    from sweep.datasets import info as _ds_info
+
+    ds_name, _, variant = str(ref.dataset).partition(":")
+    kwargs: dict = {}
+    if ref.preset is not None:
+        kwargs["name"] = ref.preset
+    if ref.downsample is not None:
+        kwargs["downsample"] = (int(ref.downsample)
+                                if isinstance(ref.downsample, int)
+                                else tuple(int(v) for v in ref.downsample))
+    key = (ds_name, variant or None,
+           tuple(sorted(kwargs.items(), key=lambda kv: kv[0])))
+    if key in _DATASET_CACHE:
+        return _DATASET_CACHE[key]
+
+    entry = _ds_info(ds_name, variant or None)
+    try:                                     # license notice is best-effort
+        from sweep.datasets.registry import _announce
+        _announce(entry)
+    except Exception:                        # noqa: BLE001
+        pass
+    try:
+        payload = dict(entry.loader(**kwargs))
+    except TypeError as err:
+        raise ValueError(
+            f"ModelRef '{ref.name}': dataset '{ref.dataset}' does not accept "
+            f"{sorted(kwargs)} ({err}). Embedded demo entries take `preset`; "
+            f"full-size entries take `downsample`."
+        ) from err
+    for k, v in (("name", entry.name), ("variant", entry.variant),
+                 ("citation", entry.citation), ("license", entry.license)):
+        payload.setdefault(k, v)
+    _DATASET_CACHE[key] = payload
+    return payload
+
+
+def _model_array(ref: ModelRef, base_dir: Path | None = None, *,
+                 mmap: bool = False) -> "np.ndarray":
+    """Resolve any ModelRef source to a float32 numpy array.
+
+    Single entry point for ``path`` / ``constant`` / ``dataset`` so a new
+    source works on EVERY task path rather than the handful that happen to
+    call the right helper. ``mmap`` is a hint honoured only for the ``path``
+    source with no smoothing (the other sources build arrays in memory
+    anyway); callers that only need ``.shape`` pass it to avoid a full read.
+    """
+    if ref.constant is not None:
+        arr = np.full(tuple(ref.shape), float(ref.constant), dtype=np.float32)
+    elif ref.dataset is not None:
+        payload = _dataset_payload(ref)
+        fields = sorted(k for k, v in payload.items() if hasattr(v, "shape"))
+        # Field pick, most explicit first. The sole-array fallback matters for
+        # the embedded demo entries: they return the SELECTED preset under the
+        # key "vp" whatever the preset was, so ``preset: vs_true`` on a ModelRef
+        # named "vs" would otherwise look for a "vs" key that never exists.
+        if ref.dataset_field is not None:
+            field = ref.dataset_field
+        elif ref.name in fields:
+            field = ref.name
+        elif len(fields) == 1:
+            field = fields[0]
+        else:
+            raise ValueError(
+                f"ModelRef '{ref.name}': dataset '{ref.dataset}' provides "
+                f"{fields} and none matches the model name. Set `dataset_field`."
+            )
+        if field not in payload:
+            raise ValueError(
+                f"ModelRef '{ref.name}': dataset '{ref.dataset}' has no field "
+                f"'{field}'. Available: {fields}."
+            )
+        arr = np.asarray(payload[field], dtype=np.float32)
+    else:
+        path = ref.path
+        if not path.is_absolute() and base_dir is not None:
+            path = (base_dir / path).resolve()
+        want_mmap = mmap and ref.smooth_sigma_cells is None
+        arr = np.load(path, mmap_mode="r" if want_mmap else None)
+        if not want_mmap:
+            arr = arr.astype(np.float32)
+
+    if ref.smooth_sigma_cells is not None:
+        from scipy.ndimage import gaussian_filter
+        arr = gaussian_filter(np.ascontiguousarray(arr, dtype=np.float32),
+                              sigma=float(ref.smooth_sigma_cells))
+    return arr
+
+
 def _load_model_tensor(ref: ModelRef, base_dir: Path | None = None) -> "torch.Tensor":
     import torch
 
-    if ref.constant is not None:
-        return torch.full(tuple(ref.shape), float(ref.constant), dtype=torch.float32)
-    path = ref.path
-    if not path.is_absolute() and base_dir is not None:
-        path = (base_dir / path).resolve()
-    arr = np.load(path).astype(np.float32)
+    arr = np.ascontiguousarray(_model_array(ref, base_dir), dtype=np.float32)
     return torch.from_numpy(arr)
 
 
@@ -107,5 +207,4 @@ def _infer_shape(models: list[ModelRef], grid_shape: tuple | None) -> tuple[int,
     first = models[0]
     if first.constant is not None:
         return tuple(int(v) for v in first.shape)
-    arr = np.load(first.path, mmap_mode="r")
-    return tuple(arr.shape)
+    return tuple(_model_array(first, mmap=True).shape)

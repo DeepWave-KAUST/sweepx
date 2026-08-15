@@ -35,6 +35,7 @@ from sweep_tasks._helpers.loss import (
 )
 from sweep_tasks._helpers.metadata import _dump_run_metadata
 from sweep_tasks._helpers.model import (
+    _model_array,
     _get_equation_class,
     _load_model_tensor,
     _model_names_for_equation,
@@ -262,7 +263,7 @@ class FWIRunnerMixin:
         elif init_models[0].constant is not None:
             shape = tuple(int(v) for v in init_models[0].shape)
         else:
-            shape = tuple(np.load(init_models[0].path, mmap_mode="r").shape)
+            shape = tuple(_model_array(init_models[0], mmap=True).shape)
 
         # 3) Build solver, wavelet, geometry.
         #    Gap 1: when data_plan.dt_target_s is set, the obs gets resampled
@@ -287,12 +288,10 @@ class FWIRunnerMixin:
         # CFL pre-check from the init_model vmax (cheap mmap peek).
         try:
             ref = init_models[0]
-            if ref.path is not None:
-                vmax_estimate = float(np.load(ref.path, mmap_mode="r").max())
-            elif ref.constant is not None:
+            if ref.constant is not None:
                 vmax_estimate = float(ref.constant)
             else:
-                vmax_estimate = 0.0
+                vmax_estimate = float(_model_array(ref, mmap=True).max())
             if vmax_estimate > 0 and dist_info.is_root:
                 _cfl_check(vmax_estimate, float(spec.grid.dh), effective_dt)
         except FileNotFoundError:
@@ -360,7 +359,7 @@ class FWIRunnerMixin:
                         )
                     else:
                         loaded_originals.append(
-                            (ref.name, np.load(ref.path).astype(np.float32))
+                            (ref.name, _model_array(ref))
                         )
                 model_plan_cropped, sources, receivers, model_plan_keep = _apply_model_plan_to_fwi(
                     spec, loaded_originals, sources, receivers, spec.grid.dh,
@@ -1076,8 +1075,7 @@ class FWIRunnerMixin:
             )
             true_in_order = []
             for n in required:
-                arr = np.load(by_name[n].path).astype(np.float32) if by_name[n].path is not None \
-                      else np.full(by_name[n].shape, float(by_name[n].constant), dtype=np.float32)
+                arr = _model_array(by_name[n])
                 dh_tuple = (float(spec.grid.dh),) * arr.ndim
                 cropped, _, _ = apply_model_plan(mp, arr, dh=dh_tuple, geom=None)
                 true_in_order.append(torch.from_numpy(np.ascontiguousarray(cropped)).to(dev))

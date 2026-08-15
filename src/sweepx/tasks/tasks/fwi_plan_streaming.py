@@ -57,6 +57,7 @@ from sweep_tasks._helpers.reparam import (
     _has_hash_schedule,
     _render_full_to_cpu_tiled,
 )
+from sweep_tasks._helpers.model import _model_array
 from sweep_tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
@@ -242,12 +243,7 @@ class PlanStreamingFWIMixin:
 
         # --- 2) Init model + shape + dh.
         init_models = _normalize_fwi_init_models(spec)
-        if init_models[0].path is None:
-            raise ValueError(
-                "Plan-streaming FWI requires init_model.path (a 3-D vp "
-                "npy); ModelRef.constant is not supported on this path."
-            )
-        init_vp_np = np.load(init_models[0].path).astype(np.float32)
+        init_vp_np = _model_array(init_models[0])
         if init_vp_np.ndim != 3:
             raise ValueError(
                 f"CRG-plan FWI expects a 3-D init_model (nz, ny, nx); "

@@ -14,6 +14,7 @@ from sweep_tasks._helpers.loss import (
     _mask_chunk,
 )
 from sweep_tasks._helpers.model import (
+    _model_array,
     _get_equation_class,
     _load_model_tensor,
 )
@@ -68,7 +69,7 @@ class LSRTMRunnerMixin:
         elif spec.background_model.constant is not None:
             shape = tuple(int(v) for v in spec.background_model.shape)
         else:
-            shape = tuple(np.load(spec.background_model.path, mmap_mode="r").shape)
+            shape = tuple(_model_array(spec.background_model, mmap=True).shape)
 
         # Background Acoustic solver uses the plain ["h1"] receiver type.
         bg_physics = PhysicsSpec(

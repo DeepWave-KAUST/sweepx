@@ -10,6 +10,7 @@ from sweep_tasks._helpers.dd import (
 from sweep_tasks._helpers.geometry import _build_geometry_2d
 from sweep_tasks._helpers.loss import _compute_loss
 from sweep_tasks._helpers.model import (
+    _model_array,
     _get_equation_class,
     _load_model_tensor,
 )
@@ -84,15 +85,13 @@ class RTMRunnerMixin:
         elif vm_ref.constant is not None:
             shape = tuple(int(v) for v in vm_ref.shape)
         else:
-            shape = tuple(np.load(vm_ref.path, mmap_mode="r").shape)
+            shape = tuple(_model_array(vm_ref, mmap=True).shape)
 
         try:
-            if vm_ref.path is not None:
-                vmax_estimate = float(np.load(vm_ref.path, mmap_mode="r").max())
-            elif vm_ref.constant is not None:
+            if vm_ref.constant is not None:
                 vmax_estimate = float(vm_ref.constant)
             else:
-                vmax_estimate = 0.0
+                vmax_estimate = float(_model_array(vm_ref, mmap=True).max())
             if vmax_estimate > 0 and dist_info.is_root:
                 _cfl_check(vmax_estimate, float(spec.grid.dh), effective_dt)
         except FileNotFoundError:

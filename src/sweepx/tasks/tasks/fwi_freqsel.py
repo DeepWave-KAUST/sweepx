@@ -42,6 +42,7 @@ from sweep_tasks._helpers.stages import (
     _resample_vp_tensor,
     _shape_for_dh,
 )
+from sweep_tasks._helpers.model import _model_array
 from sweep_tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
@@ -138,7 +139,7 @@ class FreqselRunnerMixin:
                     raise ValueError(
                         f"reparam.free_params '{_fp.name}' has no matching "
                         f"init_models entry with a path")
-                param_bases.append(_prep_base(np.load(_ref.path).astype(np.float32)))
+                param_bases.append(_prep_base(_model_array(_ref)))
 
         solver = _build_solver(spec.physics, spec.backend,
                                _solver_shape, float(dh),
@@ -207,8 +208,8 @@ class FreqselRunnerMixin:
         # node-clamp: lift freqsel node sources off the seabed sediment cell into
         # the water cell just above (per-node min), from the init vp's seabed.
         _lift = getattr(fspec, "lift_source_to_water_vp", None)
-        if _lift is not None and spec.init_model is not None and spec.init_model.path:
-            _iv = np.load(spec.init_model.path)                       # (nz, ny, nx)
+        if _lift is not None and spec.init_model is not None:
+            _iv = _model_array(spec.init_model)                      # (nz, ny, nx)
             _nw = np.abs(_iv - float(_lift)) > 1.0
             _sb = np.where(_nw.any(0), _nw.argmax(0), _iv.shape[0])    # (ny, nx)
             _ng = targets.node_grid
@@ -704,7 +705,7 @@ class FreqselRunnerMixin:
         _init_refs = _normalize_fwi_init_models(spec)
         _vp_ref = next((m for m in _init_refs
                         if getattr(m, "name", None) == "vp"), _init_refs[0])
-        vp0_native = np.load(_vp_ref.path).astype(np.float32)
+        vp0_native = _model_array(_vp_ref)
         if vp0_native.ndim not in (2, 3):
             raise ValueError("freqsel init must be 2-D (nz, nx) or 3-D "
                              f"(nz, ny, nx); got shape {vp0_native.shape}")
