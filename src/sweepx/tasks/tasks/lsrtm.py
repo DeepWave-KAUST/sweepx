@@ -58,7 +58,6 @@ class LSRTMRunnerMixin:
 
         _apply_seed(spec.seed)
         dev = _dist.resolve_dist_device(spec.device, dist_info.local_rank)
-        lsrtm_cls = _get_equation_class(spec.physics.equation)
 
         bg_equation_name = _lsrtm_background_equation(spec.physics.equation)
         bg_cls = _get_equation_class(bg_equation_name)
@@ -120,7 +119,6 @@ class LSRTMRunnerMixin:
         vp = bg_tensor
         ref = torch.zeros_like(vp, requires_grad=True)
         inv_by_name = {"reflectivity": ref}
-        inv_in_order = [ref]
         required_names = ["reflectivity"]
 
         total_epochs = (sum(s.epochs for s in spec.stages)

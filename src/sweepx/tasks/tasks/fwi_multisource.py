@@ -1535,8 +1535,6 @@ class MultisourceRunnerMixin:
             t_h2d = time.perf_counter() - t
             # The prefetcher absorbed the SEG-Y read AND the dt resample;
             # ``t_wait`` is the blocking portion (~0 when compute > io).
-            t_sample = 0.0  # sampling now happens inside the prefetch worker
-            t_io = t_wait + t_h2d
             t_resample = 0.0  # resample now happens inside the prefetch worker
 
             # Grid-indexed sources / receivers for this iter.

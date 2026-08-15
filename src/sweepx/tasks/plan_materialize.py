@@ -152,7 +152,9 @@ def materialize_plan_dataset(
 
     origin = geom.grid_origin_xyz_m
     pad = geom.auto_origin_pad_cells or (0, 0, 0)
-    pad_z, pad_y, pad_x = int(pad[0]), int(pad[1]), int(pad[2])
+    # pad[0] (z) is deliberately unused: z=0 is the sea-surface datum, so the
+    # z origin is pinned to 0.0 below. Only x/y get the PML buffer pad.
+    pad_y, pad_x = int(pad[1]), int(pad[2])
     if origin is None:
         x_min = float(min(src_model_xy[:, 0].min(), rec_model_xy[:, 0].min()))
         y_min = float(min(src_model_xy[:, 1].min(), rec_model_xy[:, 1].min()))

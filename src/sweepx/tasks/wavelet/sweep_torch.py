@@ -552,10 +552,6 @@ def prepare_wavelet_inversion_data(config: WaveletInversionConfig) -> PreparedWa
     else:
         src_xyz = np.asarray(plan.row_source_xyz, dtype=np.float64)
         rec_xyz = np.asarray(plan.row_receiver_xyz, dtype=np.float64)
-    source_x = src_xyz[:, 0]
-    source_z = src_xyz[:, 2]
-    receiver_x = rec_xyz[:, 0]
-    receiver_z = rec_xyz[:, 2]
     header_offsets = np.hypot(rec_xyz[:, 0] - src_xyz[:, 0],
                               rec_xyz[:, 1] - src_xyz[:, 1])
     # Preserve 2-D streamer sign convention so negative offsets survive

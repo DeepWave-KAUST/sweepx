@@ -58,7 +58,6 @@ def _prepare_stage(
 
     grid_changed = abs(new_dh - state["dh"]) > 1e-12
     time_changed = (abs(new_dt - state["dt"]) > 1e-12) or (new_nt != state["nt"])
-    bandpass_changed = stage.bandpass is not None or state.get("_active_bandpass") is not None
     wavelet_changed = stage.wavelet is not None or state.get("_stage_wavelet_idx", -1) != stage_idx
 
     if grid_changed and dist_info.is_root:
