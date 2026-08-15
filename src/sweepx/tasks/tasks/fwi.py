@@ -1064,12 +1064,18 @@ class FWIRunnerMixin:
         # When model_plan is active, crop the synthetic-from "true" tensors
         # the same way the init vp was cropped, so the solver (built at the
         # cropped shape) gets matching inputs.
-        if spec.model_plan is not None:
+        #
+        # getattr, not spec.model_plan: this helper is shared with the RTM
+        # runner, and RTMSpec has no `model_plan` field. Attribute access
+        # crashed every RTM run whose obs was NOT a plan (synthetic_from /
+        # npy_path / segy).
+        _model_plan = getattr(spec, "model_plan", None)
+        if _model_plan is not None:
             from sweep_io.plan import ModelPlan, apply_model_plan
             mp = ModelPlan(
-                x_window_m=spec.model_plan.x_window_m,
-                y_window_m=spec.model_plan.y_window_m,
-                z_window_m=spec.model_plan.z_window_m,
+                x_window_m=_model_plan.x_window_m,
+                y_window_m=_model_plan.y_window_m,
+                z_window_m=_model_plan.z_window_m,
                 drop_outside_sources=False,
                 drop_outside_receivers=False,
             )

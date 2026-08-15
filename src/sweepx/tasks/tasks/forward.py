@@ -147,10 +147,22 @@ class ForwardRunnerMixin:
               f"snapshots={spec.snapshot_times}")
 
         t0 = time.perf_counter()
-        record, snapshots = solver(
+        result = solver(
             wavelet, sources, receivers, models=models,
             return_wavefield=True, snapshot_times=list(spec.snapshot_times),
         )
+        # A backend without snapshot capture ignores ``return_wavefield`` /
+        # ``snapshot_times`` and hands back the record alone. Say which knob is
+        # unsupported, instead of dying on a tuple unpack one line down.
+        if not (isinstance(result, tuple) and len(result) == 2):
+            raise NotImplementedError(
+                f"backend.impl={spec.backend.impl!r} returned no wavefield "
+                "snapshots — it ignored return_wavefield=True. Snapshot "
+                "capture is implemented on the eager backend: set "
+                "`backend: {impl: eager}` for a wavefield task. (forward / "
+                "fwi / rtm tasks are unaffected and keep the compiled path.)"
+            )
+        record, snapshots = result
         elapsed = (time.perf_counter() - t0) * 1000.0
         record_np = record.detach().cpu().numpy()
         snapshots_np = snapshots.detach().cpu().numpy()

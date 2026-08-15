@@ -466,3 +466,48 @@ def test_lsrtm_reflectivity_bounds_round_trip(tmp_path):
     spec = load_task(yaml_path)
     assert spec.reflectivity_bounds.min == -0.1
     assert spec.reflectivity_bounds.max == 0.1
+
+
+def _registry_task_types():
+    from sweep_tasks.registry import TASK_TYPES
+    return list(TASK_TYPES)
+
+
+def test_every_task_type_has_an_init_template():
+    """`sweep-tasks init <t>` must cover every task type the registry accepts.
+
+    A missing template means `init` silently has no starting point for a task
+    type that `run` happily executes — the sort of gap that only shows up when
+    a user tries it.
+    """
+    from sweep_tasks.registry import TASK_TYPES
+    from sweep_tasks.yaml_io import _FILE_TEMPLATES
+
+    missing = sorted(set(TASK_TYPES) - set(_FILE_TEMPLATES))
+    assert not missing, f"task types with no bundled init template: {missing}"
+
+
+@pytest.mark.parametrize("task_type", sorted(_registry_task_types()))
+def test_init_template_validates(task_type, tmp_path, monkeypatch):
+    """Whatever `sweep-tasks init <t>` emits must load straight back in.
+
+    Globbed off the registry rather than a hardcoded list, so a new task type
+    cannot ship with a template that was never round-tripped.
+    """
+    import sys
+
+    from sweep_tasks.cli import main as _cli_main
+
+    for var in ("VIKING_HOME", "PROJECT_DATA_ROOT", "SWEEP_RUNS_ROOT",
+                "SWEEP_REPOS_ROOT", "MARMOUSI_HOME"):
+        monkeypatch.setenv(var, "/tmp/sweep-tasks-template-validation")
+    out = tmp_path / f"{task_type}.yaml"
+    monkeypatch.setattr(sys, "argv",
+                        ["sweep-tasks", "init", task_type, "-o", str(out)])
+    try:
+        _cli_main()
+    except SystemExit as exc:                       # argparse/CLI exit code 0
+        assert not exc.code, f"init {task_type} exited {exc.code}"
+    assert out.exists(), f"init {task_type} wrote nothing"
+    spec = load_task(out)
+    assert spec.task_type == task_type

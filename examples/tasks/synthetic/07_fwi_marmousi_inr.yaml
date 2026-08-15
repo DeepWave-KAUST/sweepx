@@ -1,0 +1,116 @@
+# Marmousi 2-D — implicit FWI (iFWI): the model IS a neural network.
+#
+# Teaches:  `reparam:` — instead of updating vp cell by cell, a coordinate
+#           network predicts vp(x, z) and the optimiser updates its WEIGHTS.
+#           The network's own smoothness acts as the regulariser.
+# Needs:    nothing (models from `sweep.datasets`); pulls `sweep-nn`.
+# Produces: output/inverted_vp.npy (the rendered model) + loss.npy.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/07_fwi_marmousi_inr.yaml
+#
+# What the network actually predicts here: a PERTURBATION added to the
+# starting model (`direct_velocity: false`), scaled by `vp_std`. So the net
+# starts near zero and the run starts from `init_model`, exactly like 02 —
+# only the parametrisation differs. `direct_velocity: true` would instead have
+# it predict absolute velocity, which needs `vp_mean` / `vp_std` set to the
+# model's own statistics and is the from-scratch setup.
+#
+# Two knobs that matter more than they look:
+#   * `lr` is the NETWORK learning rate, unrelated to `optimizer.lr` (which is
+#     ignored in reparam mode). 1e-4 is the usual working point for SIREN.
+#   * The hash encoder's `finest_resolution` caps the spatial detail the model
+#     can express. Too fine and the deep, poorly-illuminated section fills with
+#     speckle the data cannot constrain.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_inr
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_linear          # 1-D start — the INR has real work to do
+
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+reparam:
+  kind: velocity_inr
+  # --- SIREN trunk ---
+  hidden_features: 128
+  hidden_layers: 4
+  first_omega0: 30.0
+  hidden_omega0: 30.0
+  use_bias: false            # hash-encoded coords are in [0, 1]; bias hurts
+  # --- what the net outputs ---
+  direct_velocity: false     # predict a perturbation on top of init_model
+  vp_mean: 0.0
+  vp_std: 300.0              # perturbation scale in m/s
+  # --- multi-resolution hash encoding ---
+  hash:
+    enabled: true
+    levels: 12
+    features_per_level: 2
+    base_resolution: 4
+    finest_resolution: 256
+    backend: pytorch         # `triton` is the fused kernel, if sweep-nn has it
+  lr: 1.0e-4
+  backward_mode: two_pass_full
+  save_net: true             # dump the weights so a later run can warm-start
+
+optimizer:
+  kind: adam                 # still required by the schema
+  lr: 25.0                   # IGNORED in reparam mode — reparam.lr is used
+  eps: 1.0e-16
+
+loss:
+  kind: mse
+
+# The INR is a global function: an early high-frequency stage smears error
+# everywhere rather than locally. Frequency continuation matters MORE here
+# than in the grid-parametrised run, not less.
+stages:
+  - epochs: 40
+    bandpass: { lo_hz: 0.5, hi_hz: 4.0,  target: wavelet }
+  - epochs: 40
+    bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
+  - epochs: 40
+
+epochs: 120
+batchsize: 4
+show_every: 5
+
+qc:
+  every_n_epochs: 20
+  loss_curve: true

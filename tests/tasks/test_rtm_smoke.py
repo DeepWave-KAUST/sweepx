@@ -28,6 +28,10 @@ from sweep_tasks import (
     new_template,
 )
 
+# RTM always snapshots solver.source_illumination, which only the compiled
+# backend populates — so the end-to-end RTM test needs a real CUDA build.
+_CUDA = pytest.importorskip('torch').cuda.is_available()
+
 
 def _minimal_rtm_dict(tmp_path: Path) -> dict:
     # The path doesn't need to point at a real file for schema validation —
@@ -176,3 +180,56 @@ def test_rtm_local_window_shorthand(tmp_path):
     spec_dict["local_model_window"] = False
     spec2 = load_task_from_dict(spec_dict, base_dir=tmp_path)
     assert spec2.local_model_window is None
+
+
+@pytest.mark.skipif(not _CUDA, reason="RTM needs the compiled backend (impl='c')")
+def test_rtm_runs_end_to_end_with_synthetic_obs(tmp_path):
+    """RTM against `obs.synthetic_from` must actually run.
+
+    Regression: `_fwi_generate_obs` is shared with the RTM runner but read
+    `spec.model_plan` as an attribute, and `RTMSpec` has no such field — so
+    every RTM run whose obs was NOT a plan died with
+    `AttributeError: 'RTMSpec' object has no attribute 'model_plan'`.
+    Nothing caught it because the other RTM tests stop at schema parsing and
+    all of them use `obs.plan`.
+    """
+    import numpy as np
+    import yaml as _yaml
+
+    from sweep_tasks import TaskRunner, load_task
+
+    shape = (48, 48)
+    true_vp = (2200 + 600 * np.linspace(0, 1, shape[0])[:, None]
+               * np.ones(shape)).astype(np.float32)
+    smooth_vp = np.full(shape, 2500.0, dtype=np.float32)
+    true_path, smooth_path = tmp_path / "true.npy", tmp_path / "smooth.npy"
+    np.save(true_path, true_vp)
+    np.save(smooth_path, smooth_vp)
+
+    spec_dict = {
+        "task_type": "rtm",
+        "output_dir": str(tmp_path / "tasks"),
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 200},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
+        "geometry": {
+            "kind": "line",
+            "sources": {"step": 12, "depth": 2, "start": 6, "stop": 42},
+            "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44},
+        },
+        "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 12,
+                    "free_surface": False, "pml_type": "cpmlr",
+                    "source_type": ["h1"], "receiver_type": ["h1"]},
+        "backend": {"impl": "c"},
+        "velocity_model": {"name": "vp", "path": str(smooth_path)},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+        "imaging": {"shots_per_batch": 2},
+    }
+    yaml_path = tmp_path / "rtm_synth.yaml"
+    yaml_path.write_text(_yaml.safe_dump(spec_dict, sort_keys=False))
+
+    result = TaskRunner().run(load_task(yaml_path))
+    assert result.status.state == "success", result.status.error
+    image = np.load(result.task_dir / "output" / "rtm_image.npy")
+    assert image.shape == shape
+    assert np.all(np.isfinite(image)) and np.abs(image).max() > 0

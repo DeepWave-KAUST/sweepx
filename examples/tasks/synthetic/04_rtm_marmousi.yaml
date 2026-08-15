@@ -1,0 +1,81 @@
+# Marmousi 2-D — reverse-time migration.
+#
+# Teaches:  `task_type: rtm` — imaging with a FIXED velocity instead of
+#           inverting one, plus the imaging knobs that decide what the picture
+#           looks like (illumination normalisation, Laplacian post-filter).
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/image.npy + a migrated-image PNG.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/04_rtm_marmousi.yaml
+#
+# RTM is one pass, not a loop: cross-correlate the source wavefield with the
+# back-propagated data residual and stack over shots. The migration velocity
+# is `vp_smooth` — smooth enough to carry the kinematics without imprinting
+# its own reflectors on the image.
+
+task_type: rtm
+output_dir: ./sweep_runs
+task_id: rtm_marmousi
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+# Migration velocity — smooth, and deliberately NOT the true model.
+velocity_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
+
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+imaging:
+  shots_per_batch: 4
+  # Divide the raw correlation by the source illumination. Without this the
+  # image is dominated by the bright near-source zone and deep reflectors
+  # disappear under it.
+  normalize_by_illumination: true
+  illumination_epsilon: 1.0e-6
+  # Band-limit the data before imaging: below ~3 Hz there is no reflectivity
+  # to image, only the low-wavenumber tail that shows up as a smooth backdrop.
+  filter_lowcut_hz: 3.0
+  filter_highcut_hz: 20.0
+  filter_target: syn
+  # Depth-tapered z-axis low-cut: strips the smooth low-wavenumber backdrop a
+  # correlation-condition image always carries, while tapering the cut off with
+  # depth so the shallow section is not gutted. Also available standalone as
+  # `sweep-tasks filter-image <npy>` if you want to re-tune it without
+  # re-migrating.
+  post_filter:
+    wavelength_m: 300.0     # cut structure longer than this in z
+    depth_m: 600.0          # full strength below this depth
+    taper_m: 400.0          # ramp in over this interval
+    clip_percentile: 1.0    # display clip for the PNG only

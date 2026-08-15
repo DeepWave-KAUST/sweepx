@@ -1,0 +1,142 @@
+# Marmousi 2-D — the backend / memory knobs, in one place.
+#
+# Teaches:  what `backend:` actually controls. The physics and the gradient are
+#           IDENTICAL across every variant below — only speed and peak memory
+#           change. This file runs the default (fused CUDA + boundary saving);
+#           the alternatives are commented, ready to swap in.
+# Needs:    nothing (models from `sweep.datasets`).
+#
+# Run:
+#   sweep-tasks run examples/synthetic/08_fwi_marmousi_backends.yaml
+#
+# Swap one block at a time and compare wall time and `nvidia-smi` peak memory.
+# Epochs are cut to 10 so a sweep over the variants is quick.
+#
+# ---------------------------------------------------------------------------
+# The adjoint-memory ladder (`backend.impl: c`, `cuda_options.memory`)
+# ---------------------------------------------------------------------------
+# A time-domain adjoint needs the forward wavefield again on the way back.
+# Where you keep it is the whole trade:
+#
+#   strategy: full       store every time step.        Fastest, O(nt x N) memory.
+#                        Runs out of GPU well before a production 3-D grid.
+#
+#   strategy: boundary   store only the PML-zone slab and RECONSTRUCT the
+#                        interior backwards in time. Exact gradient at
+#                        O(nt x N_boundary). This is the production default.
+#       boundary.storage: gpu   slab stays on device — fastest
+#                         cpu   slab goes to host RAM; add
+#                               `transfer_interval` + `pinned_memory`
+#                         disk  slab goes to `disk_dir`; for the largest jobs
+#
+#   strategy: ckpt       store K snapshots and re-run forward between them.
+#                        Trades compute for memory; `chunks` sets K.
+#
+# ---------------------------------------------------------------------------
+# `impl: eager` — pure PyTorch autograd
+# ---------------------------------------------------------------------------
+# No compiled extension needed, runs on CPU, and every intermediate is a
+# regular tensor you can inspect. Roughly 30x slower and far hungrier for
+# memory. Use it to debug, to run without a GPU, or when `torch.compile`
+# fusion is what you want to measure.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_backends
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+# ---- variant A (active): fused CUDA + boundary saving on the GPU ----------
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+# ---- variant B: boundary slab on the host ---------------------------------
+# Frees device memory at the cost of PCIe traffic. `transfer_interval` batches
+# N time steps per host copy instead of one copy per step; `pinned_memory`
+# uses page-locked buffers so the DMA does not stage through pageable memory.
+#
+# backend:
+#   impl: c
+#   cuda_options:
+#     memory:
+#       strategy: boundary
+#       boundary:
+#         storage: cpu
+#         transfer_interval: 10
+#         pinned_memory: true
+
+# ---- variant C: checkpointing instead of boundary saving ------------------
+# Keeps `chunks` snapshots across the nt timeline and re-runs the forward
+# between them. Costs roughly one extra forward pass; memory drops to
+# O(chunks x N).
+#
+# backend:
+#   impl: c
+#   cuda_options:
+#     memory:
+#       strategy: ckpt
+#       ckpt:
+#         mode: chunk
+#         chunks: 64
+#         storage: gpu
+
+# ---- variant D: eager autograd, optionally torch.compile ------------------
+# The only variant that runs without a built CUDA extension.
+#
+# backend:
+#   impl: eager
+#   use_ckpt: false
+#   eager_options:
+#     use_compile: true
+#     compile_mode: default        # default | reduce-overhead | max-autotune
+#     compile_dynamic: false
+#     compile_fullgraph: false
+
+init_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
+
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16
+
+loss:
+  kind: mse
+
+epochs: 10                   # short on purpose — this file is for benchmarking
+batchsize: 4
+show_every: 1
+
+qc:
+  every_n_epochs: 9999

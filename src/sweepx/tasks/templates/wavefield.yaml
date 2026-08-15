@@ -1,0 +1,85 @@
+# =============================================================================
+# sweep-tasks — WAVEFIELD template (annotated reference)
+#
+#   sweep-tasks init wavefield -o my_wavefield.yaml
+#   sweep-tasks run my_wavefield.yaml
+#
+# A wavefield task is a forward run that ALSO dumps the pressure field at
+# chosen time steps. It is the quickest way to see what a physics knob does:
+# change one, re-run, compare the snapshots.
+# =============================================================================
+
+task_type: wavefield
+output_dir: ./sweep_runs          # run dirs are created underneath
+# task_id: my_wavefield           # default: <task_type>-<timestamp>
+device: auto                      # auto | cpu | cuda | cuda:0
+seed: 0
+
+# ---- grid -------------------------------------------------------------------
+grid:
+  dh: 12.5                        # cell size in metres (isotropic)
+  # shape: [281, 1361]            # (nz, nx). Omit to take it from the model.
+
+# ---- time -------------------------------------------------------------------
+time:
+  dt: 0.001                       # seconds. Must satisfy CFL — the runner checks.
+  nt: 3000                        # number of steps; total record = dt * nt
+
+# ---- source wavelet ---------------------------------------------------------
+wavelet:
+  kind: ricker                    # ricker | from_npy | siren_pipeline_npz
+  fm: 10.0                        # peak frequency (Hz)
+  delay: 0.15                     # seconds of lead-in before the peak
+  scale: 1.0
+
+# ---- acquisition ------------------------------------------------------------
+# One shot is usually what you want for snapshots — several sources overlap
+# into an unreadable picture.
+geometry:
+  kind: line                      # line | explicit | from_file | from_plan
+  sources:
+    step: 1
+    depth: 2                      # grid CELLS below the top, not metres
+    start: 680
+    stop: 681                     # stop is EXCLUSIVE -> exactly one shot
+  receivers:
+    step: 4
+    depth: 4
+    start: 4
+    stop: null                    # null = to the end of the grid
+
+# ---- physics ----------------------------------------------------------------
+physics:
+  equation: Acoustic              # `sweep-tasks run` on an introspect task
+                                  # lists every available equation
+  spatial_order: 8
+  abcn: 20                        # absorbing-boundary width in cells
+  free_surface: false             # true = pressure-release at z=0: adds the
+                                  # surface ghost and the surface multiples
+  pml_type: cpmlr
+  source_type: [h1]
+  receiver_type: [h1]
+
+# ---- backend ----------------------------------------------------------------
+backend:
+  impl: c                         # c = fused CUDA kernels; eager = pure torch
+                                  # (CPU-capable, ~30x slower)
+  use_ckpt: false
+
+# ---- models -----------------------------------------------------------------
+# Three interchangeable sources — pick exactly one per entry:
+#   dataset:  a sweep.datasets benchmark (`sweep datasets list`)
+#   path:     an .npy on disk
+#   constant: a uniform value (then `shape` is required)
+models:
+  - name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+    # path: /data/vp_true.npy
+    # constant: 2200.0
+    # shape: [120, 180]
+    # smooth_sigma_cells: 8       # gaussian smooth after loading (any source)
+
+# ---- snapshots --------------------------------------------------------------
+snapshot_times: [400, 900, 1500, 2400]   # time-step INDICES (t = index * dt)
+plot: true                               # also write a PNG per snapshot

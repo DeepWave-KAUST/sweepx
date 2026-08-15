@@ -155,9 +155,12 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
 
 # Task types whose ``new_template`` / ``sweep-tasks new`` output is sourced from
 # the bundled annotated ``templates/<task_type>.yaml`` reference — the SAME file
-# `sweep-tasks init` ships, so the two commands never drift. Types not listed
-# here (introspect, wavefield) have no bundled file and use ``_TEMPLATES`` above.
-_FILE_TEMPLATES: tuple[str, ...] = ("forward", "fwi", "rtm", "lsrtm")
+# `sweep-tasks init` ships, so the two commands never drift. This now covers
+# every task type in the registry, so ``sweep-tasks init <any task_type>``
+# always yields an annotated, runnable starting point.
+_FILE_TEMPLATES: tuple[str, ...] = (
+    "introspect", "forward", "wavefield", "fwi", "rtm", "lsrtm",
+)
 
 
 def _read_bundled_template(task_type: str) -> str:

@@ -1,0 +1,97 @@
+# Marmousi 2-D — least-squares RTM.
+#
+# Teaches:  `task_type: lsrtm` — inverting for REFLECTIVITY at a fixed
+#           background velocity, and how it differs from both RTM and FWI.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/reflectivity.npy, loss.npy, per-epoch QC.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/05_lsrtm_marmousi.yaml
+#
+# Where it sits between 02 and 04:
+#   * 04 (RTM)   — one adjoint pass. Fast, but the image carries the
+#                  acquisition footprint and the source signature.
+#   * 05 (LSRTM) — iterate on that image so the DEMIGRATED data matches the
+#                  observed scattered field. Same physics, but the result is
+#                  deconvolved and better balanced.
+#   * 02 (FWI)   — inverts the velocity itself; a much harder, non-linear
+#                  problem. LSRTM keeps velocity fixed and stays linear.
+#
+# The runner builds the scattered data itself as forward(true) - forward(bg),
+# so obs is purely the reflected wavefield.
+
+task_type: lsrtm
+output_dir: ./sweep_runs
+task_id: lsrtm_marmousi
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 7000
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 1.0
+
+geometry:
+  kind: line
+  sources:   { step: 50, depth: 1 }
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: AcousticLSRTM      # Born-scattering variant; the background
+                               # propagator is picked automatically
+  source_type: [h1]
+  receiver_type: [sh1]         # MUST be set: LSRTM records the SCATTERED
+                               # field (`sh1`), not the total field. The schema
+                               # default is `[h1]`, which this equation rejects
+                               # — `sweep-tasks run` on an introspect task with
+                               # action: describe_equation lists the valid
+                               # field names.
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+# Fixed background — the reflectivity is what gets inverted.
+background_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
+
+true_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_true
+
+optimizer:
+  kind: adam
+  lr: 0.02                     # reflectivity is O(0.1), not O(1000) like vp —
+                               # nothing like the lr the FWI examples use
+  eps: 1.0e-16
+
+loss:
+  kind: mse
+
+epochs: 30
+batchsize: 4
+show_every: 5
+
+# Reflectivity is a relative perturbation; bound it so a stray gradient
+# cannot drive it somewhere unphysical.
+reflectivity_bounds:
+  min: -0.3
+  max: 0.3
+
+# The top rows sit above the first reflector and only ever accumulate
+# source-side noise. Freezing them keeps that out of the image.
+freeze_top_n_rows: 10
+
+# Note: LSRTMSpec has no `qc:` block — the runner writes the loss curve and
+# per-epoch reflectivity snapshots unconditionally, paced by `show_every`.

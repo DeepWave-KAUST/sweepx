@@ -1,0 +1,73 @@
+# Marmousi 2-D — wavefield snapshots with a free surface.
+#
+# Teaches:  `task_type: wavefield` — dump the pressure field at chosen time
+#           steps instead of only recording at receivers. The fastest way to
+#           see what the physics knobs actually do.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/wavefield_*.npy + one PNG per snapshot.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml
+#
+# `physics.free_surface: true` puts a pressure-release boundary at z=0, so the
+# snapshots show the downgoing wave AND its polarity-flipped surface ghost,
+# plus the surface multiples that follow. Flip it to false and re-run: the
+# ghost and the multiples disappear and only the direct wavefront is left.
+# That difference is the whole reason marine FWI has to model a free surface.
+
+task_type: wavefield
+output_dir: ./sweep_runs
+task_id: wavefield_snapshots
+seed: 0
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 3000                   # 3 s — long enough for a few surface bounces
+
+wavelet:
+  kind: ricker
+  fm: 10.0
+  delay: 0.15
+
+# One shot near the middle of the model, receivers across the whole surface.
+geometry:
+  kind: line
+  sources:
+    step: 1
+    depth: 2
+    start: 680
+    stop: 681
+  receivers:
+    step: 4
+    depth: 4
+    start: 4
+    stop: null
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: true         # <- flip to false and compare the snapshots
+  pml_type: cpmlr
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: eager                # NOT `c`: snapshot capture (return_wavefield +
+                             # snapshot_times) is implemented on the eager
+                             # backend only. The compiled path records at
+                             # receivers and discards the interior field, which
+                             # is exactly what makes it fast. nt is small here
+                             # so eager is still quick.
+
+models:
+  - name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+# Time steps to dump, in samples (t = index * dt).
+snapshot_times: [400, 900, 1500, 2400]
+plot: true
