@@ -580,6 +580,18 @@ class FWIRunnerMixin:
         snapshots_dir = out_dir / "epochs"
         if dist_info.is_root:
             snapshots_dir.mkdir(exist_ok=True)
+            # Dump the RESOLVED starting model next to the result. With the
+            # `dataset` / `linear_gradient` sources there is no file on disk to
+            # point at afterwards, so without this every QC plot has to rebuild
+            # the starting model by hand from config_resolved.yaml — and drift
+            # the moment a parameter changes. Written before training so an
+            # interrupted run still records where it started.
+            for _ref in init_models:
+                try:
+                    np.save(out_dir / f"initial_{_ref.name}.npy", _model_array(_ref))
+                except Exception as _e:      # noqa: BLE001 — never kill a run over QC
+                    print(f"[fwi] initial-model dump skipped for "
+                          f"'{_ref.name}': {_e}")
         _dist.barrier(dist_info)
         epoch_global = start_epoch
 
@@ -927,6 +939,12 @@ class FWIRunnerMixin:
                 p = out_dir / f"inverted_{name}.npy"
                 np.save(p, t.detach().cpu().numpy())
                 artifacts.append(p)
+            # The starting models were written at run start; list them as
+            # artifacts so `sweep-tasks tasks status` reports them too.
+            for _ref in init_models:
+                _ip = out_dir / f"initial_{_ref.name}.npy"
+                if _ip.exists():
+                    artifacts.append(_ip)
             loss_path = out_dir / "loss.npy"
             np.save(loss_path, np.array(losses, dtype=np.float64))
             artifacts.append(loss_path)

@@ -178,3 +178,52 @@ def test_linear_gradient_is_exclusive_with_other_sources():
         ModelRef(name="vp", shape=(10, 10), dataset="marmousi:2d-demo",
                  linear_gradient={"vmin": 1500.0, "vmax": 4000.0})
 
+
+
+# ----- the run dir records where the inversion started ---------------------
+
+def test_fwi_writes_the_resolved_initial_model(tmp_path):
+    """`output/initial_vp.npy` must land next to the result.
+
+    With an in-memory source (`dataset` / `linear_gradient`) there is no input
+    file to point at afterwards, so without this dump a QC plot has to rebuild
+    the starting model by hand and drifts the moment a parameter changes.
+    """
+    import yaml as _yaml
+
+    true_path = tmp_path / "true.npy"
+    np.save(true_path, (2200 + 600 * np.linspace(0, 1, 48)[:, None]
+                        * np.ones((48, 48))).astype(np.float32))
+    spec_dict = {
+        "task_type": "fwi",
+        "output_dir": str(tmp_path / "tasks"),
+        "seed": 0,
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 200},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
+        "geometry": {"kind": "line",
+                     "sources": {"step": 12, "depth": 2, "start": 6, "stop": 42},
+                     "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44}},
+        "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 12,
+                    "free_surface": False, "pml_type": "cpmlr",
+                    "source_type": ["h1"], "receiver_type": ["h1"]},
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "init_model": {"name": "vp", "shape": [48, 48],
+                       "linear_gradient": {"vmin": 2000.0, "vmax": 3000.0,
+                                           "water_rows": 4}},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+        "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
+        "epochs": 1, "batchsize": 2,
+    }
+    yaml_path = tmp_path / "init_dump.yaml"
+    yaml_path.write_text(_yaml.safe_dump(spec_dict, sort_keys=False))
+
+    result = TaskRunner().run(load_task(yaml_path))
+    assert result.status.state == "success", result.status.error
+    dumped = result.task_dir / "output" / "initial_vp.npy"
+    assert dumped.exists(), "the run dir does not record its starting model"
+    expected = _model_array(load_task(yaml_path).init_model)
+    np.testing.assert_allclose(np.load(dumped), expected)
+    # and it is genuinely the START, not a copy of the result
+    assert not np.array_equal(np.load(dumped),
+                              np.load(result.task_dir / "output" / "inverted_vp.npy"))
