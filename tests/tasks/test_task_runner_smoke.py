@@ -795,3 +795,50 @@ def test_fwi_obs_segy_index_lazy_prefetched_load(tmp_path):
     losses_eager = np.load(Path(base["output_dir"]) / "eager" / "output" / "loss.npy")
     losses_lazy  = np.load(Path(base["output_dir"]) / "lazy" / "output" / "loss.npy")
     np.testing.assert_allclose(losses_eager, losses_lazy, rtol=1e-5)
+
+
+def test_stage_wavelet_bandpass_does_not_leak_into_next_stage(tmp_path, monkeypatch):
+    """A stage that bandpasses the WAVELET must not leave its narrow-band
+    wavelet behind for the following stage.
+
+    ``target='wavelet'`` writes the filtered wavelet back into the same
+    ``state["wavelet"]`` slot. A later stage that keeps the same dt/nt,
+    overrides no wavelet, and uses the default ``target='syn'`` used to
+    inherit that narrow band while its obs was re-derived from pristine at
+    the wider band — leaving syn and obs on different bands. The wavelet is
+    now rebuilt from spec at every stage entry.
+    """
+    from sweep_tasks._helpers.wavelet_build import _build_wavelet
+    from sweep_tasks.tasks.fwi import FWIRunnerMixin
+
+    spec_dict = _fwi_smoke_spec(
+        tmp_path,
+        stages=[
+            {"epochs": 1, "bandpass": {"lo_hz": 1.0, "hi_hz": 6.0, "target": "wavelet"}},
+            {"epochs": 1, "bandpass": {"lo_hz": 1.0, "hi_hz": 30.0, "target": "syn"}},
+        ],
+    )
+
+    seen: list[np.ndarray] = []
+    original = FWIRunnerMixin._fwi_train_step
+
+    def _spy(self, spec, solver, wavelet, *args, **kwargs):
+        arr = wavelet.detach().cpu().numpy() if hasattr(wavelet, "detach") else np.asarray(wavelet)
+        seen.append(np.array(arr, copy=True))
+        return original(self, spec, solver, wavelet, *args, **kwargs)
+
+    monkeypatch.setattr(FWIRunnerMixin, "_fwi_train_step", _spy)
+
+    spec = load_task(_write(spec_dict, tmp_path / "wav_leak.yaml"))
+    result = TaskRunner().run(spec)
+    assert result.status.state == "success", result.status.error
+    assert len(seen) == 2, f"expected one train step per stage, got {len(seen)}"
+
+    pristine = np.asarray(_build_wavelet(spec.wavelet, spec.time), dtype=np.float64)
+
+    # Guard against a vacuous pass: stage 0 really must have been filtered.
+    assert not np.allclose(seen[0], pristine, atol=1e-6), (
+        "stage 0 wavelet was not band-passed; the test would prove nothing"
+    )
+    # The regression: stage 1 gets the pristine broadband wavelet back.
+    np.testing.assert_allclose(seen[1], pristine, rtol=1e-6, atol=1e-6)

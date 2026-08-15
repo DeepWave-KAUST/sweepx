@@ -35,15 +35,19 @@ def _prepare_stage(
 ) -> None:
     """Mutate ``state`` so the runner can run this stage end-to-end.
 
-    Detects which of ``(dh, dt, nt, bandpass, wavelet, batch_size, lr_scale)``
-    changed against the previous stage state. Triggers any combination of:
+    Detects which of ``(dh, dt, nt, batch_size, lr_scale)`` changed against the
+    previous stage state. Triggers any combination of:
 
     - vp resample (bilinear) + fresh leaf tensors
     - solver rebuild at the new ``(shape, dh, dt, nt)``
     - geometry re-snap from the cached pristine PhysicalGeometry
-    - obs rebuild from the cached pristine obs (time-resample + bandpass)
-    - wavelet rebuild
     - optimizer re-init (Adam state is shape-bound) + initial_lrs cache
+
+    Two things are rebuilt UNCONDITIONALLY on every stage entry, both from
+    their pristine source rather than from the previous stage's result: the
+    obs (time-resample + bandpass from the cached pristine obs) and the
+    wavelet (``_build_wavelet`` from spec). That is what makes per-stage
+    bandpasses non-composing, as the schema documents.
     """
     import torch
 
@@ -58,7 +62,6 @@ def _prepare_stage(
 
     grid_changed = abs(new_dh - state["dh"]) > 1e-12
     time_changed = (abs(new_dt - state["dt"]) > 1e-12) or (new_nt != state["nt"])
-    wavelet_changed = stage.wavelet is not None or state.get("_stage_wavelet_idx", -1) != stage_idx
 
     if grid_changed and dist_info.is_root:
         print(f"[stage {stage_idx}] dh: {state['dh']} -> {new_dh}")
@@ -259,32 +262,22 @@ def _prepare_stage(
             state["local_solver_cache"].clear()
 
     # ---- Rebuild wavelet ---------------------------------------------------
-    # Rebuild from spec when:
-    #   * time grid changed, or
-    #   * stage explicitly overrides the wavelet, or
-    #   * first stage (no cached wavelet yet), or
-    #   * the stage is about to bandpass the wavelet (``target='wavelet'``):
-    #     we MUST start from the pristine broadband wavelet rather than
-    #     re-filtering whatever the previous stage's bandpass left behind,
-    #     otherwise the per-stage filters compose (e.g. 1-4 Hz then 1-7 Hz
-    #     stays effectively 1-4 Hz). The schema docs guarantee
-    #     ``stages don't compose their filters``; this branch enforces it.
-    rebuilt_wavelet = False
-    bp_will_filter_wavelet = (
-        stage.bandpass is not None
-        and getattr(stage.bandpass, "target", "syn") == "wavelet"
+    # Rebuild the wavelet from spec at EVERY stage entry. ``_build_wavelet`` is
+    # a deterministic function of (spec, dt, nt) and costs one array build (plus
+    # at most one small npz read), so rebuilding unconditionally is cheap — and
+    # it is the only way to guarantee the schema's promise that stages do NOT
+    # compose their filters.
+    #
+    # A conditional rebuild is not enough. ``target='wavelet'`` writes the
+    # FILTERED wavelet back into this same cache slot, and nothing else ever
+    # resets it. So a later stage that keeps the same dt/nt, overrides no
+    # wavelet, and uses the default ``target='syn'`` would silently inherit the
+    # earlier stage's narrow-band source while its obs is re-derived from
+    # pristine at the new band — leaving syn and obs on different bands.
+    wav_spec = stage.wavelet if stage.wavelet is not None else spec.wavelet
+    state["wavelet"] = _build_wavelet(
+        wav_spec, spec.time, override_dt=new_dt, override_nt=new_nt,
     )
-    if (
-        time_changed
-        or stage.wavelet is not None
-        or "wavelet" not in state
-        or bp_will_filter_wavelet
-    ):
-        wav_spec = stage.wavelet if stage.wavelet is not None else spec.wavelet
-        state["wavelet"] = _build_wavelet(
-            wav_spec, spec.time, override_dt=new_dt, override_nt=new_nt,
-        )
-        rebuilt_wavelet = True
 
     # ---- Optional wavelet bandpass (target='wavelet') ----------------------
     # When ``stage.bandpass.target == 'wavelet'``, we band-pass the source
@@ -292,11 +285,10 @@ def _prepare_stage(
     # without per-iteration filtering in the autograd path. fwi_workflow-dev
     # filters syn (target='syn'); both yield equivalent gradients for a
     # linear wave equation.
+    # The wavelet above is always freshly built from spec, so this filter is
+    # applied to the pristine broadband wavelet every time — never composed.
     bp_spec = stage.bandpass
-    if bp_spec is not None and getattr(bp_spec, "target", "syn") == "wavelet" \
-            and (rebuilt_wavelet or state.get("_wavelet_bandpass_at") != (
-                float(new_dt), int(new_nt), float(bp_spec.lo_hz), float(bp_spec.hi_hz),
-                int(bp_spec.order), bp_spec.padtype)):
+    if bp_spec is not None and getattr(bp_spec, "target", "syn") == "wavelet":
         # Bandpass the wavelet via scipy (non-autograd: wavelet is constant
         # input to the solver). One-shot per stage, so cheap. Handle both
         # numpy and torch wavelet objects (build_wavelet returns numpy for
@@ -321,10 +313,6 @@ def _prepare_stage(
             state["wavelet"] = torch.from_numpy(wav_filt).to(wav_device)
         else:
             state["wavelet"] = wav_filt
-        state["_wavelet_bandpass_at"] = (
-            float(new_dt), int(new_nt), float(bp_spec.lo_hz), float(bp_spec.hi_hz),
-            int(bp_spec.order), bp_spec.padtype,
-        )
         if dist_info.is_root:
             peak = float(np.abs(wav_filt).max())
             print(f"[stage {stage_idx}] wavelet bandpass "
@@ -444,9 +432,7 @@ def _prepare_stage(
         if dist_info.is_root:
             print(f"[stage {stage_idx}] bandpass {stage.bandpass.lo_hz}-{stage.bandpass.hi_hz} Hz "
                   f"order={stage.bandpass.order} ({_flavor})")
-    state["_active_bandpass"] = stage.bandpass
     state["obs"] = obs_t
-    state["_stage_wavelet_idx"] = stage_idx
 
     # ---- Source dedupe + obs stacking --------------------------------------
     # At coarse dh, the source spacing (typically 25 m for Viking-class
