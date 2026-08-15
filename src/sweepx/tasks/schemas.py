@@ -297,7 +297,7 @@ class FromPlanGeometry(_Forbid):
     layout varies across shots.
 
     For ``grouping="crg"`` (3-D OBN): pair with
-    :class:`ObsPlanConfig.sampling` to drive the multisource supershot
+    :class:`ObsPlanConfig.sampling` to drive the plan-streaming supershot
     loop. ``rotation_metadata`` + ``dh_xyz_m`` + ``grid_origin_xyz_m`` /
     ``auto_origin_pad_cells`` then project UTM xyz into the propagator's
     axis-aligned model frame.
@@ -1027,11 +1027,11 @@ class QCSpec(_Forbid):
     # smaller (12) because we plot one shot per row instead of multi-shot).
     shot_gather_interleave_block: int = Field(ge=1, default=12)
     loss_curve: bool = True
-    # 3-D multisource (CRG-plan + supershot) QC products. Independent
+    # 3-D plan-streaming (CRG-plan + supershot) QC products. Independent
     # flags so the legacy ``shot_gather`` knob (per-physical-shot rich
     # 2-D panel) doesn't double-duty for the very different
     # encoded-supershot 3-panel. Defaults True because for the
-    # multisource path these are the primary visualizations.
+    # plan-streaming path these are the primary visualizations.
     supershot_panel: bool = True
     well_logs: bool = True
 
@@ -1098,7 +1098,7 @@ class ReparamSpec(_Forbid):
     # Dump the trained reparam-net state_dict to ``<task_dir>/reparam_net.pt`` at
     # the end of the run (declarative counterpart to ``init_from``): for offline
     # hash-feature analysis or warm-starting a later run. Honored by both the
-    # freqsel and multisource paths. The env var SWEEP_SAVE_REPARAM_NET=1 forces it
+    # freqsel and plan-streaming paths. The env var SWEEP_SAVE_REPARAM_NET=1 forces it
     # on regardless (backward compat). Off by default (large file).
     save_net: bool = False
     hidden_features: int = Field(ge=1, default=64)
@@ -1494,7 +1494,7 @@ class ObsSpec(_Forbid):
       - ``segy_index`` — load from a multi-file SEG-Y index (Option B).
       - ``plan`` — unified SeismicPlan reader (Option C — the canonical
         path for both 2-D CSG and 3-D CRG; set ``obs.plan.sampling`` to
-        opt into the OBN multisource supershot loop).
+        opt into the OBN plan-streaming supershot loop).
     """
 
     synthetic_from: ModelRef | None = None

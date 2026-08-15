@@ -1,4 +1,4 @@
-"""End-to-end smoke for the unified OBN multisource FWI path (TASK 019).
+"""End-to-end smoke for the unified OBN plan-streaming FWI path (TASK 019).
 
 Synthesises a tiny ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`
 + SEG-Y survey + rotation_metadata.json on disk, then runs
@@ -52,7 +52,7 @@ def _write(spec_dict, path: Path) -> Path:
     return path
 
 
-def _build_tiny_multisource_fixture(tmp_path: Path) -> dict[str, Path]:
+def _build_tiny_plan_streaming_fixture(tmp_path: Path) -> dict[str, Path]:
     """Build init_vp + rotation + wavelet + SEG-Y + grouping='crg' SeismicPlan.
 
     Layout: 2 virtual sources (OBN nodes, aka plan groups) sharing 2
@@ -139,7 +139,7 @@ def _build_tiny_multisource_fixture(tmp_path: Path) -> dict[str, Path]:
         group_id=group_id,
         group_xyz=group_xyz,
         group_offsets=group_offsets,
-        build_meta={"label": "tiny_multisource_fixture"},
+        build_meta={"label": "tiny_plan_streaming_fixture"},
     )
     plan_path = tmp_path / "plan.npz"
     plan.save(plan_path)
@@ -152,7 +152,7 @@ def _build_tiny_multisource_fixture(tmp_path: Path) -> dict[str, Path]:
     }
 
 
-def _build_multisource_spec(
+def _build_plan_streaming_spec(
     tmp_path: Path, fixture: dict[str, Path],
     *, batchsize: int = 2, epochs: int = 2, extra: dict | None = None,
 ) -> dict:
@@ -201,9 +201,9 @@ def _build_multisource_spec(
     return spec
 
 
-def test_multisource_fwi_encoded_smoke_runs(tmp_path):
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture)
+def test_plan_streaming_fwi_encoded_smoke_runs(tmp_path):
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture)
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "ss.yaml")))
     assert result.status.state == "success", result.status.error
     # final outputs land on disk.
@@ -219,7 +219,7 @@ def test_multisource_fwi_encoded_smoke_runs(tmp_path):
 def test_crg_plan_without_sampling_runs_static_reciprocal_path(tmp_path):
     """``obs.plan`` without ``sampling`` is NOT an error on a CRG plan.
 
-    Dropping ``sampling`` routes away from ``_run_fwi_multisource`` into the
+    Dropping ``sampling`` routes away from ``_run_fwi_plan_streaming`` into the
     static single-source path, which materialises the plan by reciprocity
     (``plan_materialize``: group = OBN node = virtual source, its recorded
     air-gun positions = receivers). That is a supported shape, so the run must
@@ -229,8 +229,8 @@ def test_crg_plan_without_sampling_runs_static_reciprocal_path(tmp_path):
     ``min_receivers`` is lowered because this fixture gives each node only 2
     shots; the default floor of 8 would drop every group.
     """
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture)
     spec["obs"]["plan"].pop("sampling")
     spec["obs"]["plan"]["min_receivers"] = 2
     spec.pop("source_encoding", None)
@@ -249,8 +249,8 @@ def test_crg_plan_geometry_only_rejects_csg_static_loader(tmp_path):
     ``_load_seismic_plan_payload``, which supports ``grouping='csg'`` only.
     A CRG plan on that route must fail with a message naming the grouping.
     """
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture)
     spec.pop("source_encoding", None)
     spec["obs"] = {"synthetic_from": {"name": "vp",
                                       "path": str(fixture["init_vp"])}}
@@ -260,7 +260,7 @@ def test_crg_plan_geometry_only_rejects_csg_static_loader(tmp_path):
     assert "csg" in err and "crg" in err
 
 
-def test_multisource_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
+def test_plan_streaming_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
     """Per-shot CRG (multi-GPU) mode is now wired. With
     source_encoding absent, the runner must NOT raise the old
     ``Per-shot CRG ... not yet wired`` NotImplementedError at init.
@@ -269,8 +269,8 @@ def test_multisource_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
     a working sweep CUDA build, but the failure must no longer reference
     the per-shot-not-implemented gate.
     """
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture)
     spec.pop("source_encoding")
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "noenc.yaml")))
     err = (result.status.error or "").lower()
@@ -279,10 +279,10 @@ def test_multisource_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
     assert "per-shot crg" not in err
 
 
-def test_multisource_fwi_emits_ortho_slice_qc(tmp_path):
+def test_plan_streaming_fwi_emits_ortho_slice_qc(tmp_path):
     """qc.vp_png with 3-D vp should drop a 1×3 orthogonal-slice PNG."""
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture, epochs=1)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
     spec["qc"] = {
         "every_n_epochs": 1,
         "vp_png": True, "vp_diff_png": True, "gradient_png": False,
@@ -297,7 +297,7 @@ def test_multisource_fwi_emits_ortho_slice_qc(tmp_path):
     assert diff_pngs, "no vp_diff PNG written"
 
 
-def test_multisource_fwi_model_plan_crop_is_origin_aware(tmp_path):
+def test_plan_streaming_fwi_model_plan_crop_is_origin_aware(tmp_path):
     """Regression: model_plan.x_window_m is interpreted in MODEL-frame
     meters relative to the same origin that the auto-grid + source/
     receiver projection use. Previously the crop computed indices via
@@ -313,8 +313,8 @@ def test_multisource_fwi_model_plan_crop_is_origin_aware(tmp_path):
     grid and get filtered out → run still succeeds but with fewer
     eligible groups.
     """
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture, epochs=1)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
     spec["task_id"] = "crop_origin_aware"
     # The tiny fixture's auto-origin should be slightly negative
     # (pad=2 cells × dh=50 = 100m to the left of bbox.min).
@@ -342,14 +342,14 @@ def test_multisource_fwi_model_plan_crop_is_origin_aware(tmp_path):
     assert cfg["model_plan"]["x_window_m"] == [0.0, 1200.0]
 
 
-def test_multisource_fwi_qc_flags_gate_each_product(tmp_path):
-    """All four multisource-specific QC products honor their own flags:
+def test_plan_streaming_fwi_qc_flags_gate_each_product(tmp_path):
+    """All four plan-streaming-specific QC products honor their own flags:
     flipping each to False should skip emission; flipping True turns
     it back on. Single end-to-end smoke covers all four toggles.
     """
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    # Pass 1: all four multisource QC products OFF.
-    spec_off = _build_multisource_spec(tmp_path, fixture, epochs=1)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    # Pass 1: all four plan-streaming QC products OFF.
+    spec_off = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
     spec_off["task_id"] = "qc_flags_off"
     spec_off["qc"] = {
         "every_n_epochs": 1,
@@ -368,7 +368,7 @@ def test_multisource_fwi_qc_flags_gate_each_product(tmp_path):
     assert not (qc_off / "loss_curve.png").exists(), "loss_curve.png should be absent"
 
     # Pass 2: all four ON.
-    spec_on = _build_multisource_spec(tmp_path, fixture, epochs=1)
+    spec_on = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
     spec_on["task_id"] = "qc_flags_on"
     spec_on["qc"] = {
         "every_n_epochs": 1,
@@ -387,15 +387,15 @@ def test_multisource_fwi_qc_flags_gate_each_product(tmp_path):
     assert (qc_on / "loss_curve.png").exists(), "loss_curve.png missing"
 
 
-def test_multisource_fwi_with_smooth_reg_and_seabed_freeze(tmp_path):
-    """Wire TVPrior + SeabedFreezeMask through the multisource path."""
-    fixture = _build_tiny_multisource_fixture(tmp_path)
+def test_plan_streaming_fwi_with_smooth_reg_and_seabed_freeze(tmp_path):
+    """Wire TVPrior + SeabedFreezeMask through the plan-streaming path."""
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     # Seabed-depth npy: shape (ny, nx) = (16, 24); seabed at z=100m
     # everywhere -> freeze rows 0..1 (with dh=50m -> z_idx=2 cutoff).
     sb = np.full((16, 24), 100.0, dtype=np.float64)
     sb_path = tmp_path / "seabed_depth.npy"
     np.save(sb_path, sb)
-    spec = _build_multisource_spec(tmp_path, fixture, epochs=2)
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2)
     spec["smooth_regularization"] = {
         "weight": 1.0e-3, "order": "first",
         "x_weight": 1.0, "y_weight": 1.0, "z_weight": 1.0,
@@ -414,10 +414,10 @@ def test_multisource_fwi_with_smooth_reg_and_seabed_freeze(tmp_path):
     np.testing.assert_allclose(inv[:2, :, :], init[:2, :, :])
 
 
-def test_multisource_fwi_requires_shared_shots_per_iter(tmp_path):
+def test_plan_streaming_fwi_requires_shared_shots_per_iter(tmp_path):
     """sampling.shared_shots_per_iter=0 must fail with a clear error."""
-    fixture = _build_tiny_multisource_fixture(tmp_path)
-    spec = _build_multisource_spec(tmp_path, fixture)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture)
     # Schema enforces ge=1 on shared_shots_per_iter, so spec validation
     # itself rejects this — verify the error path.
     spec["obs"]["plan"]["sampling"]["shared_shots_per_iter"] = 0
@@ -426,14 +426,14 @@ def test_multisource_fwi_requires_shared_shots_per_iter(tmp_path):
         load_task(_write(spec, tmp_path / "noshared.yaml"))
 
 
-def test_multisource_fwi_data_mask_runs_end_to_end(tmp_path):
+def test_plan_streaming_fwi_data_mask_runs_end_to_end(tmp_path):
     """The data_mask switch runs end-to-end through the real TaskRunner FWI:
     a broadcasting all-ones mask drives a full masked-misfit training loop to a
     finite loss + output, exercising the new `_loss_sum`/`_mask_chunk` path."""
-    fixture = _build_tiny_multisource_fixture(tmp_path)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     ones = tmp_path / "ones_mask.npy"
     np.save(ones, np.ones((1,), dtype=np.float32))  # broadcasts over (nshots,nt,nrec[,nchan])
-    spec = _build_multisource_spec(tmp_path, fixture, epochs=2, extra={
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
         "loss": {"kind": "mse", "data_mask_path": str(ones)},
     })
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "masked.yaml")))

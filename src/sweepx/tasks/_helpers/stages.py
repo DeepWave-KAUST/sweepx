@@ -388,7 +388,7 @@ def _prepare_stage(
     #
     # GPU path (default when obs is on CUDA): reuse the canonical FFT
     # zero-phase Butterworth from sweep_tasks.preproc — same implementation
-    # used by ``_run_fwi_multisource``'s per-iter encoded supershot path.
+    # used by ``_run_fwi_plan_streaming``'s per-iter encoded supershot path.
     # ~30× faster than scipy ``sosfiltfilt`` on Marmousi-scale obs
     # (1 GB float32), drops stage-entry time from ~10 s to <0.5 s.
     # CPU fallback: scipy ``sosfiltfilt`` with the configured padtype.
@@ -641,7 +641,7 @@ def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
 
     Thin wrapper around :func:`sweep_tasks.preproc.filter.bandpass_torch` —
     the same canonical zero-phase GPU FFT Butterworth used by the obs
-    stage-entry filter and by the multisource-encoded FWI path. Going
+    stage-entry filter and by the plan-streaming encoded FWI path. Going
     through one impl across syn, obs, and wavelet ensures the filter
     response is identical and avoids the latent NaN risk of
     ``torchaudio.functional.filtfilt`` without padding on narrow bands.

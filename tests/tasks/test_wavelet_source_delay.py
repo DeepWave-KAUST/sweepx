@@ -1,5 +1,5 @@
 """Tests for ``_get_wavelet_source_delay_s`` — the helper used by the
-multisource runner to align obs to the SIREN-pipeline wavelet's
+plan-streaming runner to align obs to the SIREN-pipeline wavelet's
 zero-prepad frame.
 
 Without this alignment, syn (which fires the wavelet array verbatim —

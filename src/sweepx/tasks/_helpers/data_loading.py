@@ -75,8 +75,8 @@ def _load_seismic_plan_payload(
     streamers). CRG-grouped plans never come through here; they take one of
     two other routes, both via ``obs.plan``:
 
-    * ``obs.plan.sampling`` set → the per-iter multisource sampler in
-      :meth:`TaskRunner._run_fwi_multisource`, which calls
+    * ``obs.plan.sampling`` set → the per-iter plan-streaming sampler in
+      :meth:`TaskRunner._run_fwi_plan_streaming`, which calls
       :func:`sweep_io.seismic_plan.sample_shared_shots_from_plan` +
       :meth:`PlanReader.read_rows` directly.
     * ``obs.plan.sampling`` unset → :func:`plan_materialize.
@@ -108,7 +108,7 @@ def _load_seismic_plan_payload(
             "has no CRG reciprocity. A CRG plan has two supported routes, "
             "both driven by obs.plan pointing at the same plan: set "
             "obs.plan.sampling (PlanSamplingConfig) for the per-iter "
-            "supershot pipeline (_run_fwi_multisource), or leave sampling "
+            "supershot pipeline (_run_fwi_plan_streaming), or leave sampling "
             "unset for a static reciprocal dataset (plan_materialize: node "
             "= virtual source, its air-gun positions = receivers)."
         )

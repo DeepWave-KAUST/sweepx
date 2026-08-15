@@ -1,4 +1,4 @@
-"""Unit tests for ``save_supershot_qc_panel`` — the per-iter multisource
+"""Unit tests for ``save_supershot_qc_panel`` — the per-iter plan-streaming
 QC product (encoded-supershot obs/syn interleave + spectrum + survey map).
 
 The helper is pure (just plots numpy arrays) so these tests don't spin

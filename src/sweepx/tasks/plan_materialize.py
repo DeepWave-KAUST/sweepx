@@ -18,7 +18,7 @@ Grouping semantics (source = ``group_xyz`` in both cases):
 
 The geometry pipeline (rotation → model frame → auto grid-origin → model_plan
 crop → grid-index projection → in-window filter) mirrors
-``_run_fwi_multisource`` setup so a conventional run lands on the SAME grid as
+``_run_fwi_plan_streaming`` setup so a conventional run lands on the SAME grid as
 the encoded run it is compared against.
 """
 from __future__ import annotations

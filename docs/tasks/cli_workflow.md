@@ -134,8 +134,8 @@ sweep-tasks build-plan \
 CRG plans go through the same `geometry.kind: from_plan` + `obs.plan:`
 YAML as CSG; the only OBN-specific thing is the `obs.plan.sampling`
 sub-block (`PlanSamplingConfig`) that enables the per-iter
-multisource supershot loop with ±1 source encoding. The runner auto-
-detects this and dispatches to the dedicated multisource training loop;
+plan-streaming supershot loop with ±1 source encoding. The runner auto-
+detects this and dispatches to the dedicated plan-streaming training loop;
 no separate `from_crg_plan` / `obs.crg_plan` / `build-crg-plan` symbols
 exist anymore. See `examples/tasks/obn3d_fwi_encoded.yaml` for the canonical
 shape.
@@ -382,7 +382,7 @@ When enabled, the runner adds these files per target to `artifacts`:
 | Drop far-offset noise | `... --offset-max-m 5000` |
 | Random sub-sample per group | `... --max-traces-per-group 100 --seed 42` |
 | OBN receiver-gather build | `sweep-tasks build-plan --index idx.npz --grouping crg --receiver-quantize-m 0.5 --out crg_plan.npz` |
-| OBN multisource supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + `obs.plan.sampling.shared_shots_per_iter > 0` |
+| OBN plan-streaming supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + `obs.plan.sampling.shared_shots_per_iter > 0` |
 | Inspect a plan | `python -c "from sweep_io.seismic_plan import SeismicPlan; p=SeismicPlan.load('plan.npz'); print(p.grouping, p.n_groups, p.n_rows, p.build_meta)"` |
 | Run FWI on a plan | `sweep-tasks run fwi.yaml` (with `geometry.kind=from_plan` + `obs.plan.plan_path`) |
 | Post-filter a saved RTM npy | `sweep-tasks filter-image runs/.../rtm_image_per_shot_normalised.npy` |

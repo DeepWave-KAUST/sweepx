@@ -1,4 +1,18 @@
-"""Frequency-selection (source-encoding) FWI task runner (mixin). Verbatim from runner.py."""
+"""Frequency-coefficient (DTFT shard) FWI task runner (mixin).
+
+Dispatched when ``source_encoding.mode == "frequency_selection"``. Obs is
+a set of pre-extracted per-node DTFT coefficient shards, so this path
+touches NO SEG-Y and needs NO wavelet: the GCN coherence misfit is
+invariant to any per-node complex scale, which absorbs the source
+spectrum, excitation delay and sensor coupling.
+
+Note the word "encoding" means something different here than in
+:mod:`sweep_tasks.tasks.fwi_plan_streaming`: that path encodes in TIME
+with ±1 signs on a supershot, this one divides the FREQUENCY axis into a
+comb. See ``_run_fwi``'s dispatch table.
+
+Extracted from runner.py.
+"""
 from pathlib import Path
 import os
 from sweep_tasks.schemas import FWISpec
@@ -340,7 +354,7 @@ class FreqselRunnerMixin:
             if not use_reparam:
                 return vp
             if dd_on:
-                # Mirror the multisource DD path (_dd_render_tile): render ONLY
+                # Mirror the plan-streaming DD path (_dd_render_tile): render ONLY
                 # this rank's solver tile so the reparam render divides across
                 # tiles, instead of every rank rendering the full grid each
                 # iteration (the dominant per-iter cost at fine grids).
@@ -540,7 +554,7 @@ class FreqselRunnerMixin:
                         grads.append(_gg)
                     net.backward_gradients(grads, chunk_rows=chunk_rows)
             elif dd_on and use_reparam:
-                # Tile-grad path (mirrors multisource _dd_backward_tile): g
+                # Tile-grad path (mirrors plan-streaming _dd_backward_tile): g
                 # covers only this rank's tile window; zero the water inside
                 # the window, push it through the net tile-locally, and let
                 # _dd_backward_tile all_reduce the PARAM grads. Called
@@ -767,7 +781,7 @@ class FreqselRunnerMixin:
             # opt-in: dump the reparam net weights (reparam.save_net or the
             # SWEEP_SAVE_REPARAM_NET=1 env override) so per-level hash features can
             # be rendered offline. Off by default (large file). Mirrors the
-            # multisource path; freqsel writes to task_dir root (alongside
+            # plan-streaming path; freqsel writes to task_dir root (alongside
             # inverted_vp.npy), not task_dir/output.
             if (use_reparam and net is not None
                     and (spec.reparam.save_net

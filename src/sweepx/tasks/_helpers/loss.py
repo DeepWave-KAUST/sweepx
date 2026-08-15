@@ -1,7 +1,7 @@
 """Misfit / loss helpers.
 
 Extracted verbatim from ``runner.py`` — behaviour is bit-identical; only the
-location changed. Consumed by the fwi / multisource / freqsel / rtm / lsrtm
+location changed. Consumed by the fwi / plan-streaming / freqsel / rtm / lsrtm
 task paths, so it lives here as a single source of truth.
 """
 import numpy as np

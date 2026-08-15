@@ -1,4 +1,20 @@
-"""Multisource (streaming CRG/plan) FWI task runner (mixin). Verbatim from runner.py."""
+"""Plan-streaming FWI task runner (mixin).
+
+Dispatched when ``obs.plan.sampling`` is set on a ``grouping='crg'``
+SeismicPlan. The defining trait of this path is HOW OBS ARRIVES: it is
+streamed from SEG-Y per iteration (shared-shot sampling +
+``PlanReader.read_rows`` behind a prefetch pool), rather than being one
+static tensor built up front.
+
+Source encoding is an OPTION WITHIN this path, not what selects it:
+``source_encoding.enabled=true`` runs the ±1 encoded supershot (one
+forward+adjoint per iter), ``false`` runs the per-shot CRG mode. Do not
+read the module name as "the encoded path" — the frequency-domain encoded
+path is :mod:`sweep_tasks.tasks.fwi_freqsel`, and the static CRG path is
+:mod:`sweep_tasks.plan_materialize`. See ``_run_fwi``'s dispatch table.
+
+Extracted from runner.py.
+"""
 from pathlib import Path
 from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
 from sweep_tasks.preproc.filter import (
@@ -59,8 +75,8 @@ from sweep_tasks._helpers.wavelet_build import (
 )
 
 
-class MultisourceRunnerMixin:
-    def _run_fwi_multisource(self, spec: FWISpec, task_dir: Path):
+class PlanStreamingFWIMixin:
+    def _run_fwi_plan_streaming(self, spec: FWISpec, task_dir: Path):
         """3-D OBN FWI driver — unified plan + UTM rotation + source encoding.
 
         Implements the production OBN 1-GPU path on the unified plan stack:
@@ -113,7 +129,7 @@ class MultisourceRunnerMixin:
 
         if spec.obs.plan is None or spec.obs.plan.sampling is None:
             raise ValueError(
-                "_run_fwi_multisource requires obs.plan.sampling to be set "
+                "_run_fwi_plan_streaming requires obs.plan.sampling to be set "
                 "(PlanSamplingConfig — see ObsPlanConfig.sampling)."
             )
         sampling_cfg = spec.obs.plan.sampling
@@ -173,7 +189,7 @@ class MultisourceRunnerMixin:
         _t_setup0 = time.perf_counter()
         def _stage(label: str, t_start: float) -> float:
             now = time.perf_counter()
-            print(f"[multisource] setup {label}: {now - t_start:.2f}s "
+            print(f"[plan-stream] setup {label}: {now - t_start:.2f}s "
                   f"(cumulative {now - _t_setup0:.2f}s)")
             return now
 
@@ -183,13 +199,13 @@ class MultisourceRunnerMixin:
         _t = _stage(f"SeismicPlan.load (n_rows={plan.n_rows:,}, n_groups={plan.n_groups})", _t)
         if plan.grouping != "crg":
             raise ValueError(
-                "_run_fwi_multisource requires a grouping='crg' SeismicPlan "
+                "_run_fwi_plan_streaming requires a grouping='crg' SeismicPlan "
                 f"(got {plan.grouping!r}). Use 'sweep-tasks build-plan "
                 "--grouping crg --receiver-quantize-m ...' to build one."
             )
         if spec.geometry.rotation_metadata is None:
             raise ValueError(
-                "Multisource FWI on a CRG plan requires "
+                "Plan-streaming FWI on a CRG plan requires "
                 "geometry.rotation_metadata (UTM → model-frame transform). "
                 "Set FromPlanGeometry.rotation_metadata to the dataset's "
                 "rotation_metadata.json."
@@ -206,7 +222,7 @@ class MultisourceRunnerMixin:
             and not encoding_on
         )
         if per_crg_independent and dist_info.is_root:
-            print("[multisource] per_crg_independent=ON — each node inverts its "
+            print("[plan-stream] per_crg_independent=ON — each node inverts its "
                   "own aperture (ragged rows, padded+masked; no shared "
                   "intersection).", flush=True)
         # NOTE: we do NOT pre-filter the plan by min_coverage at this point.
@@ -218,7 +234,7 @@ class MultisourceRunnerMixin:
         # and saves zero solver compute.
         if min_cov > 0:
             n_below = int((plan.per_group_row_counts() < min_cov).sum())
-            print(f"[multisource] min_coverage={min_cov}: deferred to sampler "
+            print(f"[plan-stream] min_coverage={min_cov}: deferred to sampler "
                   f"(would drop {n_below}/{plan.n_groups} groups; pre-filtering "
                   "the plan is too expensive on a multi-GB CRG layout).")
         frame = load_rotation_metadata(spec.geometry.rotation_metadata)
@@ -228,7 +244,7 @@ class MultisourceRunnerMixin:
         init_models = _normalize_fwi_init_models(spec)
         if init_models[0].path is None:
             raise ValueError(
-                "Multisource FWI requires init_model.path (a 3-D vp "
+                "Plan-streaming FWI requires init_model.path (a 3-D vp "
                 "npy); ModelRef.constant is not supported on this path."
             )
         init_vp_np = np.load(init_models[0].path).astype(np.float32)
@@ -279,7 +295,7 @@ class MultisourceRunnerMixin:
                 y_min - pad_y * dy_m,
                 x_min - pad_x * dx_m,
             )
-            print(f"[multisource] auto grid_origin_xyz_m = "
+            print(f"[plan-stream] auto grid_origin_xyz_m = "
                   f"({origin[0]:.1f}, {origin[1]:.1f}, {origin[2]:.1f}) "
                   f"(z=0 at sea surface; x/y padded by auto_origin_pad_cells)")
             _t = _stage("auto grid_origin (z=0 surface; x/y bbox.min - pad)", _t)
@@ -317,7 +333,7 @@ class MultisourceRunnerMixin:
                 )
             init_vp_np = init_vp_np[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi].copy()
             crop_origin_offset = (z_lo * dz_m, y_lo * dy_m, x_lo * dx_m)
-            print(f"[multisource] model_plan crop: vp shape "
+            print(f"[plan-stream] model_plan crop: vp shape "
                   f"({nz_pre},{ny_pre},{nx_pre}) -> {init_vp_np.shape}, "
                   f"crop_origin_offset += ({crop_origin_offset[0]:.1f}, "
                   f"{crop_origin_offset[1]:.1f}, {crop_origin_offset[2]:.1f}) m "
@@ -371,7 +387,7 @@ class MultisourceRunnerMixin:
         # cell just above the seabed (``seabed_iz - 1``); ``min`` leaves sources
         # already in water untouched. Mirrors plan_materialize._materialize_plan
         # (the static-obs path) — without this the knob was silently ignored on
-        # the streaming multisource path.
+        # the plan-streaming path.
         _lift_water_vp = getattr(spec.geometry, "lift_source_to_water_vp", None)
         _lift_seabed_m = None
         if _lift_water_vp is not None:
@@ -389,7 +405,7 @@ class MultisourceRunnerMixin:
             _n_lift = int((_lifted < src_grid_xyz[:, 2]).sum())
             src_grid_xyz[:, 2] = _lifted
             if dist_info.is_root:
-                print(f"[multisource] lift_source_to_water_vp={_wv:g}: lifted "
+                print(f"[plan-stream] lift_source_to_water_vp={_wv:g}: lifted "
                       f"{_n_lift}/{src_grid_xyz.shape[0]} nodes into the water "
                       f"column (seabed_iz [{int(_seabed_iz.min())},"
                       f"{int(_seabed_iz.max())}])", flush=True)
@@ -458,13 +474,13 @@ class MultisourceRunnerMixin:
                 src_grid_xyz[:, 2] = np.maximum(
                     np.minimum(src_grid_xyz[:, 2], _zmax), 0)
                 if dist_info.is_root:
-                    print(f"[multisource] re-applied source lift after in-window "
+                    print(f"[plan-stream] re-applied source lift after in-window "
                           f"filter: {_nl}/{src_grid_xyz.shape[0]} nodes", flush=True)
             # Everything left is in-window by construction.
             row_in = np.ones(plan.n_rows, dtype=bool)
             slot_in = np.ones(plan.n_groups, dtype=bool)
             print(
-                f"[multisource] setup in-window filter: dropped {n_oob_rows} "
+                f"[plan-stream] setup in-window filter: dropped {n_oob_rows} "
                 f"({n_oob_rows / max(n_rows0, 1):.1%}) OOB shot rows + "
                 f"{n_oob_groups} OOB nodes -> plan {n_rows0}->{plan.n_rows} rows, "
                 f"{n_groups0}->{plan.n_groups} nodes "
@@ -489,10 +505,10 @@ class MultisourceRunnerMixin:
             _diving_asinh_g, _n_hit = _diving_asinh_for_nodes(
                 spec.loss.diving_window_db, src_model_xy)
             _n_miss = int(plan.n_groups) - _n_hit
-            print(f"[multisource] diving window: matched {_n_hit}/{plan.n_groups} "
+            print(f"[plan-stream] diving window: matched {_n_hit}/{plan.n_groups} "
                   f"nodes to {Path(spec.loss.diving_window_db).name}")
             if _n_miss:
-                print(f"[multisource] WARNING: {_n_miss} node(s) have no pick -> "
+                print(f"[plan-stream] WARNING: {_n_miss} node(s) have no pick -> "
                       f"NOT windowed (full record enters the misfit)")
             if _n_hit == 0:
                 raise ValueError(
@@ -518,7 +534,7 @@ class MultisourceRunnerMixin:
                 dh_xyz=(dx_m, dy_m, dz_m),
             )
         except Exception as qerr:  # noqa: BLE001
-            print(f"[multisource] receiver layout QC skipped: {qerr}")
+            print(f"[plan-stream] receiver layout QC skipped: {qerr}")
         _t = _stage("receiver-layout QC dump", _t)
 
         # --- 5) Build solver, wavelet, vp tensor (+ optional reparam_net).
@@ -553,7 +569,7 @@ class MultisourceRunnerMixin:
         )
         if obs_prepad_samples > 0:
             print(
-                f"[multisource] wavelet source_delay_s={obs_prepad_s*1000:.1f} ms "
+                f"[plan-stream] wavelet source_delay_s={obs_prepad_s*1000:.1f} ms "
                 f"→ obs left-shifted by {obs_prepad_samples} samples "
                 f"(@ effective_dt={effective_dt*1000:.2f} ms) each iter to "
                 f"align syn/obs in the SIREN frame"
@@ -887,7 +903,7 @@ class MultisourceRunnerMixin:
             coalesce_gap=_coalesce_gap,
         )
         if bool(spec.obs.plan.cache_all):
-            print(f"[multisource] PlanReader: cache_all=True "
+            print(f"[plan-stream] PlanReader: cache_all=True "
                   f"(eagerly loaded {plan.n_rows} traces into RAM)")
         else:
             _tcb = int(getattr(sampling_cfg, "trace_cache_bytes", 0))
@@ -897,7 +913,7 @@ class MultisourceRunnerMixin:
                 cache_desc = f"per-trace LRU, budget {_tcb / 1e9:.2f} GB"
             else:
                 cache_desc = "DISABLED — wait_io may dominate on cold-Lustre"
-            print(f"[multisource] PlanReader: trace_cache={cache_desc}, "
+            print(f"[plan-stream] PlanReader: trace_cache={cache_desc}, "
                   f"coalesce_gap={_coalesce_gap} bytes "
                   f"(= 4× stride {_trace_stride_bytes})")
         # ``sign_rng`` is only used by the encoded supershot path. In the
@@ -1106,7 +1122,7 @@ class MultisourceRunnerMixin:
                     max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
                     # min_coverage + eligible_groups applied per-iter at sample
                     # time (instead of pre-filtering the plan via filter_groups
-                    # / filter_rows) — see _run_fwi_multisource setup.
+                    # / filter_rows) — see _run_fwi_plan_streaming setup.
                     min_coverage=int(min_cov),
                     eligible_groups=_elig_iter,
                     precomputed_group_unique_keys=group_unique_keys,
@@ -1481,7 +1497,7 @@ class MultisourceRunnerMixin:
                         _bs_for_epoch(epoch))
             # Coarse-to-fine hash: advance the encoder level mask by whole-run
             # progress each epoch (base_levels -> final_levels over [warmup,
-            # ramp_end], epoch fraction). The multisource path NEVER drove this, so
+            # ramp_end], epoch fraction). The plan-streaming path NEVER drove this, so
             # the hash was frozen at base_levels (=2) the whole run and the fine
             # levels never activated. Mirrors the _run_fwi / freqsel c2f driving.
             _c2f_cfg = getattr(getattr(getattr(spec, "reparam", None),
@@ -1879,7 +1895,7 @@ class MultisourceRunnerMixin:
                                     rec_xy=_rec_j[:, :2] * _cur_dh,
                                     node_xy=sources_super[_j][:2] * _cur_dh)
                             except Exception as _e:      # QC must never kill a run
-                                print(f"[multisource] diving-window QC failed: {_e}")
+                                print(f"[plan-stream] diving-window QC failed: {_e}")
                     # SWEEP_DUMP_LOSS_IO=1: save the EXACT tensors handed to
                     # loss_fn (post bandpass / prepad-shift / window), so the
                     # misfit input can be inspected rather than reconstructed
@@ -2271,7 +2287,7 @@ class MultisourceRunnerMixin:
                         print(f"[memcensus]   n={_c:4d} {_b / 2 ** 20:8.1f}MB "
                               f"shape={_k[0]} {_k[1]} rg={_k[2]} gf={_k[3]}",
                               flush=True)
-            print(f"[multisource] epoch {epoch:04d} loss={losses[-1]:.6e} "
+            print(f"[plan-stream] epoch {epoch:04d} loss={losses[-1]:.6e} "
                   f"B={B} n_shared={n_shared} iter_s={iter_s:.2f}{_memstr}  "
                   f"[wait_io={t_wait:.2f} h2d={t_h2d:.2f} resample={t_resample:.2f} "
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
@@ -2306,7 +2322,7 @@ class MultisourceRunnerMixin:
                     epoch=epoch, dev=dev,
                 )
 
-                # Multisource supershot QC: obs/syn interleave gather,
+                # Supershot QC: obs/syn interleave gather,
                 # amplitude spectrum, and the per-iter survey footprint
                 # (picked OBN nodes + used physical shots in the FULL
                 # acquisition context). Snapshot the CPU tensors from
@@ -2386,7 +2402,7 @@ class MultisourceRunnerMixin:
                             f_hi_hz=f_hi,
                         )
                     except Exception as ss_err:  # noqa: BLE001
-                        print(f"[multisource] supershot QC skipped: {ss_err}")
+                        print(f"[plan-stream] supershot QC skipped: {ss_err}")
 
                 # Well-log QC: vp(z) at the 6 pseudo-wells set up at
                 # session start. Quick sanity probe on the water layer,
@@ -2409,7 +2425,7 @@ class MultisourceRunnerMixin:
                                   if _effective_bound(spec.model_bounds, "vp") else None),
                         )
                     except Exception as wl_err:  # noqa: BLE001
-                        print(f"[multisource] well-log QC skipped: {wl_err}")
+                        print(f"[plan-stream] well-log QC skipped: {wl_err}")
 
                 # Gradient ortho-slice QC: dump the per-voxel velocity
                 # gradient (post illumination precond + smooth-reg +
@@ -2439,7 +2455,7 @@ class MultisourceRunnerMixin:
                                 epoch=epoch,
                             )
                     except Exception as g_err:  # noqa: BLE001
-                        print(f"[multisource] gradient QC skipped: {g_err}")
+                        print(f"[plan-stream] gradient QC skipped: {g_err}")
 
                 # Loss-curve QC: refresh ``qc/loss_curve.png`` (overwrites
                 # in place each QC epoch) + dump the raw ``losses[]`` to
@@ -2454,7 +2470,7 @@ class MultisourceRunnerMixin:
                                 losses,
                                 qc_dir / "loss_curve.png",
                                 title=(
-                                    f"OBN multisource FWI loss "
+                                    f"OBN FWI loss "
                                     f"(epoch {epoch}/{total_epochs - 1})"
                                 ),
                             )
@@ -2463,7 +2479,7 @@ class MultisourceRunnerMixin:
                                 np.array(losses, dtype=np.float64),
                             )
                     except Exception as lc_err:  # noqa: BLE001
-                        print(f"[multisource] loss-curve QC skipped: {lc_err}")
+                        print(f"[plan-stream] loss-curve QC skipped: {lc_err}")
 
         # --- 10) Final outputs.
         prefetch_pool.shutdown(wait=False, cancel_futures=True)
@@ -2480,9 +2496,9 @@ class MultisourceRunnerMixin:
             artifacts.append(loss_path)
             try:
                 artifacts.append(_plot_loss_curve(losses, out_dir / "loss.png",
-                                                  title="OBN multisource FWI Loss"))
+                                                  title="OBN FWI Loss"))
             except Exception as plot_err:  # noqa: BLE001
-                print(f"[multisource] loss plot skipped: {plot_err}")
+                print(f"[plan-stream] loss plot skipped: {plot_err}")
             # opt-in: dump the reparam net weights so per-level hash features can be
             # rendered offline (reparam.save_net or SWEEP_SAVE_REPARAM_NET=1 env
             # override). Off by default (large file).
@@ -2492,7 +2508,7 @@ class MultisourceRunnerMixin:
                 net_path = out_dir / "reparam_net.pt"
                 torch.save(reparam_net.state_dict(), net_path)
                 artifacts.append(net_path)
-                print(f"[multisource] saved reparam net -> {net_path}", flush=True)
+                print(f"[plan-stream] saved reparam net -> {net_path}", flush=True)
 
         summary = {
             "epochs": total_epochs,

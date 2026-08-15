@@ -175,14 +175,32 @@ def _build_grad_smoother(spec, dev):
 
 class FWIRunnerMixin:
     def _run_fwi(self, spec: FWISpec, task_dir: Path):
-        # Dispatch the frequency-selection encoded path first: it is
-        # plan-free (geometry and data live in the coefficient shards) and
-        # shares none of the sampler/prefetch machinery below.
+        # ---- FWI path dispatch -------------------------------------------
+        # The three paths are separated by WHERE OBS COMES FROM, not by
+        # whether the sources are encoded (encoding is an option inside two
+        # of them). In dispatch order:
+        #
+        #   condition                                | path
+        #   -----------------------------------------+---------------------------
+        #   source_encoding.mode ==                  | fwi_freqsel.py
+        #     "frequency_selection"                  |   DTFT coefficient shards;
+        #                                            |   no SEG-Y, no wavelet
+        #   obs.plan.sampling is not None            | fwi_plan_streaming.py
+        #                                            |   per-iter SEG-Y streaming
+        #                                            |   off a CRG plan
+        #   otherwise                                | this method
+        #                                            |   one static obs tensor
+        #                                            |   (synthetic / npy / segy /
+        #                                            |    materialised plan)
+        #
+        # Frequency-selection first: it is plan-free (geometry and data live
+        # in the coefficient shards) and shares none of the sampler/prefetch
+        # machinery below.
         if (spec.source_encoding is not None
                 and spec.source_encoding.enabled
                 and spec.source_encoding.mode == "frequency_selection"):
             return self._run_fwi_freqsel(spec, task_dir)
-        # Dispatch the OBN 3-D multisource supershot path early — it has
+        # Dispatch the OBN 3-D plan-streaming path early — it has
         # its own per-iter SEG-Y reads + UTM→model rotation + source-
         # encoded loop that don't fit the static-(sources, obs)
         # assumptions of the main ``_fwi_train_step`` machinery. Triggered
@@ -190,7 +208,7 @@ class FWIRunnerMixin:
         # ``grouping='crg'`` plan.
         _obs_plan = getattr(spec.obs, "plan", None) if spec.obs is not None else None
         if _obs_plan is not None and getattr(_obs_plan, "sampling", None) is not None:
-            return self._run_fwi_multisource(spec, task_dir)
+            return self._run_fwi_plan_streaming(spec, task_dir)
 
         import torch
 
@@ -212,8 +230,8 @@ class FWIRunnerMixin:
         dev = _dist.resolve_dist_device(spec.device, dist_info.local_rank)
         equation_cls = _get_equation_class(spec.physics.equation)
 
-        # Resolved config + run metadata for the standard (non-multisource)
-        # FWI path. The CRG/multisource path (`_run_fwi_multisource`) already
+        # Resolved config + run metadata for the standard (non-streaming)
+        # FWI path. The CRG plan-streaming path (`_run_fwi_plan_streaming`) already
         # writes these; mirror it here so every FWI run dir is self-documenting
         # (config_resolved.yaml + run_meta.json: host/CUDA/env/git). rank-0 only.
         if dist_info.local_rank == 0:
@@ -292,7 +310,7 @@ class FWIRunnerMixin:
         # ``obs.plan`` with ``sampling=None`` → conventional single-source FWI
         # materialised from a SeismicPlan (CSG or CRG, 2-D/3-D field data). The
         # OBN supershot/encoding path (sampling != None) is dispatched earlier
-        # to ``_run_fwi_multisource``; here we build ONE static dataset and run
+        # to ``_run_fwi_plan_streaming``; here we build ONE static dataset and run
         # the normal ``_fwi_train_step`` loop (per-shot gradient accumulation).
         _obs_plan_mat = (
             spec.obs is not None and spec.obs.plan is not None
@@ -448,7 +466,7 @@ class FWIRunnerMixin:
         initial_lrs = _remember_initial_lrs(optimizer)
 
         # Smoothing prior (TVPrior) — applied to the velocity gradient each
-        # iteration. The OBN multisource (encoded) path builds + applies this;
+        # iteration. The OBN plan-streaming (encoded) path builds + applies this;
         # the single-source path historically dropped it (smooth_regularization
         # was a silent no-op), leaving the per-shot gradient unregularised
         # (high-wavenumber speckle). Build it here and thread it into
@@ -1022,13 +1040,13 @@ class FWIRunnerMixin:
             return _adapt_segy_obs_to_backend(obs_aligned)
 
         # ``obs.plan`` never reaches here: FWI materialises it earlier
-        # (``_obs_plan_mat``) or dispatches to ``_run_fwi_multisource``, and
+        # (``_obs_plan_mat``) or dispatches to ``_run_fwi_plan_streaming``, and
         # RTM opens its own PlanReader. Guard the invariant so a future
         # re-route fails loudly instead of falling into the synthetic branch.
         if obs_spec.plan is not None:
             raise AssertionError(
                 "_fwi_generate_obs reached with obs.plan set — the plan paths "
-                "produce obs themselves (plan_materialize / _run_fwi_multisource "
+                "produce obs themselves (plan_materialize / _run_fwi_plan_streaming "
                 "/ rtm PlanReader). This call site should not be routed here."
             )
 
@@ -1852,7 +1870,7 @@ class FWIRunnerMixin:
                 )
             # Smoothing prior: add ∂(w·TV)/∂v to the (illum-preconditioned)
             # leaf gradient BEFORE pushing it through the network — matches the
-            # multisource path's order (illum, then smooth). base_leaf carries
+            # plan-streaming path's order (illum, then smooth). base_leaf carries
             # requires_grad, so reg_loss.backward() accumulates into
             # base_leaf.grad (which v_grad aliases).
             if tv_prior is not None and v_grad is not None:

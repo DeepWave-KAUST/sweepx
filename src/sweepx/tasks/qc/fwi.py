@@ -147,7 +147,7 @@ def save_gradient_ortho_slices_png(
     velocity gradient with the diverging ``sweep_image`` colormap and
     symmetric percentile-clipped ``vmin/vmax``.
 
-    Used by the multisource runner to drop a per-QC-epoch gradient
+    Used by the plan-streaming runner to drop a per-QC-epoch gradient
     visualization next to the vp ortho slices (``qc/gradient/`` parallel
     to ``qc/vp/``).
     """
@@ -565,7 +565,7 @@ def save_loss_curve_with_stages(
 
 
 # ----------------------------------------------------------------------
-# Multisource supershot QC (source-encoded FWI)
+# Supershot QC (source-encoded FWI)
 # ----------------------------------------------------------------------
 
 
@@ -590,7 +590,7 @@ def save_supershot_qc_panel(
 ) -> Path:
     """Three-panel QC for one source-encoded supershot iter.
 
-    The multisource loss compares ONE encoded supershot
+    The encoded loss compares ONE encoded supershot
     ``obs_super`` (sum of ±1 signed obs across ``B`` picked OBN nodes)
     against the solver's ``syn`` for the same encoded source. The legacy
     per-shot ``_save_shot_gather_rich`` doesn't fit (there's no
@@ -913,7 +913,7 @@ def save_supershot_qc_panel(
     ax_spec.legend(fontsize=8, loc="best")
 
     fig.suptitle(
-        f"multisource supershot QC — epoch {epoch}", fontsize=11,
+        f"supershot QC — epoch {epoch}", fontsize=11,
     )
     fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)

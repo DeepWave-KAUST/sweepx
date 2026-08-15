@@ -25,7 +25,7 @@ def _resolve_device(device: str) -> "torch.device":
 # --- Domain-decomposition (DD) mode helpers (env-gated; no-op when off) -------
 # DD splits the solver's spatial domain across N GPUs (ModelParallel), with the
 # velocity_inr reparam rendered PER TILE (render_window). Validated standalone
-# in runs/dd_ifwi_smoke; wired into _run_fwi_multisource behind SWEEP_DD_ENABLE.
+# in runs/dd_ifwi_smoke; wired into _run_fwi_plan_streaming behind SWEEP_DD_ENABLE.
 
 
 def _apply_seed(seed: int) -> None:

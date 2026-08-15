@@ -443,8 +443,8 @@ def _dump_receiver_rotation_qc(
         grid_shape=np.asarray(grid_shape, dtype=np.int64),
         dh_xyz=np.asarray(dh_xyz, dtype=np.float64),
     )
-    print(f"[multisource] receiver layout QC -> {out_png}")
-    print(f"[multisource] receiver layout npz -> {out_npz}")
+    print(f"[plan-stream] receiver layout QC -> {out_png}")
+    print(f"[plan-stream] receiver layout npz -> {out_npz}")
     return out_png
 
 

@@ -108,7 +108,7 @@ obs:
     # min_receivers: 8              # drop shots with fewer live receivers
     #
     # ---- OBN supershot / CRG sampler (see `source_encoding` below) ----
-    # Presence of `sampling:` routes to the multisource supershot loop.
+    # Presence of `sampling:` routes to the plan-streaming supershot loop.
     # sampling:
     #   shared_shots_per_iter: 20000  # >0 ⇒ per-iter shared-shot supershot
     #   min_coverage: 0               # drop groups covering < N shared shots
@@ -289,7 +289,7 @@ reparam:
 # The two "encodings" are switched by `mode`:
 #   mode: random             → random ±1 supershot. ALSO needs
 #                              obs.plan.sampling (above) to trigger the
-#                              multisource loop; enabled:false there = per-CRG
+#                              plan-streaming loop; enabled:false there = per-CRG
 #                              independent (no ±1). This is the OBN 1-GPU path.
 #   mode: frequency_selection → steady-state frequency-comb encoding. Plan-free
 #                              (data lives in coeff_shards); dispatched purely
@@ -394,7 +394,7 @@ qc:
   shot_gather_n_shots: 2
   # shot_gather_normalize: trace    # "trace" | "shot" | "joint"
   loss_curve: true
-  # supershot_panel: true           # encoded-supershot QC (multisource path)
+  # supershot_panel: true           # encoded-supershot QC (plan-streaming path)
   # well_logs: true
 
 # ═══ Resume ═══════════════════════════════════════════════════════════════════

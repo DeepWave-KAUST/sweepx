@@ -1,7 +1,7 @@
 """Source/receiver illumination accumulation + preconditioning.
 
 Extracted verbatim from ``runner.py`` (bit-identical). Used by the fwi /
-multisource / freqsel task paths.
+plan-streaming / freqsel task paths.
 """
 
 

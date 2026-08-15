@@ -38,7 +38,7 @@ from sweep_tasks.tasks.lsrtm import LSRTMRunnerMixin
 from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
 from sweep_tasks.tasks.rtm import RTMRunnerMixin
 from sweep_tasks.tasks.fwi import FWIRunnerMixin
-from sweep_tasks.tasks.fwi_multisource import MultisourceRunnerMixin
+from sweep_tasks.tasks.fwi_plan_streaming import PlanStreamingFWIMixin
 from sweep_tasks._helpers.metadata import _dump_run_metadata
 
 
@@ -84,7 +84,7 @@ class TaskRunner(
     ForwardRunnerMixin,
     FreqselRunnerMixin,
     FWIRunnerMixin,
-    MultisourceRunnerMixin,
+    PlanStreamingFWIMixin,
     RTMRunnerMixin,
     LSRTMRunnerMixin,
 ):
