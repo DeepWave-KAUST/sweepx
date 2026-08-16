@@ -1,0 +1,57 @@
+# What can this build of sweep actually do?
+#
+# Teaches:  `task_type: introspect` — ask the INSTALLED solver which equations
+#           it registers and what each one needs, instead of guessing from
+#           documentation that may not match your build.
+# Needs:    nothing. No propagator runs, no data is read, no GPU is used.
+# Produces: output/introspect.json
+#
+# Run:
+#   sweep-tasks run examples/synthetic/15_introspect_equations.yaml
+#
+# This is the first thing to run on a new machine. Every row it prints carries
+# `torch_binding_support` and `torch_binding_available`, i.e. whether the fused
+# CUDA kernel exists for that equation AND whether THIS build has it compiled —
+# which is how you find out that `backend.impl: c` will fall over for your
+# equation before a 3-hour job finds out for you.
+#
+# Why it exists at all: every other example here pins `equation: Acoustic` or
+# `Acoustic3D`, which is two of the 36 this build registers. The rest —
+# `Elastic`, the VTI/TTI family, `ViscoAcoustic`, the DAS equations — differ in
+# what they want in `models:` and what `receiver_type:` can ask for, and that
+# list is a property of the build, not of this repo. Reading it out of the
+# solver is the only answer that cannot go stale.
+#
+# The five actions:
+#
+#   list_equations            every equation, with its models and fields.
+#                             Start here.
+#   describe_equation         one equation in full — set `target`
+#   describe_model            one model of one equation: units, role, defaults
+#                             — set `target` + `field_or_model`
+#   describe_field            one wavefield component — same two keys
+#   list_supported_bindings   which compiled backends this build has
+#
+# So to find out what `Elastic` needs before writing 16's `models:` block:
+#
+#   sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
+#       --override action=describe_equation --override target=Elastic
+#
+# Reference (RTX 6000 Ada, cpu device): 5.6 s, 36 rows. Only THREE of those 36
+# take vp alone — `Acoustic`, `Acoustic3D`, `AcousticCurvilinear`. Everything
+# else is multi-parameter, and the model list is not guessable: `Elastic` wants
+# [vp, vs, rho], `AcousticVTI` wants [vp, epsilon, delta], `ViscoAcoustic` wants
+# [vp, Q, omega], `ElasticTTI` wants eight models. That is the point of asking
+# the solver rather than a README.
+
+task_type: introspect
+output_dir: ./sweep_runs
+task_id: introspect_equations
+device: auto                # nothing is propagated, so this only decides where
+                            # a probe tensor would live; cpu is fine
+
+action: list_equations
+
+# target: Acoustic          # equation name, for the describe_* actions
+# field_or_model: vp        # model or field name, for describe_model /
+                            # describe_field

@@ -1,0 +1,110 @@
+# VTI anisotropy — a multi-parameter equation, end to end.
+#
+# Teaches:  what changes when `physics.equation` is not `Acoustic`. Three
+#           models instead of one, and a wavefront whose velocity depends on
+#           the direction it travels — which no isotropic example can show.
+# Needs:    nothing — every model is built in memory, no dataset, no download.
+# Produces: output/record.npy + sources.npy + receivers.npy.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml
+#
+# 01-15 all pin `Acoustic` or `Acoustic3D` — 2 of the 36 equations this build
+# registers (see 15), and 2 of only 3 that take vp alone. Everything else is
+# multi-parameter, and this is the pattern for all of them:
+#
+#   * `models:` must list EVERY model the equation declares, by name, and the
+#     names are not guessable. Ask 15 rather than assume:
+#
+#         sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
+#             --override action=describe_equation --override target=AcousticVTI
+#
+#     answers [vp, epsilon, delta]. `ViscoAcoustic` wants [vp, Q, omega],
+#     `AcousticVRZ` wants [vp, z], `ElasticTTI` wants eight. A missing or
+#     misspelt name is an error at setup, not a silent default.
+#   * `source_type` / `receiver_type` are per-equation too. The acoustic `h1`
+#     (pressure) still applies here because VTI is a pseudo-acoustic equation,
+#     but the velocity-stress elastic family has no `h1` at all — it offers
+#     vx, vz, sxx, szz, sxz, so an explosive source there is `[sxx, szz]`. Get
+#     it wrong and the runner fails at setup with the full list of valid values
+#     and what each one means, which is the fastest way to look it up.
+#
+# The physics to look for, and it is worth doing the A/B rather than taking it
+# on trust. Thomsen's parameters are defined so that zero means isotropy, so
+# re-running with `epsilon` and `delta` both 0.0 is a clean control:
+#
+#   sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml \
+#       --override task_id=aniso_iso \
+#       --override 'models=[{"name":"vp","constant":2500.0,"shape":[200,360]},
+#                           {"name":"epsilon","constant":0.0,"shape":[200,360]},
+#                           {"name":"delta","constant":0.0,"shape":[200,360]}]'
+#
+# Measured on the far-offset trace (1740 m) of shot 2:
+#
+#   isotropic  eps = del = 0      first break 787 ms
+#   VTI        eps = 0.20         first break 680 ms      ratio 1.157
+#
+# The horizontal P velocity is vp * sqrt(1 + 2*epsilon) = 1.183 * vp, so 1.157
+# is the right answer rather than a near miss: at 1740 m offset with the source
+# at 40 m and receivers at 80 m the ray is not yet horizontal, so the measured
+# speed-up must come in BELOW the asymptote. Push the spread out and it
+# approaches 1.183.
+#
+# `delta` controls the near-vertical curvature (the NMO velocity,
+# vnmo = vp * sqrt(1 + 2*delta)) rather than the horizontal asymptote. Both
+# are dimensionless ratios, not velocities.
+#
+# Reference (`--override device=cpu`, 8 threads): 37.6 s on `impl: eager`,
+# record.npy is (3, 2000, 176, 1).
+
+task_type: forward
+output_dir: ./sweep_runs
+task_id: forward_anisotropic
+device: auto
+seed: 0
+
+grid:
+  dh: 10.0                  # 200 x 360 cells = 2.0 x 3.6 km
+
+time:
+  dt: 0.001
+  nt: 2000                  # 2 s
+
+wavelet:
+  kind: ricker
+  fm: 12.0                  # 5 points per wavelength at dh 10 m allows 50 Hz
+                            # on the SLOWEST direction (vertical, 2500 m/s)
+  delay: 0.15
+
+geometry:
+  kind: line
+  sources:   { start: 60, stop: 330, step: 120, depth: 4 }   # 3 shots
+  receivers: { start: 4,  stop: 356, step: 2,   depth: 8 }   # 176 receivers
+
+physics:
+  equation: AcousticVTI
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  source_type: [h1]         # pressure — VTI here is pseudo-acoustic
+  receiver_type: [h1]
+
+backend:
+  impl: eager               # runs on a machine with no CUDA toolchain. 15
+                            # reports the fused binding per equation; check
+                            # yours before switching this to `c`.
+  use_ckpt: false
+
+# Every model the equation declares, in any order — the runner matches by name.
+# Constant fields keep the anisotropy the only thing varying, so the moveout
+# difference is unambiguous.
+models:
+  - name: vp
+    constant: 2500.0
+    shape: [200, 360]
+  - name: epsilon           # Thomsen epsilon: horizontal P velocity is
+    constant: 0.20          # vp * sqrt(1 + 2*eps) = 1.18 * vp here
+    shape: [200, 360]
+  - name: delta             # Thomsen delta: near-vertical / NMO behaviour
+    constant: 0.10
+    shape: [200, 360]

@@ -1,0 +1,110 @@
+# Elastic forward modelling — P and S in one record.
+#
+# Teaches:  the velocity-stress elastic equation, and the one configuration
+#           coupling that no other example exposes: `pml_type` has to match the
+#           equation's GRID, not just be a boundary you like the sound of.
+# Needs:    nothing — every model is built in memory, no dataset, no download.
+# Produces: output/record.npy (nshots, nt, nrec, 2) + sources/receivers.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/17_forward_elastic.yaml
+#
+# `pml_type: cpmls` is not decoration. Elastic is solved on a STAGGERED grid,
+# where velocities and stresses live half a cell apart, so its PML needs damping
+# profiles on the half-grid as well as the full grid — eight of them
+# (az, bz, azh, bzh, ax, bx, axh, bxh) against the six a collocated equation
+# uses. Leave the default `cpmlr` in place and the run dies mid-step with
+#
+#     ValueError: not enough values to unpack (expected 8, got 6)
+#
+# which is the profile tuple, not anything about your models or geometry. Some
+# equations catch this and say so (`ElasticTTISG requires pml_type='cpmls'`);
+# `Elastic` does not, so it is worth recognising on sight.
+#
+# The rest of the multi-parameter pattern is the same as 16:
+#   * `models:` lists EVERY model the equation declares — [vp, vs, rho] here.
+#     Ask 15 rather than guess.
+#   * There is no `h1` in an elastic equation. It offers vx, vz, sxx, szz, sxz,
+#     so an explosive source is equal normal stresses `[sxx, szz]` and the
+#     natural receivers are the two particle-velocity components, which makes
+#     the record's last axis 2 rather than 1.
+#
+# What to look for: two arrivals where the acoustic examples have one.
+# Measured on the far trace of shot 2, `vz` component, the two strongest
+# arrivals land at 598.5 ms and 954.5 ms — a ratio of 1.59.
+#
+# The Poisson-solid ratio vp/vs is 1.73, and 1.59 is the RIGHT answer rather
+# than a near miss: the models are gradients, so P and S turn at different
+# depths and average different velocities on the way. Arrival-time ratios equal
+# velocity ratios only in a homogeneous medium. Flatten the three gradients to
+# constants and it goes to 1.73.
+#
+# Set `free_surface: true` and a third, slower, dispersive arrival appears —
+# the Rayleigh wave — which is the whole subject of surface-wave inversion and
+# does not exist in an acoustic model at all.
+#
+# Reference (`--override device=cpu`, 8 threads): 61.8 s on `impl: eager`,
+# record.npy is (3, 3000, 178, 2). At the first break `vx` carries 4-7x the
+# amplitude of `vz`, which is what a near-horizontal direct P should do — the
+# component split is geometry, not a property of the equation.
+
+task_type: forward
+output_dir: ./sweep_runs
+task_id: forward_elastic
+device: auto
+seed: 0
+
+grid:
+  dh: 10.0                  # 200 x 360 cells = 2.0 x 3.6 km
+
+time:
+  dt: 0.0005                # HALF the acoustic examples' step. The elastic
+                            # stability bound is set by the FASTEST wave (vp)
+                            # while the sampling requirement is set by the
+                            # SLOWEST (vs), so an elastic run is squeezed from
+                            # both ends and 1 ms is not safe here.
+  nt: 3000                  # 1.5 s — enough for the direct S at far offset
+
+wavelet:
+  kind: ricker
+  fm: 12.0                  # five points per wavelength on the SLOW wave is
+                            # what binds: vs_min 1270 m/s at dh 10 m allows
+                            # 25 Hz. Sizing this by vp would alias the S wave
+                            # while looking perfectly fine for P.
+  delay: 0.15
+
+geometry:
+  kind: line
+  sources:   { start: 60, stop: 330, step: 120, depth: 4 }   # 3 shots
+  receivers: { start: 4,  stop: 360, step: 2,   depth: 8 }   # 178 receivers
+
+physics:
+  equation: Elastic
+  spatial_order: 8
+  abcn: 20
+  pml_type: cpmls           # REQUIRED — see the header. The default `cpmlr`
+                            # only builds the six collocated-grid profiles.
+  free_surface: false       # true adds the Rayleigh wave, which dominates
+                            # everything else on this geometry
+  source_type: [sxx, szz]   # explosive = equal normal stresses; no `h1` exists
+  receiver_type: [vx, vz]   # both particle-velocity components -> last axis 2
+
+backend:
+  impl: eager               # runs without a CUDA toolchain. 15 reports the
+                            # fused binding per equation; check yours first.
+  use_ckpt: false
+
+# vs and rho are the textbook relations to vp, so the example stays
+# self-contained and the wave types stay easy to identify:
+#   vs  = vp / sqrt(3)      Poisson solid -> S arrives at 1.73x the P time
+#   rho = 310 * vp^0.25     Gardner
+models:
+  - name: vp
+    shape: [200, 360]
+    linear_gradient: { vmin: 2200.0, vmax: 4000.0 }
+  - name: vs
+    shape: [200, 360]
+    linear_gradient: { vmin: 1270.0, vmax: 2310.0 }
+  - name: rho
+    shape: [200, 360]
+    linear_gradient: { vmin: 2120.0, vmax: 2465.0 }
