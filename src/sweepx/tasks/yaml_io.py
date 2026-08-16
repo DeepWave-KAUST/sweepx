@@ -28,6 +28,12 @@ def _resolve_paths(value: Any, base: Path) -> Any:
     `path` or `npy_path` whose value is a non-absolute string as relative to
     `base`. ``$VAR`` / ``${VAR}`` is expanded against the environment
     before relative-to-absolute resolution.
+
+    ``coeff_shards`` is a glob rather than a single path, but it belongs in the
+    same set: it is resolved by ``glob.glob`` deep inside the runner, so
+    leaving it out made it the ONE path key that meant "relative to wherever
+    you happened to cd" while `output_dir` next to it meant "relative to the
+    YAML". A task file could not then point at its own run directory.
     """
 
     if isinstance(value, dict):
@@ -35,7 +41,7 @@ def _resolve_paths(value: Any, base: Path) -> Any:
             k: (
                 _resolve_one(v, base)
                 if k in {"path", "npy_path", "disk_dir", "output_dir",
-                         "sources_file", "receivers_file"}
+                         "sources_file", "receivers_file", "coeff_shards"}
                 else _resolve_paths(v, base)
             )
             for k, v in value.items()
