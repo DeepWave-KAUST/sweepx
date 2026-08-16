@@ -34,3 +34,6 @@ htmlcov/
 
 # mkdocs build output
 /site/
+
+# task run output (every example YAML writes here, next to itself)
+sweep_runs/
