@@ -9,6 +9,11 @@
 # Run:
 #   sweep-tasks run examples/synthetic/07_fwi_marmousi_inr.yaml
 #
+# Everything OUTSIDE the `reparam:` block is deliberately the same as 03 —
+# same grid, geometry, wavelet, stage ladder, epochs, batch size. That is the
+# point of the example: the parametrisation should be the only variable, so
+# 03 and 07 stay comparable.
+#
 # What the network actually predicts here: a PERTURBATION added to the
 # starting model (`direct_velocity: false`), scaled by `vp_std`. So the net
 # starts near zero and the run starts from `init_model`, exactly like 02 —
@@ -16,9 +21,21 @@
 # it predict absolute velocity, which needs `vp_mean` / `vp_std` set to the
 # model's own statistics and is the from-scratch setup.
 #
+# Reference result (RTX 6000 Ada, seed 0), 200 epochs, 13.9 min:
+#   RMSE vs true   357.3 (init) -> 357.2 -> 310.7 -> 284.0 -> 267.3
+#                  (one number per stage)
+#   perturbation correlation with the true update   r = 0.687
+#   low-wavenumber RMSE (both smoothed sigma=8)     114.5, a 21.4% improvement
+#   water rows 0-36  1537.7 -> 1499.6  (true 1500.0)
+# Compare 02, which is grid FWI from the SAME start for the same 200 epochs:
+# RMSE 270.6, r = 0.700. The parametrisation is a wash on this problem — what
+# it buys is a model with far fewer free parameters (251,728 weights against
+# 382,441 cells).
+#
 # Two knobs that matter more than they look:
 #   * `lr` is the NETWORK learning rate, unrelated to `optimizer.lr` (which is
-#     ignored in reparam mode). 1e-4 is the usual working point for SIREN.
+#     ignored in reparam mode). 1e-4 is the usual working point for SIREN, and
+#     `vp_std` — not `lr` — is what you scale to change the step in m/s.
 #   * The hash encoder's `finest_resolution` caps the spatial detail the model
 #     can express. Too fine and the deep, poorly-illuminated section fills with
 #     speckle the data cannot constrain.
@@ -57,15 +74,25 @@ backend:
       strategy: boundary
       boundary: { storage: gpu }
 
-# 1-D cold start with the water column at its known 1500 m/s — see 03.
+# Smoothed start — the dataset ships one, so there is no file to make and no
+# smoothing knob to tune. `vp_smooth` is the true model Gaussian-blurred
+# (equivalent sigma about 15 cells): RMSE 357 m/s against the truth, and the
+# two-way traveltime error at 2 km is -32 ms, versus -160 ms for the 1-D
+# gradient 03 starts from. That is a much easier problem than 03's, on
+# purpose — this example is about the parametrisation, not about how far a
+# cold start can be pushed. Paste 03's `linear_gradient` block in to make it
+# hard again.
+#
+# No `freeze_top_n_rows` here, unlike 03: blurring the true model also blurs
+# the water bottom, so `vp_smooth`'s top 37 rows ramp 1501 -> 1614 instead of
+# sitting at 1500 — a -14.8 ms two-way static. Freezing rows you KNOW are
+# wrong bakes that in; leaving them free lets the direct arrival correct them.
+# (With 03's `linear_gradient` start the water is exactly 1500 and freezing it
+# is the right call. The two examples differ for a reason.)
 init_model:
   name: vp
-  shape: [281, 1361]
-  linear_gradient:
-    vmin: 1500.0
-    vmax: 4000.0
-    water_rows: 37
-    water_vp: 1500.0
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
 
 obs:
   synthetic_from:
@@ -84,7 +111,19 @@ reparam:
   # --- what the net outputs ---
   direct_velocity: false     # predict a perturbation on top of init_model
   vp_mean: 0.0
-  vp_std: 300.0              # perturbation scale in m/s
+  vp_std: 2500.0             # perturbation scale in m/s — the knob that
+                             # decides whether this run works at all, because
+                             # the rendered update is `raw * vp_std` and `raw`
+                             # only grows as fast as `lr` x steps lets it.
+                             # Size it to the perturbation the DATA needs
+                             # (here rms 357, range +-1400), not to a "small
+                             # perturbation" intuition. Measured, 200 epochs:
+                             #   vp_std   300   600   900  1500  2500  4000
+                             #   RMSE     325   309   292   277   267   264
+                             #   r      0.467 0.543 0.609 0.659 0.687 0.696
+                             # It saturates around 2500; 300 (the obvious
+                             # first guess) leaves the net 3x too weak to
+                             # reach the deep section at all.
   # --- multi-resolution hash encoding ---
   hash:
     enabled: true
@@ -107,19 +146,25 @@ loss:
 
 # The INR is a global function: an early high-frequency stage smears error
 # everywhere rather than locally. Frequency continuation matters MORE here
-# than in the grid-parametrised run, not less.
+# than in the grid-parametrised run, not less. Same rungs as 03.
+#
+# In reparam mode `lr_scale` scales the NETWORK lr (the optimiser's parameters
+# ARE the weights); `inr_lr_scale` multiplies on top of it if you ever need to
+# decouple the two.
 stages:
   - epochs: 50
-    bandpass: { lo_hz: 0.5, hi_hz: 4.0,  target: wavelet }
+    bandpass: { lo_hz: 0.5, hi_hz: 2.0,  target: wavelet }
+    lr_scale: 1.0
+  - epochs: 50
+    bandpass: { lo_hz: 0.5, hi_hz: 5.0,  target: wavelet }
+    lr_scale: 0.7
   - epochs: 50
     bandpass: { lo_hz: 0.5, hi_hz: 10.0, target: wavelet }
-  - epochs: 50
+    lr_scale: 0.4
+  - epochs: 50              # no bandpass — broadband finish
+    lr_scale: 0.2
 
-# Hold the water column fixed: its velocity is a known constant, not
-# something to solve for. Zeroes the gradient in the top 37 rows.
-freeze_top_n_rows: 37
-
-epochs: 150
+epochs: 200                 # required by the schema; ignored when `stages:` is set
 batchsize: 8                # shots drawn per optimizer step (stochastic
                             # mini-batch, not a pass over the survey)
 show_every: 5

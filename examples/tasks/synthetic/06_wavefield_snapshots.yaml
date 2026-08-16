@@ -4,10 +4,38 @@
 #           steps instead of only recording at receivers. The fastest way to
 #           see what the physics knobs actually do.
 # Needs:    nothing (models from `sweep.datasets`).
-# Produces: output/wavefield_*.npy + one PNG per snapshot.
+# Produces: output/record.npy, output/snapshots.npy, output/snapshots.png.
 #
 # Run:
 #   sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml
+#
+# `snapshots.png` draws the velocity model in greyscale underneath and lays the
+# wavefield on top with a per-pixel transparency taken from its own amplitude,
+# so quiet regions stay clear and you can see WHAT the wave is travelling
+# through. On Marmousi that is the difference between "there is a scatterer
+# around 7 km" and "that is the fault". The background is `vp` when the
+# equation has one, otherwise the first entry in `models:` — so an elastic or
+# VTI run shows its leading model rather than nothing.
+#
+# `snapshots.npy` is the raw capture and is much richer than the figure:
+# (n_snapshot_times, n_fields, 1, 1, nz+pml, nx+pml). `n_fields` is EVERY field
+# the equation carries, not just pressure — for `Acoustic` that is
+# [h1, h2, psix, psiz, zetax, zetaz], the last four being the PML memory
+# variables, so you can watch the absorbing boundary work. The grid is the
+# PADDED one, and the padding is asymmetric here: 281 -> 301 in z (no PML on
+# top, because of the free surface below) against 1361 -> 1401 in x.
+#
+# A 3-D grid gets three panels per row instead of one — a depth slice, an
+# inline and a crossline. The inline and crossline are cut through the SOURCE
+# so the wavefront is in frame; the depth slice sits at mid-model, because the
+# source is near the surface and a slice at its depth would be nearly empty.
+# All three share one amplitude scale per row, so they are comparable rather
+# than each self-normalised.
+#
+# `snapshot_times` are TIME-STEP INDICES, not seconds: at dt = 1 ms the four
+# below are 0.4 / 0.9 / 1.5 / 2.4 s.
+#
+# Reference (RTX 6000 Ada, seed 0): 17 s.
 #
 # `physics.free_surface: true` puts a pressure-release boundary at z=0, so the
 # snapshots show the downgoing wave AND its polarity-flipped surface ghost,

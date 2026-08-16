@@ -1,46 +1,97 @@
-task_type: forward
-output_dir: ./sweep_runs
-device: auto
-seed: 0
+# The smallest useful task there is: one shot through a constant-velocity box.
+#
+# Teaches:  what every field in a task YAML means. The other examples assume
+#           this vocabulary; this one spells it out and changes nothing else.
+# Needs:    nothing — no dataset, no download, no GPU (it runs on `eager`).
+# Produces: output/record.npy (1, 500, 172, 1) + sources.npy + receivers.npy.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/09_forward_constant_box.yaml
+#
+# A constant model has no reflections, so the record is the direct arrival and
+# nothing else — which is exactly what makes it a good first test: anything
+# other than one clean hyperbola means the setup, not the geology, is wrong.
+#
+# `sweep-tasks new forward` prints a fully-commented template with every field
+# this schema accepts, including the ones omitted here.
+
+task_type: forward          # which runner handles this file: forward /
+                            # wavefield / fwi / lsrtm / rtm
+output_dir: ./sweep_runs    # run dirs go under here. RELATIVE PATHS RESOLVE
+                            # AGAINST THIS FILE, not your shell's cwd.
+device: auto                # auto | cpu | cuda | cuda:N
+seed: 0                     # seeds torch/numpy; matters as soon as anything
+                            # stochastic is involved (shot batching, encoding)
 
 grid:
-  dh: 5.0
-time:
-  dt: 0.001
-  nt: 500
-wavelet:
-  kind: ricker
-  fm: 18.0
-  delay: 0.12
-  scale: 1.0e6
+  dh: 5.0                   # cell size in metres, isotropic. The model's shape
+                            # comes from `models` below, so dh + shape are what
+                            # set the physical extent: 120 x 180 cells = 600 m
+                            # deep by 900 m wide.
 
+time:
+  dt: 0.001                 # solver time step (s). Bounded by the CFL
+                            # condition: for 2-D order 8, roughly
+                            # dt <= 2*dh / (vmax * sqrt(2 * 6.5)), here 1.5 ms.
+  nt: 500                   # number of steps, so the record is 0.5 s long
+
+wavelet:
+  kind: ricker              # the only analytic kind; `from_npy` loads your own
+  fm: 18.0                  # PEAK frequency (Hz), not the highest one — a
+                            # Ricker carries usable energy to roughly 2.5 x fm.
+                            # Check it against the grid: 5 points per wavelength
+                            # at 2200 m/s and dh 5 m allows up to 88 Hz.
+  delay: 0.12               # time shift (s) of the wavelet's peak. Needs to be
+                            # >= ~1.5/fm or the left lobe is clipped at t=0 and
+                            # the step radiates a broadband floor.
+  scale: 1.0e6              # amplitude. Only affects absolute record values;
+                            # FWI misfits here are not scale-free, so keep it
+                            # consistent between obs and syn.
+
+# `kind: line` generates positions from a stride rule, in GRID INDEX units
+# (not metres): x = arange(start, stop, step), z = depth. `stop: null` means
+# "run to the grid edge".
 geometry:
   kind: line
   sources:
     step: 1
-    depth: 4
-    start: 90
-    stop: 91
+    depth: 4                # 4 cells = 20 m below the top boundary
+    start: 90               # start..stop with step 1 gives exactly ONE shot,
+    stop: 91                # in the middle of the 180-cell width
   receivers:
-    step: 1
-    depth: 8
+    step: 1                 # every cell: 172 receivers
+    depth: 8                # 40 m
     start: 8
-    stop: null
+    stop: null              # to the grid edge
 
 physics:
-  equation: Acoustic
-  spatial_order: 8
-  abcn: 20
-  free_surface: false
-  pml_type: cpmlr
-  source_type: [h1]
-  receiver_type: [h1]
+  equation: Acoustic        # `sweep-tasks new introspect` lists every equation
+                            # the installed solver exposes, with its required
+                            # model names
+  spatial_order: 8          # finite-difference order in space. Higher order
+                            # tolerates fewer points per wavelength but tightens
+                            # the CFL bound.
+  abcn: 20                  # absorbing-boundary thickness in CELLS on every
+                            # side. Judge it against the LONGEST wavelength you
+                            # care about — 20 cells of 5 m is 100 m, which is
+                            # ample for an 18 Hz source in 2200 m/s (122 m).
+  free_surface: false       # true puts a reflecting free surface on top, which
+                            # adds the ghost and surface multiples (see 06)
+  pml_type: cpmlr           # the C-PML variant used on the absorbing sides
+  source_type: [h1]         # what the source injects and what the receivers
+  receiver_type: [h1]       # record. `h1` is pressure for the acoustic
+                            # equations; elastic ones accept vx / vz / p / …
 
 backend:
-  impl: eager
-  use_ckpt: false
+  impl: eager               # `eager` is pure PyTorch and runs anywhere, `c` is
+                            # the fused CUDA kernel (roughly 30x faster, needs
+                            # nvcc on first use). 08 covers the trade in full.
+  use_ckpt: false           # gradient checkpointing — irrelevant for a forward
+                            # run, which stores no wavefields for an adjoint
 
 models:
-  - name: vp
-    constant: 2200.0
-    shape: [120, 180]
+  - name: vp                # must match a model name the equation declares
+    constant: 2200.0        # a uniform value; `shape` is then required because
+    shape: [120, 180]       # nothing else says how big the grid is. The other
+                            # sources are `path` (an .npy), `dataset` (a
+                            # sweep.datasets entry) and `linear_gradient`.

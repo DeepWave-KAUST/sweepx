@@ -67,6 +67,19 @@ geometry so they are directly comparable:
 | [`08_fwi_marmousi_backends`](synthetic/08_fwi_marmousi_backends.yaml) | `backend:` — the adjoint-memory ladder (full / boundary / ckpt), CPU eager, `torch.compile` |
 | [`09_forward_constant_box`](synthetic/09_forward_constant_box.yaml) | the smallest possible task: a constant-velocity box |
 | [`10_forward_explicit_geometry`](synthetic/10_forward_explicit_geometry.yaml) | `geometry.kind: explicit` — hand-placed sources and receivers |
+| [`11_forward_freqsel_nodes`](synthetic/11_forward_freqsel_nodes.yaml) | OBN reciprocity: nodes as sources, so `extract-coeff` has gathers to read |
+| [`12_fwi_marmousi_freqsel`](synthetic/12_fwi_marmousi_freqsel.yaml) | `source_encoding.mode: frequency_selection` — a whole node pool per forward, wavelet-free |
+| [`13_forward_freqsel_nodes_3d`](synthetic/13_forward_freqsel_nodes_3d.yaml) | `geometry.kind: grid` — a 3-D source/receiver patch without 1089 YAML lines |
+| [`14_fwi_overthrust_freqsel_3d`](synthetic/14_fwi_overthrust_freqsel_3d.yaml) | the same encoding in 3-D, where it changes what is affordable |
+| [`15_introspect_equations`](synthetic/15_introspect_equations.yaml) | `task_type: introspect` — ask the INSTALLED solver what it registers, and whether the fused binding is compiled |
+| [`16_forward_anisotropic`](synthetic/16_forward_anisotropic.yaml) | a multi-parameter equation (`AcousticVTI`): three models, and moveout that depends on direction |
+| [`17_forward_elastic`](synthetic/17_forward_elastic.yaml) | the elastic equation: P and S in one record, and why `pml_type` has to match the equation's grid |
+
+11 → 14 are two pairs, and each pair takes three commands rather than one:
+record the node gathers, turn them into coefficients with `sweep-tasks
+extract-coeff`, then invert. The headers of 11 (2-D) and 13 (3-D) spell out the
+exact commands. In a field project the first command disappears — real node
+gathers replace it and `extract-coeff` reads those instead.
 
 Wall times are not filled in yet; they get measured and written into each YAML
 header once the set has been run on a known GPU.
