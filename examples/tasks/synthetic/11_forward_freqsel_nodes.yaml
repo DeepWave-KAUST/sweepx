@@ -1,0 +1,102 @@
+# Marmousi 2-D — step 1 of 2 for frequency-selection FWI: record the gathers
+# the coefficient extractor turns into obs.
+#
+# Teaches:  the OBN reciprocity trick — the NODES are the sources here and the
+#           shot positions are the receivers, which is the layout the
+#           frequency-selection encoding needs. And that ONE forward feeds an
+#           entire frequency ladder.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/record.npy + sources.npy + receivers.npy — the three files
+#           `sweep-tasks extract-coeff` reads.
+#
+# Run (five commands, in order, from the repo root):
+#   RUNS=examples/synthetic/sweep_runs
+#   sweep-tasks run examples/synthetic/11_forward_freqsel_nodes.yaml
+#   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes \
+#       --n-p 50000 --k-lo 50  --k-hi 150 -o $RUNS/coeff_1_3hz.npz
+#   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes \
+#       --n-p 25000 --k-lo 50  --k-hi 150 -o $RUNS/coeff_2_6hz.npz
+#   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes \
+#       --n-p 17000 --k-lo 68  --k-hi 170 -o $RUNS/coeff_4_10hz.npz
+#   sweep-tasks run examples/synthetic/12_fwi_marmousi_freqsel.yaml
+#
+# `$RUNS` is not a shortcut, it is where the runs actually go: relative paths in
+# a task YAML resolve against the YAML FILE, not against your shell's cwd, so
+# `output_dir: ./sweep_runs` below means `examples/synthetic/sweep_runs` from
+# whatever directory you run it. (It is gitignored.) Pass
+# `--override output_dir=/somewhere/else` to put the runs elsewhere.
+#
+# THREE extractions off ONE forward, and that is the point worth taking away:
+# extraction is a DTFT of a record that already exists, so the frequencies a
+# project can invert are set by the SOURCE SPECTRUM, not by how many forwards
+# you are willing to run. A shard IS a comb, and the inversion refuses one whose
+# bins disagree with the stage feeding it — so a ladder extracts once per rung,
+# which costs seconds, not another forward.
+#
+# In a field project this file does not exist: real node gathers replace it and
+# `extract-coeff` reads those instead. Everything downstream is identical.
+#
+# Reference (RTX 6000 Ada, seed 0): forward 76 s, three extractions 45 s / 15 s
+# / 15 s, record.npy 2.7 GB.
+
+task_type: forward
+output_dir: ./sweep_runs
+task_id: forward_freqsel_nodes
+seed: 0
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 10000                 # 10 s. This is the one length that matters for
+                            # extraction: the DTFT integrates whatever is in
+                            # the record, so cutting the far-offset coda short
+                            # biases every coefficient. 10 s clears it here.
+
+wavelet:
+  kind: ricker
+  fm: 5.0                   # Size `fm` to the WHOLE ladder, not to its first
+                            # rung. Ricker amplitude relative to its own peak:
+                            #   fm     1 Hz   2 Hz   5 Hz   8 Hz
+                            #   3.0     27%    77%    24%   1.6%
+                            #   5.0     10%    37%   100%    54%
+                            # 5 Hz gives up a little at 1 Hz (27% -> 10%, still
+                            # far above the fp32 floor in noise-free synthetics)
+                            # and buys a factor of 34 at 8 Hz, so one record
+                            # feeds 1-10 Hz. The GCN misfit divides the source
+                            # spectrum out exactly, so `fm` never biases the
+                            # answer — it only sets SNR per comb bin.
+  delay: 0.35
+
+# Reciprocity: the sources ARE the 100 OBN nodes, sitting in the water column
+# one cell above Marmousi's 462.5 m seabed (row 37 is the first sediment row).
+# Receivers are the surface shot line. 162 m node spacing is deliberately close
+# to 03's 150 m shot spacing so the two examples compare at equal fold.
+#
+# Node count is not free: the encoding can only fire as many nodes at once as
+# the comb has bins (see 12). 100 nodes is what the 101-bin combs below support.
+geometry:
+  kind: line
+  sources:   { start: 40, stop: 1330, step: 13, depth: 36 }   # 100 nodes, 162 m
+  receivers: { start: 4,  stop: 1357, step: 2,  depth: 1 }    # 677 recs, 25 m
+
+physics:
+  equation: Acoustic
+  abcn: 40                  # 2x the default. PML thickness has to be judged
+                            # against the LOWEST wavelength in the ladder: at
+                            # 1 Hz lambda is ~1500 m and the default 20 cells is
+                            # only 250 m = lambda/6. A continuous-wave field in
+                            # a leaky box builds standing waves — and unlike a
+                            # transient, that does NOT cancel between a
+                            # transient obs and a steady-state syn. Measured,
+                            # the 1-3 Hz rung's steady-state check sits at
+                            # 5.9e-3 with abcn 40; it is the worst of the three.
+
+backend:
+  impl: c
+
+models:
+  - name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true

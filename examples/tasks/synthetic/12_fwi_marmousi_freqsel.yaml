@@ -1,0 +1,169 @@
+# Marmousi 2-D — frequency-selection FWI (Tromp & Bachmann 2019).
+#
+# Teaches:  `source_encoding.mode: frequency_selection` — every node in the
+#           active pool radiates its OWN comb frequency, continuously, and the
+#           DFT of a steady-state window separates them EXACTLY. One forward
+#           per iteration for the whole array, with zero crosstalk and no
+#           wavelet anywhere in the inversion.
+# Needs:    the three shards written by 11 + `sweep-tasks extract-coeff`.
+# Produces: inverted_vp.npy + curves.npz in the task dir.
+#
+# Run 11 first (its header lists the exact extract-coeff commands), then:
+#   sweep-tasks run examples/synthetic/12_fwi_marmousi_freqsel.yaml
+#
+# Reference result (RTX 6000 Ada, seed 0), 240 iterations, 11.9 min:
+#   RMSE vs true    473.7 (init) -> 429.6 -> 406.5 -> 397.9   (one per rung)
+#   perturbation correlation with the true update   r = 0.575
+#   low-wavenumber RMSE (both smoothed sigma=8)     321.6 -> 243.4
+#   steady-state two-window check   5.9e-3 / 9.6e-4 / 1.4e-4  (target <= 1e-2)
+#
+# Read that against 03, which is conventional FWI on the same model from the
+# same 1-D start, at almost exactly the same cost:
+#
+#                     solver steps   wall      RMSE     r
+#   03 conventional        16.0 M   11.5 min   317.3   0.752
+#   12 freqsel             10.5 M   11.9 min   397.9   0.575
+#
+# Conventional FWI wins here, and the example does not pretend otherwise. What
+# frequency selection buys is not accuracy on a synthetic — it is that the
+# misfit is invariant to any per-node complex scale, so the source spectrum,
+# the excitation delay and the sensor coupling all cancel. On Marmousi the
+# wavelet is known exactly and that is worth nothing. On a field OBN survey it
+# is the difference between having a workflow and not.
+#
+# What is different from every other FWI example here:
+#
+#  * No `wavelet:`, no `geometry:`, no `obs:`. The schema makes all three
+#    optional in this mode. Obs is the shard; the geometry rides along inside
+#    it; the source spectrum cancels in the misfit.
+#  * The misfit is not L2 on waveforms. It is the per-node complex-cosine
+#    coherence  J = 1 - |<u,d>| / (|u| |d|)  on the window's DFT coefficients.
+#    `loss:` below is therefore ignored; it stays because the schema wants it.
+#
+# The governing relation for every number in the `frequency:` blocks:
+#
+#       bins = bandwidth x window length          (window = probe_samples * dt)
+#       pool size <= bins                          (hard constraint)
+#
+# Comb bins are the currency, not shots. Extra sources ride the SAME forward for
+# free — one forward is one forward — so the way to fire more nodes at once is
+# to lengthen the analysis window, which buys bins linearly. Note the
+# consequence in the ladder below: the window SHORTENS as the rungs climb,
+# because a wider band reaches the same bin count in less time. The expensive
+# rung is the lowest one.
+#
+# Each iteration runs `steady_samples + slack_samples + probe_samples` steps:
+#   * `steady_samples` (10000 = 10 s) is dead time while the continuous sources
+#     ring up. Marmousi is 17 km wide and the slowest path is ~2.5 km/s, so
+#     anything under ~7 s still has a transient in it. The runner prints a
+#     two-window check at setup — extract the coefficients twice, `slack_samples`
+#     apart, and report the median relative difference. Under 1e-2 means the
+#     window really is steady. Raise `steady_samples` if it is not.
+#   * `probe_samples` is the analysis window AND the comb definition:
+#     f = k / (probe_samples * dt). It MUST match the `--n-p` given to
+#     extract-coeff, and the runner rejects the shard if it does not.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_freqsel
+seed: 0
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001                 # nt is derived from the sample counts below;
+  nt: 60500                 # written here only to match the longest rung
+
+physics:
+  equation: Acoustic
+  abcn: 40                  # must match 11 — see its header on why the PML is
+                            # sized by the LOWEST frequency in the ladder
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary    # not optional at these record lengths: storing
+      boundary: { storage: gpu }   # every wavefield for 60500 steps is ~50 GB,
+                            # boundary saving does the same run in 2.2 GB
+
+# Same 1-D cold start as 03 — no lateral structure at all, so nothing about the
+# answer leaks in through the starting model.
+init_model:
+  name: vp
+  shape: [281, 1361]
+  linear_gradient:
+    vmin: 1500.0
+    vmax: 4000.0
+    water_rows: 37
+    water_vp: 1500.0
+
+source_encoding:
+  enabled: true
+  mode: frequency_selection
+  frequency:
+    coeff_shards: ./sweep_runs/coeff_1_3hz.npz
+    probe_samples: 50000    # 50 s window -> bins 0.02 Hz apart
+    k_lo: 50                # 1.0 Hz
+    k_hi: 150               # 3.0 Hz  -> 101 bins for 100 nodes
+    steady_samples: 10000
+    slack_samples: 500
+    ramp_s: 0.5             # raised-cosine turn-on, so the continuous sources
+                            # do not radiate a step at t=0
+    n_pools: 1              # ONE pool: all 100 nodes fire every iteration.
+                            # `n_pools: 2` would halve the data per gradient at
+                            # identical cost per iteration — the pools exist for
+                            # when the array is larger than the comb, not as a
+                            # default.
+
+optimizer:
+  kind: adam
+  lr: 25.0
+
+loss:
+  kind: mse                 # IGNORED — the GCN coherence misfit is built in
+
+# Why the ladder starts at 1 Hz: 03 measured this 1-D start at -160 ms of
+# two-way traveltime error at 2 km, and a stage cycle-skips once that exceeds
+# half a period, so the first rung has to sit below 1/(2*0.160) = 3.1 Hz. A
+# 2-4 Hz first rung rides that line and reproducibly fails — it drove the model
+# AWAY from the truth (RMSE 473.7 -> 520.8) while the misfit fell 3.2x. 1-3 Hz
+# has margin.
+stages:
+  - epochs: 100             # 1-3 Hz: kinematics
+    lr_scale: 1.0
+  - epochs: 70              # 2-6 Hz: structure
+    lr_scale: 0.6
+    frequency:
+      coeff_shards: ./sweep_runs/coeff_2_6hz.npz
+      probe_samples: 25000  # 25 s -> 0.04 Hz bins
+      k_lo: 50              # 2.0 Hz
+      k_hi: 150             # 6.0 Hz  -> 101 bins
+      steady_samples: 10000
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 70              # 4-10 Hz: detail
+    lr_scale: 0.35
+    frequency:
+      coeff_shards: ./sweep_runs/coeff_4_10hz.npz
+      probe_samples: 17000  # 17 s -> 0.059 Hz bins
+      k_lo: 68              # 4.0 Hz
+      k_hi: 170             # 10.0 Hz -> 103 bins
+      steady_samples: 10000
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 1
+
+# No `freeze_top_n_rows:` — this path pins the water differently, and the schema
+# rejects the key rather than ignoring it. Every cell of the starting model that
+# sits at EXACTLY the water velocity (1500 m/s, or `reparam.water_vp_m_s`) has
+# its gradient zeroed and its value held. The `linear_gradient` start above
+# stamps rows 0-36 at 1500.0, so the water column is pinned automatically — and
+# so is row 37, where the ramp happens to begin at exactly 1500.0 too. One
+# 12.5 m cell of seabed, worth knowing about.
+
+epochs: 240                 # required by the schema; ignored when `stages:` is set
+batchsize: 1                # ignored: the pool IS the batch
+show_every: 10

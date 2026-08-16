@@ -1,0 +1,147 @@
+# SEG/EAGE Overthrust 3-D — frequency-selection FWI.
+#
+# Teaches:  what the encoding is actually FOR. In 3-D the cost of conventional
+#           FWI is one forward per source per iteration; here all 64 nodes ride
+#           a SINGLE forward at 64 distinct frequencies, and the window DFT
+#           pulls them apart with no crosstalk to average away. 12 shares the
+#           mechanics; this is the case where it changes what is affordable.
+# Needs:    the two shards written by 13 + `sweep-tasks extract-coeff`.
+# Produces: inverted_vp.npy + curves.npz in the task dir.
+#
+# Run 13 first (its header lists the exact extract-coeff commands), then:
+#   sweep-tasks run examples/synthetic/14_fwi_overthrust_freqsel_3d.yaml
+#
+# Read 12 first: it carries the full explanation of why there is no `wavelet:`,
+# `geometry:` or `obs:` in this file, what the GCN coherence misfit is, and the
+# `bins = bandwidth x window length, pool <= bins` arithmetic behind every
+# number in the `frequency:` blocks. The 3-D specifics are:
+#
+#  * The ladder stops at 4 Hz. That is the grid, not the method — see 13 on the
+#    five-points-per-wavelength ceiling at 100 m cells. So where 12 climbs
+#    1-3 -> 2-6 -> 4-10 Hz, this one has room for two rungs only.
+#  * And it STARTS at 1-2 Hz, not 1-3. The 1-D start below is +230 ms of
+#    two-way traveltime error at 4 km, which puts the cycle-skip limit there at
+#    1/(2*0.230) = 2.18 Hz. A 1-3 Hz first rung skips at depth.
+#  * The two rungs therefore need different windows for the same 65 bins: 64 s
+#    at 1-2 Hz, 32 s at 2-4 Hz. Narrow band = long window = expensive.
+#  * `steady_samples: 3000` is 12 s of ring-up. The longest path corner to
+#    corner across 20 km at Overthrust's slowest velocity is about 13 s, far
+#    more than the 2-D case needs. The two-window check the runner prints at
+#    setup is the number to trust: on this geometry it lands near 1e-4, two
+#    orders better than the 2-D pair, because there is no water layer to
+#    reverberate.
+#  * One iteration is 11250 time steps of a 1.9 M-cell grid, forward and
+#    adjoint, for all 64 nodes together. Conventional FWI would need 64
+#    forwards to see the same data.
+#
+# Reference (RTX 6000 Ada, seed 0), 2 x 60 iterations, 35 min:
+#
+#   after            RMSE vs true    r        low-wavenumber RMSE
+#   init (1-D)            644.1                      503.0
+#   rung 1  1-2 Hz        539.0    +0.172             363.5
+#   rung 2  2-4 Hz        512.3    +0.309             347.3
+#
+#   steady-state two-window check   6.6e-4 / 5.3e-3   (target <= 1e-2)
+#   iteration cost                  22.0 s / 12.9 s
+#   peak GPU memory                 43.8 GB / 26.0 GB
+#
+# NEEDS A >= 48 GB GPU as written. The first rung's 64 s analysis window is
+# 19250 time steps, and even with boundary saving that peaks at 43.8 GB — it
+# will NOT fit a 40 GB A100. Drop to `boundary: { storage: cpu }` (slower, host
+# RAM) or halve the node count (which halves the bins needed, hence the window,
+# hence the memory) if that is the machine you have.
+#
+# What the result looks like, honestly: the thrust structure comes out in the
+# right place — the z = 2.3 km depth slice recovers the curved high-velocity
+# ridge at x ~ 5 km and its branch — and the basement topography at 3-3.5 km
+# tracks the truth. It is also visibly SMOOTH, with none of the thin layers,
+# and the depth slices keep a mottled node footprint from the 2.4 km spacing.
+# That smoothness is the band, not the tuning: 2-4 Hz at 4000 m/s is a 1-2 km
+# wavelength, so half-wavelength resolution is 500 m-1 km against tens of
+# metres of true layering. The only lever that moves it is a finer grid
+# (`downsample: 2` doubles the 4.4 Hz ceiling and costs ~16x per iteration),
+# which is a multi-GPU job, not an example.
+#
+# Both rungs were still descending at iteration 60 (0.0394 and 0.0294), so this
+# is a cost-bounded run, not a converged one.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_overthrust_freqsel_3d
+seed: 0
+
+grid:
+  dh: 100.0
+
+time:
+  dt: 0.004
+  nt: 19250                 # = steady + slack + probe of the LONGEST rung
+
+physics:
+  equation: Acoustic3D
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+# A 1-D cold start, the same design as 12 — and the same reasoning. The obvious
+# alternative, `smooth_sigma_cells: 6` on the truth, makes a BADLY POSED
+# example: sigma 6 is 600 m of smoothing, while 2 Hz at 4000 m/s resolves about
+# 1 km, so the start is already correct everywhere this band can see. Measured,
+# that setup went RMSE 402.6 -> 431.5 with r = +0.183 — nothing to gain and
+# plenty to lose. Against the 1-D start below there is real low-wavenumber work
+# to do: RMSE 644.1, low-wavenumber RMSE 503.0.
+init_model:
+  name: vp
+  shape: [47, 201, 201]
+  linear_gradient:
+    vmin: 2400.0            # Overthrust's near-surface layer mean is 2739
+    vmax: 5600.0            # and the base runs to 6000
+                            # (no `water_rows` — this is a land model, and the
+                            #  field defaults to 0, so the ramp spans the whole
+                            #  column. 12 pins a water layer with it.)
+
+source_encoding:
+  enabled: true
+  mode: frequency_selection
+  frequency:
+    coeff_shards: ./sweep_runs/coeff_3d_1_2hz.npz
+    probe_samples: 16000    # 64 s window -> bins 0.015625 Hz apart. The first
+                            # rung is the expensive one precisely because its
+                            # band is narrow: bins = bandwidth x window, and
+                            # 64 nodes need 64 bins out of only 1 Hz of band.
+    k_lo: 64                # 1.0 Hz
+    k_hi: 128               # 2.0 Hz -> 65 bins for 64 nodes
+    steady_samples: 3000
+    slack_samples: 250
+    ramp_s: 1.0
+    n_pools: 1              # all 64 nodes every iteration
+
+optimizer:
+  kind: adam
+  lr: 25.0
+
+loss:
+  kind: mse                 # IGNORED — the GCN coherence misfit is built in
+
+stages:
+  - epochs: 60              # 1-2 Hz
+    lr_scale: 1.0
+  - epochs: 60              # 2-4 Hz
+    lr_scale: 0.6
+    frequency:
+      coeff_shards: ./sweep_runs/coeff_3d_2_4hz.npz
+      probe_samples: 8000   # 32 s — twice the band, so half the window for the
+      k_lo: 64              # same 65 bins. 2.0 Hz
+      k_hi: 128             # 4.0 Hz -> 65 bins
+      steady_samples: 3000
+      slack_samples: 250
+      ramp_s: 1.0
+      n_pools: 1
+
+epochs: 120                 # required by the schema; ignored when `stages:` is set
+batchsize: 1                # ignored: the pool IS the batch
+show_every: 5

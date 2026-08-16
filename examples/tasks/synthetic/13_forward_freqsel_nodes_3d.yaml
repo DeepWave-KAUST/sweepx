@@ -1,0 +1,86 @@
+# SEG/EAGE Overthrust 3-D — step 1 of 2 for 3-D frequency-selection FWI.
+#
+# Teaches:  `geometry.kind: grid` — the 3-D counterpart of `kind: line`, a
+#           rectangular patch of sources and a rectangular patch of receivers
+#           from start/stop/step rules, so a 2401-channel 3-D survey is six
+#           lines of YAML instead of 2401.
+# Needs:    network on first run — `overthrust:3d-acoustic` is a ~175 MB
+#           download cached under ~/.cache/sweep-datasets (CC-BY-4.0). On a
+#           cluster whose compute nodes have no outbound network, run this once
+#           on a login node or pre-stage $SWEEP_DATASETS_CACHE.
+# Produces: output/record.npy (1.6 GB) + sources.npy + receivers.npy.
+#
+# Run (in order, from the repo root — see 11 on why $RUNS is what it is):
+#   RUNS=examples/synthetic/sweep_runs
+#   sweep-tasks run examples/synthetic/13_forward_freqsel_nodes_3d.yaml
+#   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes_3d \
+#       --n-p 16000 --k-lo 64 --k-hi 128 -o $RUNS/coeff_3d_1_2hz.npz
+#   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes_3d \
+#       --n-p 8000  --k-lo 64 --k-hi 128 -o $RUNS/coeff_3d_2_4hz.npz
+#   sweep-tasks run examples/synthetic/14_fwi_overthrust_freqsel_3d.yaml
+#
+# `downsample: 4` takes the 801x801x187 @ 25 m model to 201x201x47 @ 100 m —
+# 20.1 x 20.1 x 4.7 km, 1.9 M cells. That resolution is what caps the band: at
+# Overthrust's slowest velocity of 2179 m/s, five points per wavelength lands
+# at 2179 / (5 x 100) = 4.4 Hz. Inverting above that on this grid would be
+# fitting numerical dispersion rather than geology, which is why 14's ladder
+# stops at 4 Hz where the 2-D one reaches 10 Hz. Halving `downsample` doubles
+# the ceiling and costs 8x the cells and 2x the steps.
+#
+# 64 nodes on an 8 x 8 patch at 2.4 km, 2401 surface "shot" positions on a
+# 49 x 49 patch at 400 m. Sources are the nodes (reciprocity — see 11), and the
+# node count is set by the comb: 14 fires all 64 at once out of 65 bins.
+#
+# Reference (RTX 6000 Ada, seed 0): forward 96 s, extractions 23 s (1-2 Hz,
+# n_p 16000) and 12 s (2-4 Hz, n_p 8000). record.npy is 1.84 GB.
+
+task_type: forward
+output_dir: ./sweep_runs
+task_id: forward_freqsel_nodes_3d
+seed: 0
+
+grid:
+  dh: 100.0                 # 25 m x downsample 4
+
+time:
+  dt: 0.004                 # CFL for 3-D order 8 at vmax 6000 sits at 7.5 ms;
+                            # 4 ms keeps a ~1.9x margin
+  nt: 3000                  # 12 s — the corner-to-corner path across 20 km at
+                            # the slowest velocity is ~13 s, so this is the
+                            # number to raise first if the extracted
+                            # coefficients look truncated
+
+wavelet:
+  kind: ricker
+  fm: 2.5                   # centred on the 1-4 Hz the grid actually supports.
+                            # See 11 on sizing `fm` to the whole ladder: here
+                            # the ladder is narrow, so the peak sits inside it
+                            # rather than above it.
+  delay: 0.7
+
+geometry:
+  kind: grid
+  sources:                  # 64 nodes: 8 x 8 at 2.4 km, 200 m deep
+    x: { start: 20, stop: 190, step: 24 }
+    y: { start: 20, stop: 190, step: 24 }
+    depth: 2
+  receivers:                # 2401 surface positions at 400 m
+    x: { start: 5, stop: 198, step: 4 }
+    y: { start: 5, stop: 198, step: 4 }
+    depth: 1
+
+physics:
+  equation: Acoustic3D
+  # abcn stays at its default 20 here, unlike the 2-D pair. PML thickness is
+  # judged against the lowest WAVELENGTH, not the lowest frequency: 20 cells of
+  # 100 m is 2000 m, and 1 Hz in 2179 m/s is a 2179 m wavelength — about
+  # lambda/1.1. The 2-D examples need abcn 40 only because 20 cells of 12.5 m
+  # is a mere 250 m against a 1500 m wavelength.
+
+backend:
+  impl: c
+
+models:
+  - name: vp
+    dataset: overthrust:3d-acoustic
+    downsample: 4
