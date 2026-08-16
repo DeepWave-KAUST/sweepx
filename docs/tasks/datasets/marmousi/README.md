@@ -198,6 +198,8 @@ comparable.
 A wash on accuracy, which is the honest result. What the parametrisation buys
 is a model with fewer degrees of freedom than the grid it renders onto.
 
+![iFWI result](figures/07_vp_final.png)
+
 ### The one parameter that decides whether it works
 
 `reparam.vp_std`. The network renders `vp = init + raw * vp_std`, and `raw`
@@ -249,6 +251,12 @@ output directory has twenty files for one run.
 > 1.374e-2. The shot batch is redrawn every step, so consecutive epochs are
 > measured on different data.
 
+![RTM and LSRTM](figures/04_05_imaging.png)
+
+Both are plotted on the same signed grey scale. RTM gets the reflectors in one
+pass; LSRTM sharpens them and evens out the amplitudes, which is what inverting
+rather than migrating buys.
+
 ---
 
 ## Step 6 — what the physics and backend knobs actually do
@@ -264,6 +272,16 @@ it. With `free_surface: true` the snapshots show the downgoing wave, its
 polarity-flipped ghost, and the surface multiples behind it; set it to `false`
 and re-run and only the direct wavefront is left. **Reference: 18 s**, snapshots
 at steps 400 / 900 / 1500 / 2400.
+
+![wavefield snapshots](figures/06_snapshots.png)
+
+The velocity model is drawn underneath and the wavefield laid on top with a
+transparency taken from its own amplitude, so you can see what the wave is
+travelling through. Reading down: the source rings in the water layer, the
+front reaches the seabed, then the two near-vertical scattering trains at
+x ~ 7 km and x ~ 11 km line up with the fault zone, and by 2.4 s a strong
+surface multiple is bouncing along z = 0. Nothing reflects off the left and
+right edges, which is the CPML doing its job.
 
 **08** is the same FWI as Step 2 cut to 10 epochs, with every `backend:` variant
 written out and commented so you can swap one block at a time and watch wall
@@ -314,6 +332,8 @@ scales, and they cancel.
 | rung 3 — 4–10 Hz | **397.9** |
 
 `r` = 0.575; low-wavenumber RMSE 321.6 → 243.4.
+
+![freqsel by rung](figures/12_by_rung.png)
 
 ### Against conventional FWI, at equal cost
 
@@ -372,6 +392,13 @@ resolution is 500 m – 1 km against tens of metres of true layering. Where the
 2-D ladder climbs to 10 Hz on a 12.5 m grid, this one has nowhere to go. The
 only lever is a finer grid — `downsample: 2` doubles the ceiling and costs
 about 16× per iteration, which is a multi-GPU job rather than an example.
+
+![3-D freqsel](figures/14_3d_cuts.png)
+
+The thrust comes out in the right place — the depth slice recovers the curved
+high-velocity ridge at x ≈ 5 km and its branch, and the basement topography at
+3–3.5 km tracks the truth — and it is visibly smooth, which is the band rather
+than the tuning.
 
 A cold start matters even more here than in Step 3, for a reason that is easy
 to get backwards. Starting 14 from `smooth_sigma_cells: 6` — the standard-looking
