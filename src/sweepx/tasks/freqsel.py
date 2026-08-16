@@ -35,8 +35,104 @@ __all__ = [
     "PoolScheduler",
     "encoded_wavelet",
     "SteadyGCNLoss",
+    "extract_shard",
     "synthesize_shard",
 ]
+
+
+def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
+                  trace_grid_xyz: np.ndarray, comb: FrequencyComb,
+                  *, fold=None, chunk: int = 8,
+                  verbose: bool = False) -> str:
+    """DTFT already-recorded common-node gathers onto the comb and write a shard.
+
+    The observed-data half of the method, with no solver in it: ``record`` is
+    whatever the acquisition (or a forward run) produced, one conventional
+    gather per node, and the output is the same npz schema
+    :class:`FreqSelTargets` reads and :func:`synthesize_shard` writes.
+
+    ``record``          ``(n_nodes, nt, n_rec)`` or ``(n_nodes, nt, n_rec, 1)``.
+    ``node_grid_xyz``   ``(n_nodes, ndim)`` grid indices, (x, z) or (x, y, z).
+    ``trace_grid_xyz``  ``(n_rec, ndim)`` shared across nodes, or
+                        ``(n_nodes, n_rec, ndim)`` per node.
+    ``fold``            optional ``(n_nodes * n_rec,)`` stack count per item;
+                        defaults to 1 (one trace per cell, the synthetic case).
+
+    Absolute scale and the time origin do not matter: the GCN misfit is
+    invariant to a per-(node, bin) complex factor, which is exactly what a
+    source spectrum, an excitation delay or a coupling constant contribute.
+    What DOES matter is that ``comb`` here is the comb the inversion will
+    configure — :class:`FreqSelTargets` refuses a shard whose ``n_p``, ``dt``
+    or ``ks`` disagree.
+    """
+    rec = np.asarray(record)
+    if rec.ndim == 4 and rec.shape[-1] == 1:
+        rec = rec[..., 0]
+    if rec.ndim != 3:
+        raise ValueError(
+            "record must be (n_nodes, nt, n_rec) or (n_nodes, nt, n_rec, 1); "
+            f"got shape {tuple(np.shape(record))}")
+    n_nodes, nt, n_rec = rec.shape
+
+    nodes = np.asarray(node_grid_xyz, np.int64)
+    if nodes.ndim != 2 or len(nodes) != n_nodes:
+        raise ValueError(
+            f"node_grid_xyz must be (n_nodes={n_nodes}, ndim); "
+            f"got {nodes.shape}")
+    ndim = nodes.shape[1]
+    if ndim not in (2, 3):
+        raise ValueError(f"node_grid_xyz ndim must be 2 or 3; got {ndim}")
+
+    traces = np.asarray(trace_grid_xyz, np.int64)
+    if traces.ndim == 2:
+        if len(traces) != n_rec:
+            raise ValueError(
+                f"trace_grid_xyz must be (n_rec={n_rec}, ndim); "
+                f"got {traces.shape}")
+        traces = np.tile(traces, (n_nodes, 1))
+    elif traces.ndim == 3:
+        if traces.shape[:2] != (n_nodes, n_rec):
+            raise ValueError(
+                f"per-node trace_grid_xyz must be ({n_nodes}, {n_rec}, ndim); "
+                f"got {traces.shape}")
+        traces = traces.reshape(n_nodes * n_rec, traces.shape[-1])
+    else:
+        raise ValueError(
+            f"trace_grid_xyz must be 2-D or 3-D; got {traces.shape}")
+    if traces.shape[1] != ndim:
+        raise ValueError(
+            f"trace_grid_xyz ndim {traces.shape[1]} != node_grid_xyz ndim {ndim}")
+
+    t_axis = np.arange(nt, dtype=np.float64) * comb.dt
+    E = np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
+    D = np.empty((n_nodes * n_rec, comb.n_bins), np.complex64)
+    for a in range(0, n_nodes, chunk):
+        b = min(n_nodes, a + chunk)
+        arr = np.asarray(rec[a:b], dtype=np.float64)      # (b-a, nt, n_rec)
+        for i in range(b - a):
+            D[(a + i) * n_rec:(a + i + 1) * n_rec] = \
+                (arr[i].T @ E.T).astype(np.complex64)
+        if verbose:
+            print(f"[freqsel] extracted nodes {b}/{n_nodes}", flush=True)
+
+    if fold is None:
+        fold_arr = np.ones(n_nodes * n_rec, np.int32)
+    else:
+        fold_arr = np.asarray(fold, np.int32).reshape(-1)
+        if len(fold_arr) != n_nodes * n_rec:
+            raise ValueError(
+                f"fold must have {n_nodes * n_rec} entries; got {len(fold_arr)}")
+
+    np.savez(out_path,
+             node_ids=np.arange(n_nodes, dtype=np.int32),
+             node_grid_xyz=nodes.astype(np.int32),
+             node_ptr=np.arange(n_nodes + 1, dtype=np.int64) * n_rec,
+             D=D, fold=fold_arr,
+             trace_grid_xyz=traces.astype(np.int32),
+             freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
+             meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
+                                  synthetic=False, nt_record=int(nt))))
+    return out_path
 
 
 def synthesize_shard(out_path: str, solver, vp_true: torch.Tensor,

@@ -686,6 +686,71 @@ def _cmd_build_index(args) -> int:
     return 0
 
 
+def _cmd_extract_coeff(args) -> int:
+    """``sweep-tasks extract-coeff`` — common-node gathers → freqsel DTFT shard.
+
+    The observed-data half of frequency-selection FWI. A ``task_type: forward``
+    run whose SOURCES are the receiver nodes (reciprocity: each node fires,
+    the shot positions record) leaves ``record.npy`` / ``sources.npy`` /
+    ``receivers.npy`` in its output dir; this turns them into the coefficient
+    shard the ``source_encoding.mode: frequency_selection`` FWI reads. After
+    extraction the inversion never touches the gathers again — it only ever
+    sees one complex number per (node, receiver cell, comb bin).
+    """
+    import numpy as np
+    import yaml as _yaml
+
+    from sweep_tasks.freqsel import FrequencyComb, extract_shard
+
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    out_root = run_dir / "output" if (run_dir / "output").is_dir() else run_dir
+    paths = {n: out_root / f"{n}.npy"
+             for n in ("record", "sources", "receivers")}
+    missing = [str(p) for p in paths.values() if not p.is_file()]
+    if missing:
+        print(f"error: extract-coeff expects a `task_type: forward` run "
+              f"directory; missing {missing}")
+        return 2
+
+    dt = args.dt
+    if dt is None:
+        cfg = run_dir / "config_resolved.yaml"
+        if not cfg.is_file():
+            print(f"error: --dt not given and no {cfg} to read `time.dt` from")
+            return 2
+        with open(cfg) as fh:
+            raw = _yaml.safe_load(fh) or {}
+        dt = (raw.get("time") or {}).get("dt")
+        if dt is None:
+            print(f"error: {cfg} has no `time.dt`; pass --dt")
+            return 2
+        print(f"[extract-coeff] dt={dt} s (from {cfg.name})")
+
+    if args.k_hi < args.k_lo:
+        print(f"error: --k-hi ({args.k_hi}) must be >= --k-lo ({args.k_lo})")
+        return 2
+    comb = FrequencyComb(dt=float(dt), n_p=int(args.n_p),
+                         ks=np.arange(int(args.k_lo), int(args.k_hi) + 1))
+
+    record = np.load(paths["record"], mmap_mode="r")
+    nodes = np.load(paths["sources"])
+    traces = np.load(paths["receivers"])
+    out = (Path(args.out).expanduser().resolve() if args.out
+           else out_root / "coeff_shard.npz")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[extract-coeff] {len(nodes)} nodes x {traces.shape[1]} traces, "
+          f"record {tuple(record.shape)}")
+    print(f"[extract-coeff] comb: {comb.n_bins} bins, "
+          f"{comb.freqs[0]:.4f}-{comb.freqs[-1]:.4f} Hz "
+          f"(df={1.0 / (comb.n_p * comb.dt):.4f} Hz, n_p={comb.n_p})")
+    extract_shard(str(out), record, nodes, traces, comb, verbose=args.verbose)
+    print(f"[extract-coeff] wrote {out}")
+    print("[extract-coeff] point the FWI YAML at it with "
+          "source_encoding.frequency.coeff_shards")
+    return 0
+
+
 def _cmd_filter_image(args) -> int:
     """``sweep-tasks filter-image`` — depth-tapered z-low-cut on a 2-D image npy.
 
@@ -1152,6 +1217,36 @@ def main(argv: list[str] | None = None) -> int:
                     help="YAML file with a `build_index:` section to source "
                          "default values from. CLI flags override YAML.")
 
+    # `sweep-tasks extract-coeff` — forward run dir → freqsel DTFT shard.
+    ec = subparsers.add_parser(
+        "extract-coeff",
+        help="DTFT a forward run's common-node gathers onto a frequency comb "
+             "and write the coefficient shard that frequency-selection FWI "
+             "(source_encoding.mode: frequency_selection) reads as obs.",
+    )
+    ec.add_argument("run_dir",
+                    help="Directory of a `task_type: forward` run — the one "
+                         "holding output/record.npy, sources.npy, "
+                         "receivers.npy. Its sources are the nodes.")
+    ec.add_argument("-o", "--out", default=None,
+                    help="Output shard npz (default: <run_dir>/output/"
+                         "coeff_shard.npz).")
+    ec.add_argument("--n-p", "--n_p", dest="n_p", type=int, required=True,
+                    metavar="N",
+                    help="Analysis-window length in solver samples. Comb "
+                         "frequencies are k/(n_p*dt), so this sets the bin "
+                         "spacing. MUST equal the FWI YAML's "
+                         "frequency.probe_samples.")
+    ec.add_argument("--k-lo", "--k_lo", dest="k_lo", type=int, required=True,
+                    metavar="K", help="First comb bin index (0 < k < n_p/2).")
+    ec.add_argument("--k-hi", "--k_hi", dest="k_hi", type=int, required=True,
+                    metavar="K", help="Last comb bin index, inclusive.")
+    ec.add_argument("--dt", type=float, default=None,
+                    help="Solver dt in seconds. Default: read `time.dt` from "
+                         "<run_dir>/config_resolved.yaml.")
+    ec.add_argument("--verbose", action="store_true",
+                    help="Print per-chunk extraction progress.")
+
     # `sweep-tasks build-plan` — SEGYIndex npz + filters → SeismicPlan npz.
     bp = subparsers.add_parser(
         "build-plan",
@@ -1480,6 +1575,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_build_index(args)
     if args.command == "build-plan":
         return _cmd_build_plan(args)
+    if args.command == "extract-coeff":
+        return _cmd_extract_coeff(args)
     if args.command == "filter-image":
         return _cmd_filter_image(args)
     if args.command == "analyze-wavelet":
