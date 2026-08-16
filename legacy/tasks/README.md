@@ -12,12 +12,13 @@ directly. **`sweep-tasks` is for when you want to describe a job in YAML
 
 | Module | Purpose |
 |---|---|
-| `sweep_tasks.schemas` | Pydantic models for every task type (`FWISpec`, `LSRTMSpec`, `ForwardSpec`, `WavefieldSpec`, `IntrospectSpec`) + every sub-spec (`LossSpec`, `OptimizerAdam/SGD/LBFGS`, `Scheduler*`, `ModelRef`, `LineGeometry`/`ExplicitGeometry`/`FromFileGeometry`, …) |
+| `sweep_tasks.schemas` | Pydantic models for every task type (`FWISpec`, `LSRTMSpec`, `RTMSpec`, `ForwardSpec`, `WavefieldSpec`, `IntrospectSpec`) + every sub-spec (`LossSpec`, `OptimizerAdam/SGD/LBFGS`, `Scheduler*`, `ModelRef`, `LineGeometry`/`GridGeometry`/`ExplicitGeometry`/`FromFileGeometry`/`FromPlanGeometry`, …) |
 | `sweep_tasks.runner` | `TaskRunner` — synchronous local executor. One process or torchrun multi-rank; shot-parallel by default; writes `status.json` + `checkpoint.pt` + figures per run |
 | `sweep_tasks.yaml_io` | `load_task` / `dump_task` / `new_template` — YAML ↔ Pydantic ↔ canonical template strings |
 | `sweep_tasks.registry` | The `task_type -> spec class` map (used by `new_template` and `load_task`) |
 | `sweep_tasks._distributed` | torchrun bootstrap + all-reduce / broadcast helpers used by the runner |
-| `sweep_tasks.cli` | `sweep-tasks run / new / tasks {list,status,logs}` |
+| `sweep_tasks.freqsel` | Frequency-selection (steady-state comb) encoding: `extract_shard` turns recorded gathers into DTFT coefficients, `FreqSelTargets` / `SteadyGCNLoss` drive the wavelet-free inversion |
+| `sweep_tasks.cli` | `sweep-tasks run / init / new / build-index / build-plan / extract-coeff / tasks {list,status,logs}` (+ the wavelet tools) |
 
 ## Install
 
@@ -36,6 +37,25 @@ no `.npy` to prepare, no env vars, no SEG-Y:
 sweep-tasks run examples/synthetic/01_forward_marmousi.yaml   # synthesise obs
 sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml  # invert (100 epochs)
 ```
+
+### Models without a file
+
+A task YAML never has to point at an `.npy`. `ModelRef` takes four sources:
+
+```yaml
+models:
+  - {name: vp, dataset: marmousi:2d-demo, preset: vp_true}   # a benchmark
+  - {name: vp, constant: 2200.0, shape: [120, 180]}          # a uniform box
+  - {name: vp, path: my_vp.npy}                              # your own file
+  - name: vp                                                  # a 1-D cold start,
+    shape: [281, 1361]                                        # built in memory
+    linear_gradient: {vmin: 1500.0, vmax: 4000.0,
+                      water_rows: 37, water_vp: 1500.0}
+```
+
+Any of them can be post-processed with `smooth_sigma_cells`. When the start is
+built in memory there is no input file to point at afterwards, so an FWI run
+writes the resolved array to `output/initial_vp.npy` before training.
 
 Or hand-write your own task YAML using the bundled templates:
 

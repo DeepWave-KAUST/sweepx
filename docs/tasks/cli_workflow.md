@@ -5,6 +5,10 @@ The same three-step flow drives 2-D streamer (Viking-style) and 3-D OBN
 (production-OBN-style) inversions — the only thing that changes is the
 `--grouping` flag at plan-build time.
 
+There is one branch off it, documented below: frequency-selection encoding
+reduces the data to DTFT coefficients ONCE (`extract-coeff`) and then inverts
+with no SEG-Y I/O at all, at the cost of needing the acquisition to be node-like.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  STEP 1  ▸  sweep-tasks build-index                                  │
@@ -18,6 +22,18 @@ The same three-step flow drives 2-D streamer (Viking-style) and 3-D OBN
 │  STEP 3  ▸  sweep-tasks run <fwi.yaml>                               │
 │            YAML's `geometry: from_plan` + `obs: { plan: ... }`       │
 │            FWI reads trace bytes lazily via PlanReader               │
+└──────────────────────────────────────────────────────────────────────┘
+                                │
+                                │  ALTERNATIVE for OBN, from STEP 2 on:
+                                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  BRANCH  ▸  sweep-tasks extract-coeff                                │
+│            common-node gathers → DTFT coefficients on a comb         │
+│            (one complex number per trace per frequency)              │
+├──────────────────────────────────────────────────────────────────────┤
+│          ▸  sweep-tasks run <fwi.yaml>                               │
+│            `source_encoding.mode: frequency_selection`               │
+│            reads ONLY the shards — zero SEG-Y I/O per iteration      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -255,6 +271,109 @@ in the Viking walkthrough — same `sweep-tasks run` invocations,
 just wrapped in `sbatch` templates that consume `SWEEP_*_ROOT` /
 `PROJECT_DATA_ROOT` environment variables.
 
+## Branch — frequency-selection encoding (no per-iteration I/O)
+
+### `sweep-tasks extract-coeff`
+
+Steps 1–3 stream trace bytes on every iteration. The frequency-selection path
+does the data reduction ONCE instead: it turns each common-node gather into a
+handful of DTFT coefficients, and the inversion never opens the SEG-Y again.
+
+```bash
+sweep-tasks extract-coeff <forward_run_dir> \
+    --n-p 24000 --k-lo 24 --k-hi 72 -o coeff_1_3hz.npz
+```
+
+The positional argument is a directory holding `output/record.npy`,
+`sources.npy` and `receivers.npy` — the layout a `task_type: forward` run
+leaves behind, with the NODES as its sources (reciprocity). `--dt` defaults to
+`time.dt` read out of that run's `config_resolved.yaml`.
+
+For real data, skip the CLI and call the library directly with your own arrays,
+which is the same code path:
+
+```python
+from sweep_tasks.freqsel import FrequencyComb, extract_shard
+import numpy as np
+
+comb = FrequencyComb(dt=0.004, n_p=8000, ks=np.arange(64, 129))   # 1-2 Hz
+extract_shard("coeff.npz", record, node_grid_xyz, trace_grid_xyz, comb)
+```
+
+`record` is `(n_nodes, nt, n_rec)`, the grids are integer grid indices — `(x, z)`
+in 2-D, `(x, y, z)` in 3-D. Absolute scale and time origin do not matter: the
+inversion's misfit is invariant to a per-(node, bin) complex factor, which is
+exactly what a source spectrum, an excitation delay or a coupling constant
+contribute.
+
+#### Sizing the comb
+
+Two relations govern every flag:
+
+```
+bins = bandwidth × window length          (window = n_p × dt)
+pool size ≤ bins                          (hard constraint)
+```
+
+The pool is how many nodes fire simultaneously in ONE forward, so **comb bins
+are the currency, not shots** — extra sources ride the same forward for free,
+and the way to fire more of them is to lengthen the analysis window. The
+consequence is worth internalising: the window SHORTENS as a frequency ladder
+climbs, because a wider band reaches the same bin count in less time. The
+expensive rung is the lowest one.
+
+Extraction is a DTFT of a record that already exists, so **one recording feeds
+an entire ladder** — extract once per rung, which costs seconds. The `--n-p`
+given here MUST equal `frequency.probe_samples` in the FWI YAML; the runner
+rejects a shard whose `n_p`, `dt` or `ks` disagree with the stage reading it.
+
+#### Output
+
+An npz with `node_ids`, `node_grid_xyz`, `node_ptr`, `D` (complex64,
+`n_items × n_bins`), `fold`, `trace_grid_xyz`, `freqs`, `ks`, `meta`. Tiny
+next to the SEG-Y: 100 nodes × 677 traces × 101 bins is ~55 MB.
+
+### `sweep-tasks run` with `frequency_selection`
+
+```yaml
+task_type: fwi
+# no `wavelet:`, no `geometry:`, no `obs:` — the schema makes all three
+# optional in this mode. Obs is the shard, the geometry rides inside it, and
+# the source spectrum cancels in the misfit.
+source_encoding:
+  enabled: true
+  mode: frequency_selection
+  frequency:
+    coeff_shards: ./runs/coeff_1_3hz.npz   # glob; resolved RELATIVE TO THIS FILE
+    probe_samples: 24000
+    k_lo: 24                               # 1.0 Hz at dt = 1 ms
+    k_hi: 72                               # 3.0 Hz
+    steady_samples: 10000                  # ring-up before the analysis window
+    slack_samples: 500
+    n_pools: 1                             # 1 = fire every node each iteration
+```
+
+`steady_samples` is dead time while the continuous sources ring up. The runner
+prints a two-window check at every stage entry — it extracts the coefficients
+twice, `slack_samples` apart, and reports the median relative difference.
+**Under 1e-2 means the window really is steady**; raise `steady_samples` if it
+is not.
+
+Two things that cost real runs to learn:
+
+* **Size the PML by the longest wavelength in the ladder.** At 1 Hz in 1500 m/s
+  the wavelength is ~1500 m, and the default `abcn: 20` on a 12.5 m grid is
+  only 250 m — λ/6. A continuous-wave field in a leaky box builds standing
+  waves, and unlike a transient that does *not* cancel between a transient obs
+  and a steady-state syn.
+* **`freeze_top_n_rows` is rejected in this mode**, not ignored. The water is
+  pinned by VALUE instead: every cell whose starting value is exactly the water
+  velocity (1500 m/s, or `reparam.water_vp_m_s`) has its gradient zeroed.
+
+A worked synthetic end-to-end — forward, three extractions, three-rung
+inversion, with measured numbers — is examples 11 + 12 (2-D) and 13 + 14 (3-D),
+walked through in [`docs/datasets/marmousi/README.md`](datasets/marmousi/README.md).
+
 ## Post-processing — depth-tapered z-axis low-cut on RTM images
 
 A stacked RTM (or FWI gradient) image typically has a slowly-varying
@@ -385,6 +504,9 @@ When enabled, the runner adds these files per target to `artifacts`:
 | OBN plan-streaming supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + `obs.plan.sampling.shared_shots_per_iter > 0` |
 | Inspect a plan | `python -c "from sweep_io.seismic_plan import SeismicPlan; p=SeismicPlan.load('plan.npz'); print(p.grouping, p.n_groups, p.n_rows, p.build_meta)"` |
 | Run FWI on a plan | `sweep-tasks run fwi.yaml` (with `geometry.kind=from_plan` + `obs.plan.plan_path`) |
+| Extract freqsel coefficients | `sweep-tasks extract-coeff <forward_run_dir> --n-p 24000 --k-lo 24 --k-hi 72 -o coeff.npz` |
+| Wavelet-free encoded FWI | YAML: `source_encoding: {enabled: true, mode: frequency_selection, frequency: {coeff_shards: ...}}` |
+| Ask the build what it can solve | `sweep-tasks run examples/synthetic/15_introspect_equations.yaml` |
 | Post-filter a saved RTM npy | `sweep-tasks filter-image runs/.../rtm_image_per_shot_normalised.npy` |
 | Bake the post-filter into the RTM run | Add `imaging.post_filter: {enabled: true}` to the RTM YAML |
 
