@@ -14,6 +14,7 @@ from sweep_tasks._helpers.geometry import _build_geometry_2d
 from sweep_tasks._helpers.model import (
     _get_equation_class,
     _infer_shape,
+    _model_array,
     _model_names_for_equation,
     _wavefield_names_for_equation,
 )
@@ -176,9 +177,28 @@ class ForwardRunnerMixin:
         artifacts: list[Path] = [record_path, snapshots_path]
         if spec.plot:
             try:
+                # Background for the snapshots: the velocity model the wave is
+                # actually travelling through. `vp` by name when the equation
+                # has one, otherwise the first model in the list — an elastic
+                # or VTI run then shows its leading model rather than nothing.
+                bg_ref = next((m for m in spec.models if m.name == "vp"),
+                              spec.models[0] if spec.models else None)
+                bg = _model_array(bg_ref) if bg_ref is not None else None
+                # 3-D is cut three ways; put the inline and crossline through
+                # the SOURCE so the wavefront is in frame, and the depth slice
+                # at mid-model (the source sits near the surface, where a depth
+                # slice would be almost empty).
+                slice_xyz = None
+                if len(shape) == 3 and len(sources):
+                    slice_xyz = (int(sources[0][0]), int(sources[0][1]),
+                                 int(shape[0] // 2))
                 fig_path = _plot_wavefield_snapshots(
                     snapshots_np, list(spec.snapshot_times), spec.physics.abcn,
                     shape, out_dir / "snapshots.png", spec.physics.free_surface,
+                    model=bg,
+                    model_label=(f"{bg_ref.name} (m/s)" if bg_ref is not None
+                                 else None),
+                    dh=spec.grid.dh, slice_xyz=slice_xyz,
                 )
                 artifacts.append(fig_path)
             except Exception as plot_err:  # noqa: BLE001

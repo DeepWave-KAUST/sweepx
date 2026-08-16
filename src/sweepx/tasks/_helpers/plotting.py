@@ -193,32 +193,111 @@ def _plot_loss_curve(losses, path: Path, title: str) -> Path:
 
 
 def _plot_wavefield_snapshots(snapshots_np, snapshot_times, abcn, shape, path,
-                              free_surface) -> Path:
-    """Wavefield snapshot grid via `sweep_tasks.viz.wavefield.plot_snapshot` (one per panel).
+                              free_surface, model=None, model_label=None,
+                              dh=None, slice_xyz=None) -> Path:
+    """Wavefield snapshots over the velocity model — one row per time step.
 
     The PML / absorbing-boundary cropping logic (and the `(nsnap, 1, 1, 1, ...)`
-    sweep-binding tensor layout) is sweep-tasks-specific, so it stays here;
-    each cropped panel is then rendered by sweep_tasks.viz.
+    sweep-binding tensor layout) is sweep-tasks-specific, so it stays here.
+
+    ``model`` is drawn underneath in greyscale and the wavefield goes on top
+    with a per-pixel alpha taken from its own amplitude, so quiet regions stay
+    transparent and the structure the wave is travelling through is visible
+    where it matters. A snapshot without that background shows a wavefront but
+    not what made it. Pass ``None`` to fall back to the wavefield alone.
+
+    2-D grids give one panel per row. 3-D grids give three — a depth slice, an
+    inline and a crossline — cut at ``slice_xyz`` (x, y, z) in grid indices,
+    default the middle of each axis. The caller passes the source position for
+    x and y so the wavefront is in frame rather than off the side of the cut.
+
+    Figures are sized from the grid's own aspect: panels used to be a fixed
+    4x4 inches whatever the shape was, which squashed a 1361x281 model by
+    nearly 5x and turned circular wavefronts into narrow ellipses.
     """
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
+    import numpy as _np
 
-    from sweep_tasks.viz.wavefield import plot_snapshot
+    shape = tuple(int(v) for v in shape)
+    if len(shape) not in (2, 3):
+        raise NotImplementedError(
+            f"wavefield snapshot plotting handles 2-D and 3-D grids; got {shape}.")
+    is3d = len(shape) == 3
+    nsnap = int(snapshots_np.shape[0])
+    z0 = 0 if free_surface else abcn
+    km = (lambda n: n * float(dh) / 1000.0) if dh is not None else (lambda n: n)
+    unit = "km" if dh is not None else "cells"
 
-    nz, nx = int(shape[0]), int(shape[1])
-    nsnap = snapshots_np.shape[0]
-    fig, axes = plt.subplots(1, nsnap, figsize=(4 * nsnap, 4), squeeze=False)
+    bg = None if model is None else _np.asarray(model)
+
+    if is3d:
+        nz, ny, nx = shape
+        ix, iy, iz = (nx // 2, ny // 2, nz // 2) if slice_xyz is None else slice_xyz
+        ix = max(0, min(nx - 1, int(ix)))
+        iy = max(0, min(ny - 1, int(iy)))
+        iz = max(0, min(nz - 1, int(iz)))
+        if bg is not None and (bg.ndim != 3 or bg.shape != (nz, ny, nx)):
+            bg = None
+        # (take a cut, its extent, axis labels, its title)
+        cuts = [
+            (lambda v: v[iz, :, :], (0.0, km(nx), km(ny), 0.0),
+             f"x ({unit})", f"y ({unit})", f"depth slice  z = {km(iz):.2f} {unit}"),
+            (lambda v: v[:, iy, :], (0.0, km(nx), km(nz), 0.0),
+             f"x ({unit})", f"z ({unit})", f"inline  y = {km(iy):.2f} {unit}"),
+            (lambda v: v[:, :, ix], (0.0, km(ny), km(nz), 0.0),
+             f"y ({unit})", f"z ({unit})", f"crossline  x = {km(ix):.2f} {unit}"),
+        ]
+
+        def _crop(vol):
+            return vol[z0: z0 + nz, abcn: abcn + ny, abcn: abcn + nx]
+
+        width, panel_h = 15.0, 3.0
+    else:
+        nz, nx = shape
+        if bg is not None and (bg.ndim != 2 or bg.shape != (nz, nx)):
+            bg = None
+        cuts = [(lambda v: v, (0.0, km(nx), km(nz), 0.0),
+                 f"Distance ({unit})", f"Depth ({unit})", None)]
+
+        def _crop(vol):
+            return vol[z0: z0 + nz, abcn: abcn + nx]
+
+        width = 13.0
+        panel_h = min(4.0, max(1.6, width * nz / max(nx, 1)))
+
+    ncol = len(cuts)
+    fig, axes = plt.subplots(nsnap, ncol, squeeze=False,
+                             figsize=(width, panel_h * nsnap),
+                             constrained_layout=True)
+    im_bg = None
     for i in range(nsnap):
-        panel = snapshots_np[i, 0, 0, 0]
-        if free_surface:
-            panel = panel[:nz, abcn: abcn + nx]
-        else:
-            panel = panel[abcn: abcn + nz, abcn: abcn + nx]
-        plot_snapshot(panel, ax=axes[0, i], perc=100.0,
-                      cmap="seismic", title=f"t-step {snapshot_times[i]}")
-        axes[0, i].set_axis_off()
-    fig.tight_layout()
+        vol = _np.asarray(_crop(snapshots_np[i, 0, 0, 0]))
+        # one amplitude scale across the row, so the three cuts of a 3-D
+        # snapshot are directly comparable rather than each self-normalised
+        s = float(_np.percentile(_np.abs(vol), 99.5)) + 1e-30
+        for c, (cut, extent, xl, yl, ctitle) in enumerate(cuts):
+            ax = axes[i, c]
+            panel = cut(vol)
+            if bg is not None:
+                im_bg = ax.imshow(cut(bg), cmap="gray", aspect="auto",
+                                  extent=extent)
+                alpha = (_np.abs(panel) / s).clip(0.0, 1.0)
+            else:
+                alpha = None
+            ax.imshow(panel, cmap="seismic", vmin=-s, vmax=s, aspect="auto",
+                      extent=extent, alpha=alpha)
+            head = f"t-step {snapshot_times[i]}"
+            ax.set_title(f"{head}   {ctitle}" if ctitle else head, fontsize=10)
+            ax.set_ylabel(yl, fontsize=9)
+            if i == nsnap - 1:
+                ax.set_xlabel(xl, fontsize=9)
+            else:
+                ax.set_xticklabels([])
+    if im_bg is not None:
+        cb = fig.colorbar(im_bg, ax=axes.ravel().tolist(), shrink=0.6, pad=0.01)
+        cb.set_label(model_label or "model", fontsize=9)
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return path
