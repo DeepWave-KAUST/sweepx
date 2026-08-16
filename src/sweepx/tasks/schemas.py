@@ -1756,6 +1756,17 @@ class FWISpec(BaseTaskSpec):
                     f"fwi: field(s) {missing} are required (they are "
                     "optional only under source_encoding.mode="
                     "'frequency_selection')")
+        elif self.freeze_top_n_rows:
+            # The freqsel loop pins the water by VALUE (every cell of the
+            # starting model at exactly water_vp gets a zeroed gradient), not
+            # by row count, so honouring this key would take a second
+            # mechanism. Reject it rather than silently drop it.
+            raise ValueError(
+                "fwi: freeze_top_n_rows is not supported under "
+                "source_encoding.mode='frequency_selection'. That path pins "
+                "every cell whose STARTING value is exactly the water "
+                "velocity (1500 m/s, or reparam.water_vp_m_s) — set the water "
+                "column to that value in init_model instead.")
         return self
     epochs: int = Field(ge=1)
     batchsize: int = Field(ge=1, default=1)
