@@ -19,6 +19,24 @@ def _line_array(line: LineSet, fallback_stop: int) -> "np.ndarray":
     return np.concatenate([xs, zs], axis=1)
 
 
+def _grid_array(gset, fallback_nx: int, fallback_ny: int) -> "np.ndarray":
+    """(npts, 3) int64 (x, y, z) for the x-by-y patch at ``gset.depth``."""
+    out = []
+    for axis, fallback, tag in ((gset.x, fallback_nx, "x"),
+                                (gset.y, fallback_ny, "y")):
+        stop = axis.stop if axis.stop is not None else fallback
+        if stop <= axis.start:
+            raise ValueError(
+                f"GridSet.{tag} stop ({stop}) must be greater than start "
+                f"({axis.start})."
+            )
+        out.append(np.arange(axis.start, stop, axis.step, dtype=np.int64))
+    xs, ys = out
+    gx, gy = np.meshgrid(xs, ys, indexing="ij")     # x fastest-varying
+    return np.stack([gx.ravel(), gy.ravel(),
+                     np.full(gx.size, gset.depth, dtype=np.int64)], axis=1)
+
+
 def _build_geometry(
     geometry,
     shape: tuple[int, ...],
@@ -31,8 +49,9 @@ def _build_geometry(
     Output shapes are always sources=(nshots, ndim) and receivers=(nshots, nrec, ndim).
     ``ndim`` is 2 when ``shape`` is ``(nz, nx)`` and 3 when ``shape`` is
     ``(nz, ny, nx)``. ``explicit`` / ``from_file`` accept either; ``line``
-    is 2-D-only; the SEG-Y kinds are 2-D-only because their header-derived
-    geometry is built around ``(x, z)`` only.
+    is 2-D-only and ``grid`` is its 3-D-only counterpart; the SEG-Y kinds
+    are 2-D-only because their header-derived geometry is built around
+    ``(x, z)`` only.
 
     ``dh`` and ``segy_cache`` are only used by the SEG-Y-backed kinds
     (``from_segy_headers`` / ``from_segy_index``). The cache lets the runner
@@ -52,6 +71,17 @@ def _build_geometry(
         nx = int(shape[-1])
         sources = _line_array(geometry.sources, nx)
         rec = _line_array(geometry.receivers, nx)
+        receivers = rec[None, ...].repeat(sources.shape[0], axis=0)
+        return sources, receivers
+    if kind == "grid":
+        if grid_ndim != 3:
+            raise ValueError(
+                f"GridGeometry only supports 3-D grids (shape ndim=3); "
+                f"got shape={shape}. Use `kind: line` for 2-D."
+            )
+        nx, ny = int(shape[-1]), int(shape[-2])
+        sources = _grid_array(geometry.sources, nx, ny)
+        rec = _grid_array(geometry.receivers, nx, ny)
         receivers = rec[None, ...].repeat(sources.shape[0], axis=0)
         return sources, receivers
     if kind == "explicit":

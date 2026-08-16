@@ -273,6 +273,42 @@ class LineGeometry(_Forbid):
     receivers: LineSet
 
 
+class AxisSpan(_Forbid):
+    """``arange(start, stop, step)`` along one lateral axis of a 3-D grid.
+
+    ``stop: null`` means "run to the grid extent on this axis" (nx for ``x``,
+    ny for ``y``) — the same convention as :class:`LineSet`.
+    """
+
+    step: int = Field(ge=1)
+    start: int = 0
+    stop: int | None = None
+
+
+class GridSet(_Forbid):
+    """A 3-D rectangular patch of points: the ``x`` × ``y`` outer product at a
+    single depth. Points come out in (x, y, z) order, x fastest-varying."""
+
+    x: AxisSpan
+    y: AxisSpan
+    depth: int = Field(ge=0)
+
+
+class GridGeometry(_Forbid):
+    """The 3-D analogue of ``kind: line`` — a rectangular patch of sources and
+    a rectangular patch of receivers, both from start/stop/step rules.
+
+    Every shot sees the same receiver patch. 3-D grids only (``shape`` must be
+    ``(nz, ny, nx)``); use ``kind: line`` in 2-D. It exists so a 3-D example can
+    place a few hundred receivers without spelling out one YAML line each,
+    which is what ``kind: explicit`` would need.
+    """
+
+    kind: Literal["grid"] = "grid"
+    sources: GridSet
+    receivers: GridSet
+
+
 class ExplicitGeometry(_Forbid):
     """Literal source / receiver coordinate lists.
 
@@ -418,7 +454,7 @@ class FromPlanGeometry(_Forbid):
 
 
 Geometry = Annotated[
-    Union[LineGeometry, ExplicitGeometry, FromFileGeometry,
+    Union[LineGeometry, GridGeometry, ExplicitGeometry, FromFileGeometry,
           FromSegyGeometry, FromSegyIndexGeometry, FromPlanGeometry],
     Discriminator("kind"),
 ]
