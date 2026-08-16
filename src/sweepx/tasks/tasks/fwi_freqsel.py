@@ -329,8 +329,27 @@ class FreqselRunnerMixin:
                     optimizer = torch.optim.Adam(net.parameters(),
                                                  lr=float(spec.reparam.lr))
             else:
-                # grid-vp mode: Adam state is shape-bound, must rebuild.
-                vp = base_t.clone().requires_grad_(True)
+                # grid-vp mode: Adam state is shape-bound, so the OPTIMIZER has
+                # to be rebuilt — but the MODEL must carry the previous band's
+                # result forward. Cloning ``base_t`` here restarted every stage
+                # from the pristine init model, which silently turns a frequency
+                # ladder into "only the last rung counts". The reparam branch
+                # above never had the bug: it carries ``net`` and only swaps
+                # the base, which is why production iFWI runs never showed it.
+                prev = getattr(self, "_freqsel_last_vp", None)
+                if prev is None:
+                    vp = base_t.clone().requires_grad_(True)
+                else:
+                    prev = prev.detach()
+                    if tuple(prev.shape) != tuple(base_t.shape):
+                        # dh changed with the stage: resample onto the new grid.
+                        # ``_resample_vp_tensor`` hands back a requires_grad
+                        # leaf, so detach again — cloning a requires_grad tensor
+                        # would make ``vp`` a NON-leaf and Adam would then never
+                        # see a .grad to step on.
+                        prev = _resample_vp_tensor(
+                            prev, tuple(base_t.shape)).detach()
+                    vp = prev.to(dev).clone().requires_grad_(True)
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
         # per-stage lr scale on the carried optimizer (INR: inr_lr_scale)
         _scale = (float(stage.inr_lr_scale) if use_reparam
@@ -724,6 +743,9 @@ class FreqselRunnerMixin:
 
         task_dir.mkdir(parents=True, exist_ok=True)
         net = optimizer = None
+        # stage si>0 carries this forward as its starting model; clear it so a
+        # reused runner instance cannot leak one task's model into the next
+        self._freqsel_last_vp = None
         losses, times, peaks = [], [], []
         chk_first = None
         ny_ = nx_ = None
