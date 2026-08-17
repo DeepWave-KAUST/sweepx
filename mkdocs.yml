@@ -114,13 +114,12 @@ plugins:
 # own repo. Order here = tab order.
 nav:
   - Home: index.md
-  # Solver keeps `docs/` (keep_docs_dir) because its `docs/notebooks` is a
-  # SYMLINK to `../examples/notebooks`: multirepo's mv_docs_up.sh would hoist
-  # docs/* to the section root, leaving the link pointing one level outside the
-  # section (build fails on all 26 notebook nav entries). Keeping docs/ + also
-  # sparse-checking out examples/notebooks preserves the relative layering.
-  # Cost: Solver pages live at /solver/docs/… (Tasks/Agent stay at /tasks/…).
-  - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*&extra_imports=["examples/notebooks/*"]&keep_docs_dir=true'
+  # `extra_imports` also fetches examples/notebooks/ because Solver's
+  # `docs/notebooks` is a SYMLINK to `../examples/notebooks`, which dangles once
+  # multirepo hoists docs/* to the section root. hooks/solver_home.py satisfies
+  # it, so Solver pages sit at /solver/… like every other package (no /docs/
+  # level), and `exclude_docs` below drops the duplicate copy of the notebooks.
+  - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*&extra_imports=["examples/notebooks/*"]'
   # Tasks is ready (docs live in the sweep-tasks repo) but that repo is still
   # PRIVATE, so CI can't clone it. Uncomment this line — and the sweep-tasks
   # pip install in .github/workflows/docs.yml — once it is public / on PyPI.
@@ -156,3 +155,9 @@ extra_javascript:
   - https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js
   - https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js
   - javascripts/katex.js
+
+# The Solver import pulls examples/notebooks/ only so its `notebooks` symlink
+# can be satisfied (see hooks/solver_home.py); the notebooks are published at
+# /solver/notebooks/ through that link, so drop the duplicate copy.
+exclude_docs: |
+  solver/examples/notebooks/
