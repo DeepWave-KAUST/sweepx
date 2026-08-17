@@ -71,6 +71,12 @@ plugins:
       cleanup: true
       # keep_docs_dir omitted → imported docs land at /<section>/… not
       # /<section>/docs/… (cleaner URLs, matches the standalone preview).
+  # Render sub-repos' Jupyter notebooks (Solver's examples). Config mirrors
+  # sweep's own mkdocs.yml.
+  - mkdocs-jupyter:
+      include_source: true
+      execute: false
+      ignore_h1_titles: true
   - git-revision-date-localized:
       enable_creation_date: true
       fallback_to_build_date: true
@@ -103,7 +109,13 @@ plugins:
 # own repo. Order here = tab order.
 nav:
   - Home: index.md
-  - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*'
+  # Solver keeps `docs/` (keep_docs_dir) because its `docs/notebooks` is a
+  # SYMLINK to `../examples/notebooks`: multirepo's mv_docs_up.sh would hoist
+  # docs/* to the section root, leaving the link pointing one level outside the
+  # section (build fails on all 26 notebook nav entries). Keeping docs/ + also
+  # sparse-checking out examples/notebooks preserves the relative layering.
+  # Cost: Solver pages live at /solver/docs/… (Tasks/Agent stay at /tasks/…).
+  - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*&extra_imports=["examples/notebooks/*"]&keep_docs_dir=true'
   - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
   - Agent: '!import https://github.com/DeepWave-KAUST/sweep-agent?branch=main&docs_dir=docs/*'
 

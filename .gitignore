@@ -7,3 +7,5 @@ site/
 temp_dir/
 .cache/
 mkdocs.local.yml
+mrtemp/
+mkdocs.probe.yml
