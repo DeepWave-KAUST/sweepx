@@ -116,7 +116,10 @@ nav:
   # sparse-checking out examples/notebooks preserves the relative layering.
   # Cost: Solver pages live at /solver/docs/… (Tasks/Agent stay at /tasks/…).
   - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*&extra_imports=["examples/notebooks/*"]&keep_docs_dir=true'
-  - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
+  # Tasks is ready (docs live in the sweep-tasks repo) but that repo is still
+  # PRIVATE, so CI can't clone it. Uncomment this line — and the sweep-tasks
+  # pip install in .github/workflows/docs.yml — once it is public / on PyPI.
+  # - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
   - Agent: '!import https://github.com/DeepWave-KAUST/sweep-agent?branch=main&docs_dir=docs/*'
 
 markdown_extensions:

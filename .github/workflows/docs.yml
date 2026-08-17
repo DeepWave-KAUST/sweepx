@@ -47,11 +47,14 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           # Published packages (import as `sweep` / `sweep_agent`):
           pip install sweep-solver sweep-agent
-          # sweep-tasks is not on PyPI yet — install from source so
-          # `import sweep_tasks` works for its API pages.
-          pip install "git+https://github.com/DeepWave-KAUST/sweep-tasks@main"
+          # NOTE: sweep-tasks is still a PRIVATE repo, so neither pip nor
+          # multirepo can reach it from CI. Its Tasks tab is commented out in
+          # mkdocs.yml — re-enable both (here and there) once sweep-tasks is
+          # public or on PyPI. Until then:
+          #   pip install sweep-tasks          # when on PyPI, or
+          #   pip install "git+https://x-access-token:${GH_TOKEN}@github.com/DeepWave-KAUST/sweep-tasks@main"
 
-      - name: Build site (multirepo pulls sweep-solver / tasks / agent)
+      - name: Build site (multirepo pulls the package docs)
         run: mkdocs build
 
       - name: Upload artifact
