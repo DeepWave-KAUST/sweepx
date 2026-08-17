@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────
+# PACKAGE_NAME — documentation config  (copied from sweepx/docs-template)
+#
+# STYLE comes from the sweepx umbrella at build time: mkdocs-multirepo pulls
+# this docs/ into https://sweepx.deepwave.group/ and renders it with sweepx's
+# theme. This file only declares the package name + nav so the umbrella can
+# import it. Do NOT copy the theme / plugins / mkdocstrings options here —
+# the ecosystem look is defined ONCE, in the sweepx repo.
+#
+# Quick standalone check (plain Material, no sweepx skin): `mkdocs serve` here.
+# Real look: preview from the sweepx repo.
+# ─────────────────────────────────────────────────────────────────────────
+site_name: PACKAGE_NAME          # e.g. sweep-tasks
+theme:
+  name: material                 # placeholder only — sweepx supplies the real theme
+
+nav:
+  - index.md
+  - Getting started:
+      - getting-started/installation.md
+      - getting-started/quickstart.md
+  - User guide:
+      - user-guide/index.md
+  - Examples:
+      - examples/index.md
+  - API reference:
+      - api/index.md

@@ -3,3 +3,7 @@ __pycache__/
 dist/
 build/
 *.pyc
+site/
+temp_dir/
+.cache/
+mkdocs.local.yml
