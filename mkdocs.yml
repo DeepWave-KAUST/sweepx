@@ -11,7 +11,7 @@
 # `!import` line to the `nav:` below (and `pip install` it in the build env
 # so mkdocstrings can render its API).
 # ─────────────────────────────────────────────────────────────────────────
-site_name: sweepx — documentation
+site_name: SWEEPX
 site_description: The sweep seismic wave-equation ecosystem — one home for solver, tasks, agent, and companions.
 site_url: https://sweepx.deepwave.group/
 repo_url: https://github.com/DeepWave-KAUST/sweepx
@@ -63,11 +63,6 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/DeepWave-KAUST
 
-# The umbrella owns the landing page, so an imported package's own marketing
-# homepage is swapped for a plain overview (see the hook's docstring).
-hooks:
-  - hooks/solver_home.py
-
 plugins:
   - search
   # Pull each package's docs/ from its own repo at build time. The nav uses
@@ -114,6 +109,7 @@ plugins:
 # own repo. Order here = tab order.
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
   - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*'
   # Tasks is ready (docs live in the sweep-tasks repo) but that repo is still
   # PRIVATE, so CI can't clone it. Uncomment this line — and the sweep-tasks

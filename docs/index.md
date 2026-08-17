@@ -57,7 +57,7 @@ from sweep.equations import Acoustic, ElasticTTI   # nine equation families
 #     >>> load Marmousi and run a forward — show the shot gather
 ```
 
-<a class="sweep-cta sweep-cta--ghost-dark" href="solver/getting-started/installation/">Install &amp; get started →</a>
+<a class="sweep-cta sweep-cta--ghost-dark" href="getting-started/">Install &amp; get started →</a>
 </div>
 </section>
 

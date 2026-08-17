@@ -3,9 +3,21 @@ name: Deploy sweepx docs to Pages
 on:
   push:
     branches: [main]
+
+  # The packages' docs are cloned at BUILD time, so a docs change pushed to
+  # sweep / sweep-agent / … only reaches this site when the site rebuilds. This
+  # daily run picks those up on its own.
+  schedule:
+    - cron: "17 3 * * *"        # 03:17 UTC — off the hour, which GitHub prefers
+
+  # …and to publish a package's docs change immediately, run it by hand:
+  #   gh workflow run docs.yml -R DeepWave-KAUST/sweepx
+  # (or Actions → Deploy sweepx docs to Pages → Run workflow)
   workflow_dispatch:
 
-# Rebuild when a sub-repo's docs change (optional; enable in each sub-repo):
+# For push-triggered rebuilds instead, a package repo can notify this one via
+# repository_dispatch — it needs a PAT with actions:write on sweepx, so the
+# daily run above is the no-secret default:
 #   curl -X POST -H "Authorization: Bearer $PAT" \
 #     https://api.github.com/repos/DeepWave-KAUST/sweepx/dispatches \
 #     -d '{"event_type":"docs-changed"}'
