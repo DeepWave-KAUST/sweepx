@@ -63,6 +63,11 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/DeepWave-KAUST
 
+# The umbrella owns the landing page, so an imported package's own marketing
+# homepage is swapped for a plain overview (see the hook's docstring).
+hooks:
+  - hooks/solver_home.py
+
 plugins:
   - search
   # Pull each package's docs/ from its own repo at build time. The nav uses
