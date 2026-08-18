@@ -190,3 +190,23 @@ def _build_inv_tensors(init_models: list, dev, equation_cls,
         in_order.append(t)
         by_tensor[name] = t
     return in_order, by_tensor, required
+
+
+def resolve_rotation_frame(rotation_metadata):
+    """``RotatedFrame`` for a plan geometry, identity when none is configured.
+
+    ``FromPlanGeometry.rotation_metadata`` is optional, but
+    :func:`sweep_io.geometry.load_rotation_metadata` requires a real path — so
+    every plan-fed path used to die on ``Path(None)`` for the common 2-D case
+    where the plan's coordinates are ALREADY the model frame (a line laid out
+    along x in metres, which is what ``build-plan`` writes for a 2-D survey).
+    Identity is the right default there: no origin shift, no rotation.
+    """
+    import numpy as np
+
+    from sweep_io.geometry import RotatedFrame, load_rotation_metadata
+
+    if rotation_metadata is None:
+        return RotatedFrame(origin_xy_utm=np.zeros(2, dtype="float64"),
+                            rotation_matrix=np.eye(2, dtype="float64"))
+    return load_rotation_metadata(rotation_metadata)

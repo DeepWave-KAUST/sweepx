@@ -87,14 +87,15 @@ def materialize_plan_dataset(
     """Build a static single-source dataset from ``spec.obs.plan`` / geometry.
 
     Returns a dict with:
-      ``sources``        (nshots, 3) int64 grid indices (x, y, z)
-      ``receivers``      (nshots, nrec, 3) int64 grid indices
+      ``sources``        (nshots, 3) int64 grid indices (x, y, z);
+                         (nshots, 2) as (x, z) when the model is 2-D
+      ``receivers``      (nshots, nrec, 3) int64 grid indices; (…, 2) when 2-D
       ``obs``            (nshots, nt, nrec, 1) float32 numpy (canonical layout)
-      ``shape``          (nz, ny, nx) of the cropped model
+      ``shape``          (nz, ny, nx) of the cropped model; (nz, nx) when 2-D
       ``cropped_models`` {name: cropped float32 array}  (model_plan applied)
       ``native_dt``      float — the dt the obs tensor is sampled at
     """
-    from sweep_io.geometry import load_rotation_metadata
+    from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
     from sweep_io.seismic_plan import PlanReader, SeismicPlan
     from sweep_tasks.preproc.resample import resample_time
 
@@ -135,7 +136,7 @@ def materialize_plan_dataset(
     plan = SeismicPlan.load(geom.plan_path)
     t = _stamp(f"SeismicPlan.load (n_rows={plan.n_rows:,}, n_groups={plan.n_groups}, "
                f"grouping={plan.grouping})", t, verbose=verbose)
-    frame = load_rotation_metadata(geom.rotation_metadata)
+    frame = resolve_rotation_frame(geom.rotation_metadata)
 
     is_crg = (plan.grouping == "crg")
     # source = group; receiver-bearing rows differ by grouping.
@@ -150,6 +151,14 @@ def materialize_plan_dataset(
     # ---- 3) load vp, auto-origin, model_plan crop --------------------------
     vp_ref = next((m for m in init_models if m.name == "vp"), init_models[0])
     init_vp_np = _model_array(vp_ref)
+    # A 2-D line is carried through as a degenerate 3-D volume with ny=1: every
+    # crop / projection / in-window test below is written on (z, y, x), and one
+    # promoted axis is far less error-prone than threading ndim through all of
+    # them. Squeezed back out just before the cache write, so both the fresh
+    # and the CACHE HIT path return the same 2-D contract.
+    is_2d = init_vp_np.ndim == 2
+    if is_2d:
+        init_vp_np = init_vp_np[:, None, :]
 
     dh_xyz = geom.dh_xyz_m or (float(spec.grid.dh),) * 3
     dz_m, dy_m, dx_m = (float(dh_xyz[0]), float(dh_xyz[1]), float(dh_xyz[2]))
@@ -158,12 +167,13 @@ def materialize_plan_dataset(
     pad = geom.auto_origin_pad_cells or (0, 0, 0)
     # pad[0] (z) is deliberately unused: z=0 is the sea-surface datum, so the
     # z origin is pinned to 0.0 below. Only x/y get the PML buffer pad.
-    pad_y, pad_x = int(pad[1]), int(pad[2])
+    pad_y, pad_x = (0 if is_2d else int(pad[1])), int(pad[2])
     if origin is None:
         x_min = float(min(src_model_xy[:, 0].min(), rec_model_xy[:, 0].min()))
         y_min = float(min(src_model_xy[:, 1].min(), rec_model_xy[:, 1].min()))
         # z=0 is the sea-surface free-surface datum; never pad above it.
-        origin = (0.0, y_min - pad_y * dy_m, x_min - pad_x * dx_m)
+        origin = (0.0, 0.0 if is_2d else y_min - pad_y * dy_m,
+                  x_min - pad_x * dx_m)
     init_origin_z, init_origin_y, init_origin_x = (float(origin[0]), float(origin[1]),
                                                    float(origin[2]))
 
@@ -199,6 +209,8 @@ def materialize_plan_dataset(
     cropped_models: dict = {}
     for m in init_models:
         arr = _model_array(m)
+        if is_2d and arr.ndim == 2:
+            arr = arr[:, None, :]
         cropped_models[m.name] = arr[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi].copy()
     init_vp_np = cropped_models["vp"] if "vp" in cropped_models else init_vp_np[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi]
     nz, ny, nx = init_vp_np.shape
@@ -396,6 +408,16 @@ def materialize_plan_dataset(
     # ---- 8) canonical layout (nshots, nt, nrec, 1) -------------------------
     obs_canon = np.ascontiguousarray(obs.transpose(0, 2, 1))[..., None]
 
+    # ---- 8b) squeeze the promoted y axis back out --------------------------
+    if is_2d:
+        sources = np.ascontiguousarray(sources[:, [0, 2]])
+        receivers = np.ascontiguousarray(receivers[..., [0, 2]])
+        cropped_models = {k: np.ascontiguousarray(v[:, 0, :])
+                          for k, v in cropped_models.items()}
+        shape_out = (int(nz), int(nx))
+    else:
+        shape_out = (int(nz), int(ny), int(nx))
+
     # ---- 9) atomic cache write (tmp dir + rename) --------------------------
     try:
         tmp = cache_dir.with_name(cache_dir.name + f".tmp{os.getpid()}")
@@ -406,7 +428,7 @@ def materialize_plan_dataset(
         for k, v in cropped_models.items():
             np.save(tmp / f"model_{k}.npy", v)
         (tmp / "meta.json").write_text(json.dumps({
-            "nshots": int(nshots), "nrec": int(nrec), "shape": [nz, ny, nx],
+            "nshots": int(nshots), "nrec": int(nrec), "shape": list(shape_out),
             "native_dt": float(effective_dt),
             "model_names": list(cropped_models.keys()),
         }))
@@ -426,7 +448,7 @@ def materialize_plan_dataset(
         "sources": sources,
         "receivers": receivers,
         "obs": obs_canon,
-        "shape": (nz, ny, nx),
+        "shape": shape_out,
         "cropped_models": cropped_models,
         "native_dt": float(effective_dt),  # already resampled to solver dt
         "nshots": nshots,

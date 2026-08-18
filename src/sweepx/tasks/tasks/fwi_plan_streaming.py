@@ -111,7 +111,7 @@ class PlanStreamingFWIMixin:
         """
         import torch
 
-        from sweep_io.geometry import load_rotation_metadata
+        from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
         from sweep_io.seismic_plan import (
             PlanReader,
             SeismicPlan,
@@ -238,7 +238,7 @@ class PlanStreamingFWIMixin:
             print(f"[plan-stream] min_coverage={min_cov}: deferred to sampler "
                   f"(would drop {n_below}/{plan.n_groups} groups; pre-filtering "
                   "the plan is too expensive on a multi-GB CRG layout).")
-        frame = load_rotation_metadata(spec.geometry.rotation_metadata)
+        frame = resolve_rotation_frame(spec.geometry.rotation_metadata)
         _t = _stage("load_rotation_metadata", _t)
 
         # --- 2) Init model + shape + dh.
