@@ -696,11 +696,26 @@ def _cmd_extract_coeff(args) -> int:
     shard the ``source_encoding.mode: frequency_selection`` FWI reads. After
     extraction the inversion never touches the gathers again — it only ever
     sees one complex number per (node, receiver cell, comb bin).
+
+    ``--plan`` is the field path and needs no forward at all: a CRG
+    :class:`SeismicPlan` already groups the real traces by receiver cell, which
+    IS the reciprocal node gather. Fold varies per node there, so this writes a
+    ragged shard (the schema's ``node_ptr`` has always been a CSR pointer).
     """
     import numpy as np
     import yaml as _yaml
 
     from sweep_tasks.freqsel import FrequencyComb, extract_shard
+
+    if args.plan:
+        return _extract_coeff_from_plan(args)
+    if not args.run_dir:
+        print("error: extract-coeff needs either a run_dir or --plan")
+        return 2
+    for flag, val in (("--dh-m", args.dh_m), ("--origin-m", args.origin_m)):
+        if val is not None:
+            print(f"error: {flag} applies to --plan only")
+            return 2
 
     run_dir = Path(args.run_dir).expanduser().resolve()
     out_root = run_dir / "output" if (run_dir / "output").is_dir() else run_dir
@@ -745,6 +760,106 @@ def _cmd_extract_coeff(args) -> int:
           f"{comb.freqs[0]:.4f}-{comb.freqs[-1]:.4f} Hz "
           f"(df={1.0 / (comb.n_p * comb.dt):.4f} Hz, n_p={comb.n_p})")
     extract_shard(str(out), record, nodes, traces, comb, verbose=args.verbose)
+    print(f"[extract-coeff] wrote {out}")
+    print("[extract-coeff] point the FWI YAML at it with "
+          "source_encoding.frequency.coeff_shards")
+    return 0
+
+
+def _extract_coeff_from_plan(args) -> int:
+    """``extract-coeff --plan`` — real CRG gathers → ragged freqsel shard.
+
+    Reciprocity on field data: a CRG plan's groups are receiver cells, and the
+    shots that sampled each cell are that node's traces. Nothing is forward
+    modelled and no wavelet is involved — the GCN misfit divides the source
+    spectrum out, so the airgun signature never enters the inversion.
+    """
+    import numpy as np
+
+    from sweep_io.seismic_plan import PlanReader, SeismicPlan
+
+    from sweep_tasks.freqsel import FrequencyComb, extract_shard_gathers
+
+    if args.dh_m is None:
+        print("error: --plan needs --dh-m to quantize metres onto grid cells")
+        return 2
+    if args.dt is None:
+        print("error: --plan needs --dt (the SOLVER dt, which defines the "
+              "comb); the plan's own dt is the record's")
+        return 2
+    if not args.out:
+        print("error: --plan needs -o/--out")
+        return 2
+    if args.k_hi < args.k_lo:
+        print(f"error: --k-hi ({args.k_hi}) must be >= --k-lo ({args.k_lo})")
+        return 2
+
+    plan = SeismicPlan.load(str(Path(args.plan).expanduser().resolve()))
+    # Either grouping works: a plan's groups are the nodes and the OTHER end of
+    # each row is that node's trace. The encoding does not care which end of
+    # the acquisition it drives — nodes carry per-node masks, so a moving
+    # streamer spread is as valid as a fixed OBN patch. CRG (nodes = receiver
+    # cells, traces = the shots that sampled them) is the reciprocal view; CSG
+    # (nodes = shots, traces = that shot's receivers) is the direct one.
+    if plan.grouping == "crg":
+        trace_xyz = np.asarray(plan.row_source_xyz)
+    elif plan.grouping == "csg":
+        trace_xyz = np.asarray(plan.row_receiver_xyz)
+    else:
+        print(f"error: unknown plan grouping {plan.grouping!r}")
+        return 2
+
+    dh = float(args.dh_m)
+    origin = np.zeros(3)
+    if args.origin_m:
+        vals = [float(v) for v in str(args.origin_m).split(",")]
+        origin[:len(vals)] = vals
+
+    counts = plan.per_group_row_counts()
+    keep = np.flatnonzero(counts >= int(args.min_fold))[::max(1, int(args.node_stride))]
+    if not len(keep):
+        print(f"error: no group has >= {args.min_fold} traces "
+              f"(max fold is {int(counts.max())})")
+        return 2
+
+    comb = FrequencyComb(dt=float(args.dt), n_p=int(args.n_p),
+                         ks=np.arange(int(args.k_lo), int(args.k_hi) + 1))
+    dt_rec = float(plan.dt_s)
+    node_end = "receiver cells" if plan.grouping == "crg" else "shots"
+    print(f"[extract-coeff] plan {Path(args.plan).name}: {plan.n_groups} "
+          f"{plan.grouping.upper()} groups (nodes = {node_end}), keeping "
+          f"{len(keep)} (min-fold {args.min_fold}, stride {args.node_stride})")
+    print(f"[extract-coeff] fold over kept nodes: min {int(counts[keep].min())} "
+          f"median {int(np.median(counts[keep]))} max {int(counts[keep].max())}")
+    print(f"[extract-coeff] record dt={dt_rec} s x {plan.samples_per_trace} "
+          f"samples ({dt_rec * plan.samples_per_trace:.2f} s); "
+          f"solver dt={comb.dt} s")
+    print(f"[extract-coeff] comb: {comb.n_bins} bins, "
+          f"{comb.freqs[0]:.4f}-{comb.freqs[-1]:.4f} Hz "
+          f"(df={1.0 / (comb.n_p * comb.dt):.4f} Hz, n_p={comb.n_p})")
+    if comb.n_bins < len(keep):
+        print(f"[extract-coeff] note: {len(keep)} nodes > {comb.n_bins} bins — "
+              f"the FWI will need n_pools >= "
+              f"{int(np.ceil(len(keep) / comb.n_bins))}, or a longer n_p")
+
+    reader = PlanReader(plan)
+    grp = np.asarray(plan.group_xyz)               # nodes = the plan's groups
+
+    def _cells(a):
+        c = np.rint((np.asarray(a, np.float64)[..., [0, 2]] - origin[[0, 2]]) / dh)
+        return c.astype(np.int64)
+
+    def _gathers():
+        for n, g in enumerate(keep):
+            sl = plan.group_slice(int(g))
+            rec = np.asarray(reader.read_group(int(g)), np.float64)   # (n_tr, nt)
+            yield rec.T, _cells(grp[int(g)]), _cells(trace_xyz[sl])
+            if args.verbose and (n + 1) % 25 == 0:
+                print(f"[extract-coeff] {n + 1}/{len(keep)} nodes", flush=True)
+
+    out = Path(args.out).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    extract_shard_gathers(str(out), _gathers(), comb, dt_record=dt_rec)
     print(f"[extract-coeff] wrote {out}")
     print("[extract-coeff] point the FWI YAML at it with "
           "source_encoding.frequency.coeff_shards")
@@ -1224,13 +1339,39 @@ def main(argv: list[str] | None = None) -> int:
              "and write the coefficient shard that frequency-selection FWI "
              "(source_encoding.mode: frequency_selection) reads as obs.",
     )
-    ec.add_argument("run_dir",
+    ec.add_argument("run_dir", nargs="?", default=None,
                     help="Directory of a `task_type: forward` run — the one "
                          "holding output/record.npy, sources.npy, "
-                         "receivers.npy. Its sources are the nodes.")
+                         "receivers.npy. Its sources are the nodes. Omit when "
+                         "using --plan.")
+    ec.add_argument("--plan", default=None, metavar="PLAN.npz",
+                    help="Field path: a SeismicPlan whose groups ARE the "
+                         "nodes — CRG (nodes = receiver cells) or CSG (nodes "
+                         "= shots) both work, since each node carries its own "
+                         "receiver mask. Reads the real gathers instead of a "
+                         "forward's record.npy and keeps each node's own "
+                         "fold. Requires --dh-m.")
+    ec.add_argument("--dh-m", dest="dh_m", type=float, default=None,
+                    metavar="M",
+                    help="Grid spacing, to quantize the plan's metre "
+                         "coordinates onto solver cells. --plan only.")
+    ec.add_argument("--origin-m", dest="origin_m", default=None,
+                    metavar="X[,Z]",
+                    help="Grid origin in metres, subtracted before quantizing "
+                         "(default 0). --plan only.")
+    ec.add_argument("--min-fold", dest="min_fold", type=int, default=1,
+                    metavar="N",
+                    help="Skip plan groups with fewer than N live traces. "
+                         "--plan only (default 1).")
+    ec.add_argument("--node-stride", dest="node_stride", type=int, default=1,
+                    metavar="N",
+                    help="Keep every Nth surviving node. The comb needs at "
+                         "least as many bins as the pool has nodes, so this "
+                         "is how a dense receiver line becomes a node set. "
+                         "--plan only (default 1).")
     ec.add_argument("-o", "--out", default=None,
                     help="Output shard npz (default: <run_dir>/output/"
-                         "coeff_shard.npz).")
+                         "coeff_shard.npz; required with --plan).")
     ec.add_argument("--n-p", "--n_p", dest="n_p", type=int, required=True,
                     metavar="N",
                     help="Analysis-window length in solver samples. Comb "
@@ -1242,8 +1383,12 @@ def main(argv: list[str] | None = None) -> int:
     ec.add_argument("--k-hi", "--k_hi", dest="k_hi", type=int, required=True,
                     metavar="K", help="Last comb bin index, inclusive.")
     ec.add_argument("--dt", type=float, default=None,
-                    help="Solver dt in seconds. Default: read `time.dt` from "
-                         "<run_dir>/config_resolved.yaml.")
+                    help="Solver dt in seconds — this defines the comb "
+                         "(f = k/(n_p*dt)) and must match the FWI's time.dt. "
+                         "Default: read `time.dt` from "
+                         "<run_dir>/config_resolved.yaml; required with "
+                         "--plan, whose own dt is the RECORD's, not the "
+                         "solver's.")
     ec.add_argument("--verbose", action="store_true",
                     help="Print per-chunk extraction progress.")
 

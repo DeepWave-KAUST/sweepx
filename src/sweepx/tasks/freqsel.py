@@ -36,6 +36,7 @@ __all__ = [
     "encoded_wavelet",
     "SteadyGCNLoss",
     "extract_shard",
+    "extract_shard_gathers",
     "synthesize_shard",
 ]
 
@@ -43,7 +44,7 @@ __all__ = [
 def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
                   trace_grid_xyz: np.ndarray, comb: FrequencyComb,
                   *, fold=None, chunk: int = 8,
-                  verbose: bool = False) -> str:
+                  verbose: bool = False, dt_record: float | None = None) -> str:
     """DTFT already-recorded common-node gathers onto the comb and write a shard.
 
     The observed-data half of the method, with no solver in it: ``record`` is
@@ -57,6 +58,15 @@ def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
                         ``(n_nodes, n_rec, ndim)`` per node.
     ``fold``            optional ``(n_nodes * n_rec,)`` stack count per item;
                         defaults to 1 (one trace per cell, the synthetic case).
+    ``dt_record``       sample interval OF THE RECORD, when it differs from the
+                        solver's ``comb.dt`` — field data is routinely 2 or
+                        4 ms while the solver runs at 1 ms. Comb frequencies
+                        are physical (``ks / (n_p * comb.dt)``) and do not
+                        change; only the time axis the DTFT integrates over
+                        does. Defaults to ``comb.dt``.
+
+    Nodes need not share a trace count: see :func:`extract_shard_gathers` for
+    the ragged field case (streamer CRGs, OBN nodes with varying live fold).
 
     Absolute scale and the time origin do not matter: the GCN misfit is
     invariant to a per-(node, bin) complex factor, which is exactly what a
@@ -103,8 +113,7 @@ def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
         raise ValueError(
             f"trace_grid_xyz ndim {traces.shape[1]} != node_grid_xyz ndim {ndim}")
 
-    t_axis = np.arange(nt, dtype=np.float64) * comb.dt
-    E = np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
+    E = _comb_kernel(comb, nt, dt_record)
     D = np.empty((n_nodes * n_rec, comb.n_bins), np.complex64)
     for a in range(0, n_nodes, chunk):
         b = min(n_nodes, a + chunk)
@@ -131,7 +140,102 @@ def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
              trace_grid_xyz=traces.astype(np.int32),
              freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
              meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
-                                  synthetic=False, nt_record=int(nt))))
+                                  synthetic=False, nt_record=int(nt),
+                                  dt_record=float(comb.dt if dt_record is None
+                                                  else dt_record))))
+    return out_path
+
+
+def _comb_kernel(comb: FrequencyComb, nt: int,
+                 dt_record: float | None) -> np.ndarray:
+    """``(n_bins, nt)`` DTFT kernel on the RECORD's clock.
+
+    The comb frequencies are physical; ``dt_record`` only says how the record
+    samples time. Conflating the two silently rescales every frequency by
+    ``dt_record / comb.dt`` — a 4x error for 4 ms field data on a 1 ms solver.
+    """
+    dtr = comb.dt if dt_record is None else float(dt_record)
+    if dtr <= 0:
+        raise ValueError(f"dt_record must be > 0; got {dtr}")
+    if comb.freqs.max() > 0.5 / dtr:
+        raise ValueError(
+            f"comb reaches {comb.freqs.max():.3f} Hz, above the record's "
+            f"Nyquist {0.5 / dtr:.3f} Hz (dt_record={dtr} s)")
+    t_axis = np.arange(nt, dtype=np.float64) * dtr
+    return np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
+
+
+def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
+                          *, dt_record: float | None = None,
+                          verbose: bool = False) -> str:
+    """Ragged sibling of :func:`extract_shard` — one gather at a time.
+
+    Field acquisition does not hand you a rectangular ``(n_nodes, nt, n_rec)``
+    block: a streamer CRG has whatever fold the spread happened to give that
+    cell, and OBN nodes lose traces to dead channels. The shard schema has
+    always supported this — ``node_ptr`` is a CSR pointer and
+    :class:`FreqSelTargets` reads it as one — so nothing downstream changes;
+    only the writer needed to stop assuming a common trace count.
+
+    ``gathers`` is an iterable of ``(record, node_xyz, trace_xyz)`` per node:
+
+    ``record``     ``(nt, n_rec_i)`` — time first, one column per trace.
+    ``node_xyz``   ``(ndim,)`` grid indices for the node itself.
+    ``trace_xyz``  ``(n_rec_i, ndim)`` grid indices, one row per trace.
+
+    Streaming by design: gathers are consumed one at a time and only the
+    coefficients are kept, so a survey whose gathers do not fit in host RAM
+    still extracts in one pass.
+    """
+    D_parts, node_rows, trace_parts, ptr = [], [], [], [0]
+    ndim = nt = None
+    E = None
+    for i, (record, node_xyz, trace_xyz) in enumerate(gathers):
+        arr = np.asarray(record, np.float64)
+        if arr.ndim == 3 and arr.shape[-1] == 1:
+            arr = arr[..., 0]
+        if arr.ndim != 2:
+            raise ValueError(
+                f"gather {i}: record must be (nt, n_rec); got {arr.shape}")
+        node = np.asarray(node_xyz, np.int64).reshape(-1)
+        trc = np.asarray(trace_xyz, np.int64)
+        if trc.ndim != 2 or len(trc) != arr.shape[1]:
+            raise ValueError(
+                f"gather {i}: trace_xyz must be (n_rec={arr.shape[1]}, ndim); "
+                f"got {trc.shape}")
+        if ndim is None:
+            ndim, nt = len(node), arr.shape[0]
+            if ndim not in (2, 3):
+                raise ValueError(f"node_xyz ndim must be 2 or 3; got {ndim}")
+            E = _comb_kernel(comb, nt, dt_record)
+        elif arr.shape[0] != nt:
+            raise ValueError(
+                f"gather {i}: nt={arr.shape[0]} != {nt} of the first gather; "
+                "every gather must share one time axis")
+        elif len(node) != ndim or trc.shape[1] != ndim:
+            raise ValueError(f"gather {i}: inconsistent ndim")
+        D_parts.append((arr.T @ E.T).astype(np.complex64))
+        node_rows.append(node)
+        trace_parts.append(trc)
+        ptr.append(ptr[-1] + arr.shape[1])
+        if verbose and (i + 1) % 25 == 0:
+            print(f"[freqsel] extracted {i + 1} gathers", flush=True)
+    if not D_parts:
+        raise ValueError("gathers yielded nothing")
+
+    n_nodes = len(D_parts)
+    np.savez(out_path,
+             node_ids=np.arange(n_nodes, dtype=np.int32),
+             node_grid_xyz=np.asarray(node_rows, np.int32),
+             node_ptr=np.asarray(ptr, np.int64),
+             D=np.concatenate(D_parts, 0),
+             fold=np.ones(ptr[-1], np.int32),
+             trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
+             freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
+             meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
+                                  synthetic=False, nt_record=int(nt),
+                                  dt_record=float(comb.dt if dt_record is None
+                                                  else dt_record))))
     return out_path
 
 
