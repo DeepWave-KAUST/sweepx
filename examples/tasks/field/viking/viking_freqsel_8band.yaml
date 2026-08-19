@@ -1,0 +1,201 @@
+# Viking 2-D — frequency-selection FWI (Tromp & Bachmann 2019 comb encoding)
+# with a hash-INR reparameterisation, from a 1-D linear cold start.
+#
+# NO WAVELET anywhere: the GCN coherence misfit is invariant to a per-node
+# complex scale, so the airgun spectrum, excitation delay and sensor coupling
+# all cancel. Obs is the coefficient shards written by
+#   sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
+#       --dh-m 12.5 --dt 0.001 --n-p <probe_samples> --k-lo <k_lo> --k-hi <k_hi> ...
+# (one shard per stage below — the doc's Step 5 lists all eight commands).
+#
+# EVERY stage repeats the full frequency block: a stage's `frequency:` REPLACES
+# the global one wholesale, so an omitted key silently reverts to the schema
+# default (random_batch -> None kills random batching; steady_samples -> 2500
+# leaves a transient in the analysis window). The runner warns per dropped key.
+#
+# Reference (RTX 6000 Ada): 8 bands x 30 it = 10.3 min, peak 6.1 GB,
+# steady-state two-window check 1.6e-5..3.3e-5, mean(1-GCN) 0.569 -> 0.298.
+
+task_type: fwi
+output_dir: $VIKING_HOME/run/freqsel
+task_id: viking_freqsel_8band
+seed: 19491001
+
+grid: { dh: 12.5 }
+time: { dt: 0.001, nt: 52500 }      # steady + slack + probe of the longest band
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 50                    # PML sized by the LOWEST band: 2 Hz -> 743 m = 59 cells
+  free_surface: true
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:                   # 1-D cold start, built in memory — Step 4 of the doc
+  name: vp
+  shape: [320, 2285]
+  linear_gradient:
+    vmin: 1996.0
+    vmax: 4416.0
+    water_rows: 28            # 350 m, constant along the line
+    water_vp: 1485.6          # measured from the direct arrival, not 1500
+
+reparam:
+  kind: velocity_inr
+  hidden_features: 128
+  hidden_layers: 2
+  first_omega0: 30.0
+  hidden_omega0: 30.0
+  use_bias: false             # hash INR: coords in [0,1], MLP without bias
+  coord_min: 0.0
+  coord_max: 1.0
+  vp_mean: 0.0
+  vp_std: 500.0
+  mask_water_layer: true
+  water_vp_m_s: 1485.6
+  save_net: true
+  lr: 1.0e-4
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 1
+    log2_size: 18
+    base_resolution: 16       # index-isotropic beats physically-isotropic here:
+    finest_resolution: 512    # the coarse-in-x levels act as lateral regularisation
+                              # (measured: [16,114] axes made two-init convergence WORSE)
+
+source_encoding:
+  enabled: true
+  mode: frequency_selection
+  frequency:                  # stage 0's block, repeated globally for the schema
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_6hz.npz
+      probe_samples: 32000          # MUST equal the shard's --n-p
+      k_lo: 96
+      k_hi: 192
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 11
+      random_batch: 96            # fresh random 96 nodes per iteration
+
+optimizer: { kind: adam, lr: 1.0e-4 }
+loss: { kind: mse }           # IGNORED — the GCN coherence misfit is built in
+
+epochs: 240                   # schema requirement; ignored when `stages:` is set
+batchsize: 1                  # ignored: the pool IS the batch
+show_every: 10
+
+stages:
+  - epochs: 30                  # 3-6 Hz
+    lr_scale: 1.0
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_6hz.npz
+      probe_samples: 32000          # MUST equal the shard's --n-p
+      k_lo: 96
+      k_hi: 192
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 11
+      random_batch: 96            # fresh random 96 nodes per iteration
+  - epochs: 30                  # 3-8 Hz
+    lr_scale: 0.85
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_8hz.npz
+      probe_samples: 20000          # MUST equal the shard's --n-p
+      k_lo: 60
+      k_hi: 160
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 10
+      random_batch: 96            # fresh random 96 nodes per iteration
+  - epochs: 30                  # 3-10 Hz
+    lr_scale: 0.7
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_10hz.npz
+      probe_samples: 18000          # MUST equal the shard's --n-p
+      k_lo: 54
+      k_hi: 180
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 8
+      random_batch: 120            # fresh random 120 nodes per iteration
+  - epochs: 30                  # 3-12 Hz
+    lr_scale: 0.6
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_12hz.npz
+      probe_samples: 14000          # MUST equal the shard's --n-p
+      k_lo: 42
+      k_hi: 168
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 8
+      random_batch: 120            # fresh random 120 nodes per iteration
+  - epochs: 30                  # 3-14 Hz
+    lr_scale: 0.5
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_14hz.npz
+      probe_samples: 14000          # MUST equal the shard's --n-p
+      k_lo: 42
+      k_hi: 196
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 7
+      random_batch: 144            # fresh random 144 nodes per iteration
+  - epochs: 30                  # 3-16 Hz
+    lr_scale: 0.42
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_16hz.npz
+      probe_samples: 12000          # MUST equal the shard's --n-p
+      k_lo: 36
+      k_hi: 192
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 7
+      random_batch: 144            # fresh random 144 nodes per iteration
+  - epochs: 30                  # 3-18 Hz
+    lr_scale: 0.36
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_18hz.npz
+      probe_samples: 12000          # MUST equal the shard's --n-p
+      k_lo: 36
+      k_hi: 216
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 6
+      random_batch: 168            # fresh random 168 nodes per iteration
+  - epochs: 30                  # 2-20 Hz
+    lr_scale: 0.3
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_2_20hz.npz
+      probe_samples: 10000          # MUST equal the shard's --n-p
+      k_lo: 20
+      k_hi: 200
+      steady_samples: 20000         # 20 s = 28.6 km / 1485.6 m/s ring-up; the
+                                    # 2500 default leaves a transient in the window
+      slack_samples: 500
+      ramp_s: 0.5
+      n_pools: 6
+      random_batch: 168            # fresh random 168 nodes per iteration
