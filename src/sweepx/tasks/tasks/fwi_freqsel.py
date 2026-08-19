@@ -49,6 +49,37 @@ from sweep_tasks._helpers.util import (
 )
 
 
+def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
+    """Warn when a stage's ``frequency:`` block silently drops a global setting.
+
+    A stage's sub-spec REPLACES ``source_encoding.frequency`` wholesale — it is
+    not merged — so any knob the global set and the stage omitted reverts to the
+    schema default. That is invisible at runtime and changes what the run does:
+    ``random_batch`` omitted turns random node batching back into deterministic
+    pool rotation, and ``steady_samples`` omitted can drop a long ring-up to the
+    2500-sample default, leaving a transient inside the analysis window.
+
+    Every band needs its own block (different shard and comb), so this is the
+    normal case, not a corner one — hence a warning rather than an error.
+    """
+    if fspec_global is None or fspec_stage is None or fspec_stage is fspec_global:
+        return []
+    set_global = getattr(fspec_global, "model_fields_set", set())
+    set_stage = getattr(fspec_stage, "model_fields_set", set())
+    out = []
+    for name in sorted(set_global - set_stage):
+        gv = getattr(fspec_global, name, None)
+        sv = getattr(fspec_stage, name, None)
+        if gv != sv:
+            out.append(
+                f"[freqsel] WARNING stage {si}: `frequency.{name}` is not "
+                f"inherited — the global set {name}={gv!r} but this stage's "
+                f"`frequency:` block replaces it wholesale, so {name}={sv!r} "
+                f"(the schema default) is in effect. Repeat it in the stage "
+                f"block if you meant {gv!r}.")
+    return out
+
+
 class FreqselRunnerMixin:
     def _freqsel_run_stage(
         self, spec, stage, si, fspec, dh, dt, dev,
@@ -755,6 +786,9 @@ class FreqselRunnerMixin:
                 raise ValueError(
                     "frequency_selection: stage has no frequency sub-spec "
                     "and source_encoding.frequency is unset")
+            if rank == 0:
+                for line in stage_freq_override_warnings(fspec_global, fspec, si):
+                    print(line, flush=True)
             dh = float(stage.dh_m) if stage.dh_m else native_dh
             dt = float(stage.dt_s) if stage.dt_s else float(spec.time.dt)
             net, optimizer, ny_, nx_, chk = self._freqsel_run_stage(
