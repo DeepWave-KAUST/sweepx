@@ -75,3 +75,21 @@ def test_draw_is_reproducible_for_a_seed():
     b = [PoolScheduler(g, 4, 32, seed=7, random_batch=6).draw(i) for i in range(3)]
     for (pa, ba), (pb, bb) in zip(a, b):
         assert np.array_equal(pa, pb) and np.array_equal(ba, bb)
+
+
+def test_extract_reports_cell_collisions_on_this_grid(tmp_path, capsys):
+    """Collisions belong to a grid — the shard build is where you learn of them."""
+    from sweep_tasks.freqsel import FrequencyComb, extract_shard
+
+    rng = np.random.default_rng(0)
+    rec = rng.standard_normal((4, 128, 3)).astype(np.float32)
+    comb = FrequencyComb(dt=0.001, n_p=128, ks=np.arange(4, 9))
+    traces = np.stack([np.arange(3), np.arange(3), np.ones(3, int)], 1)
+
+    coarse = np.array([[0, 0, 1], [1, 0, 1], [1, 0, 1], [4, 0, 1]])   # 2 share
+    extract_shard(str(tmp_path / "coarse.npz"), rec, coarse, traces, comb)
+    assert "1 node(s) share a cell" in capsys.readouterr().out
+
+    fine = np.array([[0, 0, 1], [1, 0, 1], [2, 0, 1], [4, 0, 1]])     # none do
+    extract_shard(str(tmp_path / "fine.npz"), rec, fine, traces, comb)
+    assert "share a cell" not in capsys.readouterr().out

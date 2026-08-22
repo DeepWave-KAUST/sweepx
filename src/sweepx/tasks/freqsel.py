@@ -93,6 +93,18 @@ def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
     if ndim not in (2, 3):
         raise ValueError(f"node_grid_xyz ndim must be 2 or 3; got {ndim}")
 
+    # Collisions are a property of THIS grid: a pair separated by less than dh
+    # shares a cell here and may not on a finer band. Say so while the shard is
+    # being built -- the inversion fires one source per cell, so a duplicate's
+    # coefficients are computed and stored (these shards run to 100+ GB) for
+    # rows that will then be dropped. See PoolScheduler.
+    _dupe = len(nodes) - len(np.unique(nodes, axis=0))
+    if _dupe:
+        print(f"[freqsel] extract: {len(nodes)} nodes occupy "
+              f"{len(nodes) - _dupe} distinct cells on this grid; {_dupe} "
+              "node(s) share a cell and will be dropped at inversion time",
+              flush=True)
+
     traces = np.asarray(trace_grid_xyz, np.int64)
     if traces.ndim == 2:
         if len(traces) != n_rec:
