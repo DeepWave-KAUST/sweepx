@@ -495,6 +495,8 @@ class PoolScheduler:
     permutation is the method's one mandatory stochastic ingredient (a fixed
     assignment overfits its spectral lines; see the V3 experiment in the notes).
     ``k`` (or the max pool size) must not exceed ``n_bins`` comb frequencies.
+
+    Nodes sharing a grid cell are collapsed to one: see :attr:`dropped_nodes`.
     """
 
     node_grid: np.ndarray
@@ -503,9 +505,28 @@ class PoolScheduler:
     seed: int
     random_batch: int | None = None
     pools: list = field(init=False)
+    dropped_nodes: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        order = np.argsort(self.node_grid[:, 1], kind="stable")
+        # One source per grid cell, always. Two sources in the same cell are
+        # injected into the same u[] element, and the CUDA source kernel does
+        # that with atomicAdd -- the summation order then varies between runs,
+        # so the wavefield and everything downstream stop being reproducible.
+        # It is a geometry statement too: at this dh the grid cannot separate
+        # the two, so the second node would be modelled from a position it is
+        # not at. Keep the lowest-indexed node of each cell and say what went.
+        _, first = np.unique(self.node_grid, axis=0, return_index=True)
+        keep = np.sort(first)
+        self.dropped_nodes = np.setdiff1d(
+            np.arange(len(self.node_grid)), keep)
+        if len(self.dropped_nodes):
+            _d = self.dropped_nodes
+            print(f"[freqsel] {len(self.node_grid)} nodes occupy {len(keep)} "
+                  f"distinct grid cells; dropping {len(_d)} duplicate(s): "
+                  f"{_d[:20].tolist()}{' ...' if len(_d) > 20 else ''}",
+                  flush=True)
+        self._cand = keep
+        order = keep[np.argsort(self.node_grid[keep, 1], kind="stable")]
         npool = self.n_pools
         if self.random_batch:
             # size the fixed interleaved pools to the random batch (used only
@@ -520,16 +541,25 @@ class PoolScheduler:
             raise ValueError(
                 f"batch size {bs} exceeds {self.n_bins} comb bins; "
                 "raise n_pools, lower random_batch, or widen the comb")
+        if self.random_batch and int(self.random_batch) > len(keep):
+            raise ValueError(
+                f"random_batch {self.random_batch} exceeds the {len(keep)} "
+                f"distinct source cells ({len(self.node_grid)} nodes collapse "
+                f"onto {len(keep)} cells at this dh); lower random_batch or "
+                "refine the grid")
         self._n_nodes = len(order)
         self._rng = np.random.default_rng(self.seed)
 
     def draw(self, iteration: int):
         if self.random_batch:
-            pool = np.sort(self._rng.choice(
-                self._n_nodes, size=int(self.random_batch), replace=False))
+            pool = np.sort(self._cand[self._rng.choice(
+                self._n_nodes, size=int(self.random_batch), replace=False)])
         else:
             pool = self.pools[iteration % self.n_pools]
         bins = self._rng.permutation(self.n_bins)[:len(pool)]
+        # the invariant this class exists to hold up; cheap at these sizes
+        assert len(np.unique(self.node_grid[pool], axis=0)) == len(pool), \
+            "source cells must be distinct"
         return pool, bins
 
 
