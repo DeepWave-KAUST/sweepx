@@ -38,6 +38,52 @@ hide:
   </a>
 </section>
 
+<!-- What's new: six cards, rotate on release. See docs-template/README.md. -->
+<section class="sweep-new">
+<div class="sweep-new__eyebrow">WHAT'S NEW</div>
+<h2 class="sweep-new__title">Recently shipped.</h2>
+<p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
+<div class="sweep-new__grid">
+
+  <a class="sweep-new__card" href="getting-started/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">docs</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">One docs site for the whole stack</div>
+    <div class="sweep-new__desc">Solver and Agent now share this site — one theme, one search box, one <code>pip install sweepx</code> to get started.</div>
+  </a>
+
+  <a class="sweep-new__card" href="agent/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">agent 0.0.3</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Natural-language control</div>
+    <div class="sweep-new__desc">Natural-language control on a plain <code>pip install</code>: forward modelling (acoustic <em>and</em> elastic) plus benchmark models, no <code>sweep-tasks</code> needed.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/notebooks/24_wavefield_per_edge_free_surface/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge sweep-new__badge--dev">dev</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Per-edge free surface</div>
+    <div class="sweep-new__desc">Turn the free surface on for any subset of faces, elastic included — with fp16 boundary storage and a body-force <code>rho</code> gradient fix.</div>
+  </a>
+
+  <a class="sweep-new__card" href="getting-started/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
+    <div class="sweep-new__name">On PyPI, CUDA included</div>
+    <div class="sweep-new__desc">A single <code>py3-none</code> wheel: the CUDA backend JIT-compiles against <em>your</em> PyTorch on first use, so there's no version matrix to match.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/playground/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
+    <div class="sweep-new__name">Interactive Playground</div>
+    <div class="sweep-new__desc">Dispersion, anisotropy, modelling and seismograms — explored in the browser, no install.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/notebooks/23_batched_local_window_fwi/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
+    <div class="sweep-new__name">Per-shot batched models</div>
+    <div class="sweep-new__desc">Give every shot in a batch its own velocity model — local-window FWI in one call, Acoustic and Elastic 2D.</div>
+  </a>
+
+</div>
+</section>
+
 <section class="sweep-onefile" markdown>
 <div class="sweep-onefile__inner" markdown>
 <div class="sweep-onefile__eyebrow">ONE INSTALL · MANY PACKAGES</div>

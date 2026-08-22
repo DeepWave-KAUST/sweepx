@@ -38,3 +38,24 @@ docs/
 └─ api/
    └─ index.md              # ::: your_import_name  (mkdocstrings)
 ```
+
+## Keeping the landing page current
+
+The umbrella's homepage carries a hand-curated **What's new** strip — six cards
+in a 3 × 2 grid, in `docs/index.md`. It is written by hand on purpose: the copy
+is a pitch, not a changelog, and it is short enough that generating it from the
+package repos would cost more than it saves.
+
+**When a package ships something user-visible**, add a card at the top of the
+grid and drop the oldest, so the count stays at six. The badge states where the
+feature actually is — readers use it to decide whether `pip install` already
+gives it to them:
+
+| badge | meaning |
+|---|---|
+| `v0.1.0`, `agent 0.0.3` | in a release, available from PyPI |
+| `dev` | merged, not released yet — add the `sweep-new__badge--dev` class |
+| `docs` | a docs-site change, no package version |
+
+This site builds from each package's development branch, so a feature stays
+`dev` until it is released.
