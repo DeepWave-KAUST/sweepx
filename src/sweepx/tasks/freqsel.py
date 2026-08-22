@@ -425,6 +425,13 @@ class FreqSelTargets:
             self.union_xyz = np.stack(
                 [ukey // ny, ukey % ny, np.zeros_like(ukey)], -1).astype(np.int32)
         self.n_union = len(ukey)
+        # Receivers are unique by construction (np.unique above) — the solver
+        # gets one entry per cell, never the 22.8 M raw (node, trace) pairs.
+        # It matters for the same reason it does for sources: the adjoint
+        # injects residuals through the same atomicAdd source kernel, so a
+        # repeated cell would make the gradient depend on arrival order.
+        assert len(np.unique(self.union_xyz, axis=0)) == self.n_union, \
+            "receiver cells must be distinct"
         self._bound = None
 
     def bind_ownership(self, own_cols, device) -> None:
