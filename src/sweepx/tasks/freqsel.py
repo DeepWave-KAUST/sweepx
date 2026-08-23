@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -458,13 +459,23 @@ class FreqSelTargets:
         # allocation while the GPUs sat nearly idle.
         Dh = np.empty((len(items), self._nb, 2), np.float16)
         self._load_shards(Dh, loc)
+        # The observed table stays on the HOST by default.  The loss reads
+        # ``D[dsel[s], bins[j]]`` -- one frequency column of one node's rows --
+        # so a whole iteration touches well under 1% of it.  At production comb
+        # sizes the resident table costs tens of GB of card and can force DD
+        # purely to make it fit.
+        # fit.  Set SWEEP_FREQSEL_D_ON_GPU=1 to restore the resident table.
+        d_on_gpu = os.environ.get("SWEEP_FREQSEL_D_ON_GPU", "") == "1"
+        Dt_ = torch.from_numpy(Dh)
         self._bound = {
-            "D": torch.from_numpy(Dh).to(device),
+            "D": Dt_.to(device) if d_on_gpu else Dt_,
+            "D_on_gpu": d_on_gpu,
             "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
                                     dtype=torch.long, device=device)
                        for s in range(self.n_nodes)],
-            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]],
-                                  dtype=torch.long, device=device)
+            # dsel indexes D, so it has to live wherever D lives
+            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]], dtype=torch.long,
+                                  device=device if d_on_gpu else "cpu")
                      for s in range(self.n_nodes)],
         }
 
@@ -739,8 +750,22 @@ class SteadyGCNLoss:
             ys = ywin[gi]
             ur = ys @ er[j]
             ui = ys @ ei[j]
-            dr = D[ds, bins[j], 0].float()
-            di = D[ds, bins[j], 1].float()
+            if b.get("D_on_gpu", True):
+                dr = D[ds, bins[j], 0].float()
+                di = D[ds, bins[j], 1].float()
+            else:
+                # Host gather, one small transfer per component (69 KB each
+                # (tens of KB).  The two components are indexed separately so the
+                # result is contiguous, matching the resident path's layout.
+                #
+                # Bit-identical to the resident path outside the PML.  This
+                # comment used to say the opposite -- that the gradient simply
+                # was not reproducible, two runs of one binary differing by
+                # 1.3e-5 over 99.96% of cells.  That was duplicate source cells
+                # colliding in the atomicAdd source kernel, since fixed; see
+                # PoolScheduler.  What is left sits in the absorbing boundary.
+                dr = D[ds, bins[j], 0].to(self.device).float()
+                di = D[ds, bins[j], 1].to(self.device).float()
             part[j, 0] = (ur * dr + ui * di).sum()
             part[j, 1] = (ui * dr - ur * di).sum()
             part[j, 2] = (ur ** 2 + ui ** 2).sum()
