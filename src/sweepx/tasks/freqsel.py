@@ -546,9 +546,13 @@ class FreqSelTargets:
                         sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
                 if _ws > 1:
                     import torch as _t
-                    _b = _t.from_numpy(sc)
+                    # NCCL has no CPU backend, so the scale has to make the
+                    # round trip through the device to be broadcast at all.
+                    _dev = (_t.device("cuda", _t.cuda.current_device())
+                            if _t.cuda.is_available() else _t.device("cpu"))
+                    _b = _t.from_numpy(sc).to(_dev)
                     _dist.broadcast(_b, src=0)
-                    sc = _b.numpy()
+                    sc = _b.cpu().numpy()
                 rows = np.nonzero(m)[0]
                 rs = sc[rows][:, None]
                 # chunked so the gather never holds more than a slice
