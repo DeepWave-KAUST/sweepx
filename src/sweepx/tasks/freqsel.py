@@ -446,11 +446,42 @@ class FreqSelTargets:
         bounds = np.searchsorted(no[o], np.arange(self.n_nodes + 1))
         # Stream the shards, keeping only this tile's rows, straight into
         # fp16 (the GCN is scale-invariant per node, so half-float relative
-        # precision sits far below the steady-state residual). Host peak =
-        # one decompressed shard + the owned fp16 block; shards are
+        # precision sits far below the steady-state residual); shards are
         # consecutive item ranges, so per-shard selection preserves the
         # global ``items`` order.
+        #
+        # Ranks take turns.  ``p["D"]`` decompresses a whole shard member, so
+        # the host peak is one shard plus the owned blocks -- but only if one
+        # rank is inside the loop at a time.  Four ranks entering together
+        # multiply the shard term by four: on a production cascade the shards
+        # run to hundreds of GB each, and a 4-rank run was OOM-killed at its host
+        # allocation while the GPUs sat nearly idle.
         Dh = np.empty((len(items), self._nb, 2), np.float16)
+        _ws, _rk = 1, 0
+        try:
+            import torch.distributed as _dist
+            if _dist.is_available() and _dist.is_initialized():
+                _ws, _rk = _dist.get_world_size(), _dist.get_rank()
+        except Exception:
+            pass
+        for _turn in range(_ws):
+            if _turn == _rk:
+                self._load_shards(Dh, loc)
+            if _ws > 1:
+                import torch.distributed as _dist
+                _dist.barrier()
+        self._bound = {
+            "D": torch.from_numpy(Dh).to(device),
+            "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
+                                    dtype=torch.long, device=device)
+                       for s in range(self.n_nodes)],
+            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]],
+                                  dtype=torch.long, device=device)
+                     for s in range(self.n_nodes)],
+        }
+
+    def _load_shards(self, Dh, loc) -> None:
+        """Fill ``Dh`` with this rank's rows. Called one rank at a time."""
         off = oi = 0
         for t, pth in enumerate(self._paths):
             ni = self._sizes[t]
@@ -478,16 +509,7 @@ class FreqSelTargets:
                 del Dt, Ds
                 off += n_own
             oi += ni
-        assert off == len(items)
-        self._bound = {
-            "D": torch.from_numpy(Dh).to(device),
-            "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
-                                    dtype=torch.long, device=device)
-                       for s in range(self.n_nodes)],
-            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]],
-                                  dtype=torch.long, device=device)
-                     for s in range(self.n_nodes)],
-        }
+        assert off == len(Dh)
 
     @property
     def bound(self):
