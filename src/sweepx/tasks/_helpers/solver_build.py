@@ -90,10 +90,26 @@ def _build_solver(physics: PhysicsSpec, backend, shape: tuple[int, ...], dh: flo
         pml_type=physics.pml_type,
         source_type=list(physics.source_type),
         receiver_type=list(physics.receiver_type),
-        use_ckpt=backend.use_ckpt,
     )
+    # Gradient-memory mode, across two sweep generations. A newer sweep takes
+    # a three-way ``memory=`` selector and rejects a legacy ``use_ckpt``
+    # alongside ``cuda_options.memory`` -- ``use_ckpt=False`` still counts as
+    # specified. An older one needs that explicit False, because its dict path
+    # defaulted it to True and let checkpointing quietly override boundary
+    # saving ("thought I measured bs, actually ran ckpt").
+    #
+    # So drop the kwarg only in the case the newer core actually objects to:
+    # memory options present. With none set, ``use_ckpt=False`` still has to
+    # go in, or that same True default turns checkpointing on -- which is how
+    # a wavefield task ended up refusing to return a wavefield.
+    import inspect
+    _new_mem_api = "memory" in inspect.signature(PropTorch.__init__).parameters
+    _mem_set = getattr(getattr(backend, "cuda_options", None), "memory", None) is not None
     if backend.use_ckpt:
+        prop_kwargs["use_ckpt"] = True
         prop_kwargs["ckpt_chunks"] = backend.ckpt_chunks
+    elif not (_new_mem_api and _mem_set):
+        prop_kwargs["use_ckpt"] = False
 
     # Irregular free-surface topography → boundary-fitted curvilinear grid.
     # PropTorch builds the metric tensors from the 1-D surface-row array.
