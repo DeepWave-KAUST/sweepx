@@ -486,7 +486,16 @@ class FreqSelTargets:
             return None                       # compressed: caller falls back
         with zf.open(info) as fh:
             ver = _npf.read_magic(fh)
-            shape, order, dtype = _npf._read_array_header(fh, ver)
+            # Version-keyed public readers.  numpy.lib.format._read_array_header
+            # is private and is not present in every numpy the cluster runs --
+            # it exists on the box the tests ran on and not on the one the
+            # cascade ran on, which is why this crashed 53 s into a 40 h job.
+            rd = {(1, 0): getattr(_npf, "read_array_header_1_0", None),
+                  (2, 0): getattr(_npf, "read_array_header_2_0", None)}.get(ver)
+            if rd is None:
+                zf.close()
+                return None                   # unknown version: use np.load
+            shape, order, dtype = rd(fh)
             hdr = fh.tell()                   # .npy header, inside the member
         zf.close()
         # Parse the local file header that is actually in the file.  Do not use
