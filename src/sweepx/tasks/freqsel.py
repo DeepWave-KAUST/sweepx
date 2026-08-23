@@ -457,19 +457,7 @@ class FreqSelTargets:
         # run to hundreds of GB each, and a 4-rank run was OOM-killed at its host
         # allocation while the GPUs sat nearly idle.
         Dh = np.empty((len(items), self._nb, 2), np.float16)
-        _ws, _rk = 1, 0
-        try:
-            import torch.distributed as _dist
-            if _dist.is_available() and _dist.is_initialized():
-                _ws, _rk = _dist.get_world_size(), _dist.get_rank()
-        except Exception:
-            pass
-        for _turn in range(_ws):
-            if _turn == _rk:
-                self._load_shards(Dh, loc)
-            if _ws > 1:
-                import torch.distributed as _dist
-                _dist.barrier()
+        self._load_shards(Dh, loc)
         self._bound = {
             "D": torch.from_numpy(Dh).to(device),
             "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
@@ -480,33 +468,89 @@ class FreqSelTargets:
                      for s in range(self.n_nodes)],
         }
 
+    @staticmethod
+    def _memmap_member(pth, name):
+        """Memory-map an uncompressed .npy member of a .npz.
+
+        ``np.load`` materialises a whole member; at production comb sizes these run to hundreds of GB.  The
+        writer leaves them STORED, so the bytes are already a plain .npy at a
+        known offset and can be mapped instead -- each rank then touches only
+        the rows it owns.
+        """
+        import zipfile
+        from numpy.lib import format as _npf
+        zf = zipfile.ZipFile(pth)
+        info = zf.getinfo(name)
+        if info.compress_type != zipfile.ZIP_STORED:
+            zf.close()
+            return None                       # compressed: caller falls back
+        with zf.open(info) as fh:
+            ver = _npf.read_magic(fh)
+            shape, order, dtype = _npf._read_array_header(fh, ver)
+            hdr = fh.tell()                   # .npy header, inside the member
+        zf.close()
+        # Parse the local file header that is actually in the file.  Do not use
+        # ZipInfo.FileHeader(): it re-synthesises one, and its extra field need
+        # not match the stored bytes, which puts the map a few bytes off.
+        with open(pth, "rb") as f:
+            f.seek(info.header_offset)
+            lfh = f.read(30)
+            n_name = int.from_bytes(lfh[26:28], "little")
+            n_extra = int.from_bytes(lfh[28:30], "little")
+        off = info.header_offset + 30 + n_name + n_extra + hdr
+        return np.memmap(pth, dtype=dtype, mode="r", offset=off, shape=shape,
+                         order="F" if order else "C")
+
     def _load_shards(self, Dh, loc) -> None:
-        """Fill ``Dh`` with this rank's rows. Called one rank at a time."""
+        """Fill ``Dh`` with this rank's rows, reading only those rows.
+
+        The per-node max-abs scale has to come from the node's FULL row block
+        so every DD rank derives the same value -- a per-rank max would
+        desynchronise the cross-rank partial sums.  Raw field DTFT
+        coefficients run past the half-float range (observed max|D| ~ 1.2e5 >
+        65504 -> inf -> nan loss), so the scale has to exist before the cast.
+        Rank 0 makes that full pass once and broadcasts the result; the others
+        skip straight to their own rows.
+        """
+        _ws, _rk, _dist = 1, 0, None
+        try:
+            import torch.distributed as _d
+            if _d.is_available() and _d.is_initialized():
+                _dist, _ws, _rk = _d, _d.get_world_size(), _d.get_rank()
+        except Exception:
+            pass
         off = oi = 0
         for t, pth in enumerate(self._paths):
             ni = self._sizes[t]
             m = loc[oi:oi + ni] >= 0
             n_own = int(m.sum())
             if n_own:
+                Dm = self._memmap_member(pth, "D.npy")
                 with np.load(pth) as p:
-                    Dt = p["D"][:, :self._nb]
                     ptr = p["node_ptr"]
-                # Per-node max-abs normalisation ahead of the fp16 cast: raw
-                # field DTFT coefficients exceed the half-float range (observed
-                # max|D| ~ 1.2e5 > 65504 -> inf -> nan loss). The GCN is
-                # exactly invariant to a real per-node scale, and the scale is
-                # taken over the node's FULL row block so every DD rank
-                # derives the same value (a per-rank max would desynchronise
-                # the cross-rank partial sums).
+                    if Dm is None:                       # compressed fallback
+                        Dm = p["D"]
                 sc = np.ones(ni, np.float32)
-                for s in range(len(ptr) - 1):
-                    a = float(np.abs(Dt[ptr[s]:ptr[s + 1]]).max(initial=0.0))
-                    sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
-                Ds = Dt[m]
-                rs = sc[m][:, None]
-                Dh[off:off + n_own, :, 0] = Ds.real / rs
-                Dh[off:off + n_own, :, 1] = Ds.imag / rs
-                del Dt, Ds
+                if _rk == 0:
+                    for s in range(len(ptr) - 1):
+                        a = float(np.abs(Dm[ptr[s]:ptr[s + 1], :self._nb]).max(initial=0.0))
+                        sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
+                if _ws > 1:
+                    import torch as _t
+                    _b = _t.from_numpy(sc)
+                    _dist.broadcast(_b, src=0)
+                    sc = _b.numpy()
+                rows = np.nonzero(m)[0]
+                rs = sc[rows][:, None]
+                # chunked so the gather never holds more than a slice
+                CH = 1 << 19
+                for a0 in range(0, len(rows), CH):
+                    r = rows[a0:a0 + CH]
+                    blk = np.asarray(Dm[r, :self._nb])
+                    Dh[off + a0:off + a0 + len(r), :, 0] = blk.real / rs[a0:a0 + len(r)]
+                    Dh[off + a0:off + a0 + len(r), :, 1] = blk.imag / rs[a0:a0 + len(r)]
+                    del blk
+                del Dm
                 off += n_own
             oi += ni
         assert off == len(Dh)
