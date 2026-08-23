@@ -49,6 +49,75 @@ from sweep_tasks._helpers.util import (
 )
 
 
+def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None):
+    """Per-stage backend spec with truncated-backward boundary saving.
+
+    ``fspec.bwd_tail_margin`` set -> return a deep copy of ``backend`` whose
+    boundary config carries ``tail_steps = probe_samples + bwd_tail_margin``
+    (per stage: every rung has its own probe window). Unset -> ``backend``
+    unchanged, bit-identical behaviour.
+
+    Guards raise HERE, with the YAML vocabulary, rather than letting sweep
+    fail deep inside the propagator: truncation needs the c-backend
+    boundary-saving adjoint (no ckpt, no eager). DD is supported — tail_steps
+    rides the boundary config into every tile — with equation coverage
+    guarded by the core (Acoustic 2D/3D).
+    """
+    margin = getattr(fspec, "bwd_tail_margin", None)
+    margin_s = getattr(fspec, "bwd_tail_margin_s", None)
+    if margin is None and margin_s is None:
+        return backend
+    if margin is None:
+        # Seconds -> this stage's steps: the margin is a physical decay time,
+        # so it must rescale with per-stage dt in a multi-rate cascade.
+        if dt is None:
+            raise ValueError("bwd_tail_margin_s needs the stage dt")
+        import math
+        margin = int(math.ceil(float(margin_s) / float(dt)))
+    # DD passes straight through: every tile prop inherits tail_steps from
+    # the boundary config (same route as storage/storage_dtype), which also
+    # makes the reverse-loop stop step identical on every rank — the core
+    # enforces its own capability guards (Acoustic 2D/3D only; a core
+    # predating DD-tail support raises there, not here).
+    if backend.impl != "c":
+        raise ValueError(
+            "frequency.bwd_tail_margin requires backend.impl='c' "
+            f"(got '{backend.impl}'): the truncation lives in the c-backend "
+            "boundary-saving adjoint")
+    if backend.use_ckpt:
+        raise ValueError(
+            "frequency.bwd_tail_margin is incompatible with "
+            "backend.use_ckpt=true — checkpointing replays forward segments "
+            "and cannot skip the head of the record; use "
+            "cuda_options.memory.strategy='boundary'")
+    from sweep_tasks.schemas import (BoundaryOptionsModel, CUDAOptionsModel,
+                                     MemoryOptionsModel)
+    tail = int(fspec.probe_samples) + int(margin)
+    out = backend.model_copy(deep=True)
+    if out.cuda_options is None:
+        out.cuda_options = CUDAOptionsModel(
+            memory=MemoryOptionsModel(strategy="boundary",
+                                      boundary=BoundaryOptionsModel(
+                                          tail_steps=tail)))
+        return out
+    mem = out.cuda_options.memory
+    if mem is None:
+        out.cuda_options.memory = MemoryOptionsModel(
+            strategy="boundary",
+            boundary=BoundaryOptionsModel(tail_steps=tail))
+        return out
+    if mem.strategy != "boundary":
+        raise ValueError(
+            "frequency.bwd_tail_margin requires "
+            "cuda_options.memory.strategy='boundary' "
+            f"(got '{mem.strategy}')")
+    if mem.boundary is None:
+        mem.boundary = BoundaryOptionsModel(tail_steps=tail)
+    else:
+        mem.boundary.tail_steps = tail
+    return out
+
+
 def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     """Warn when a stage's ``frequency:`` block silently drops a global setting.
 
@@ -172,7 +241,15 @@ class FreqselRunnerMixin:
                         f"init_models entry with a path")
                 param_bases.append(_prep_base(_model_array(_ref)))
 
-        solver = _build_solver(spec.physics, spec.backend,
+        stage_backend = backend_with_tail_steps(spec.backend, fspec, dd_on,
+                                                dt=float(dt))
+        if rank == 0 and stage_backend is not spec.backend:
+            _tl = stage_backend.cuda_options.memory.boundary.tail_steps
+            print(f"[freqsel] s{si} truncated backward: boundary tail_steps="
+                  f"{_tl} of nt={nt} (probe {fspec.probe_samples} + margin "
+                  f"{_tl - fspec.probe_samples} steps; reverse depth "
+                  f"{_tl - 1})", flush=True)
+        solver = _build_solver(spec.physics, stage_backend,
                                _solver_shape, float(dh),
                                float(dt), nt, dev)
         if dd_on:

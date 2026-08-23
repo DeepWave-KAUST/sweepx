@@ -67,8 +67,28 @@ class BoundaryOptionsModel(_Forbid):
     ring_buffers: int | None = None
     disk_async_read: bool = False
 
+    # Truncated backward: save boundary strips for (and reverse through) only
+    # the LAST ``tail_steps`` of the record. The forward still runs full nt.
+    # Effective reverse depth is ``tail_steps - 1`` (the restore at loop step
+    # ``it`` consumes step ``it-1``'s strip), so callers must include that
+    # one-step alignment tax in their margin. Only valid when the loss reads
+    # nothing before the tail (freqsel's steady-window GCN); an impulsive
+    # misfit genuinely needs the early adjoint correlation and will lose it.
+    # On a sweep without this feature ``to_dataclass`` raises TypeError —
+    # a free capability check instead of a silently ignored truncation.
+    tail_steps: int | None = Field(default=None, gt=0)
+
     def to_dataclass(self) -> BoundaryOptions:
-        return BoundaryOptions(**self.model_dump())
+        dump = self.model_dump()
+        # None means "feature not requested" — drop the key entirely so this
+        # model still drives every sweep released before tail truncation
+        # existed. Only an actually-set tail_steps reaches the dataclass, so
+        # the TypeError-on-old-sweep capability check fires exactly when the
+        # user asked for something their core cannot do, not always.
+        if dump.get("tail_steps") is None:
+            dump.pop("tail_steps", None)
+        return BoundaryOptions(**dump)
+
 
 
 class CkptOptionsModel(_Forbid):
@@ -959,6 +979,23 @@ class FreqSelectionSpec(_Forbid):
     # ``min`` so nodes already in water are left untouched. None (default) leaves
     # the shard node_grid_xyz z unchanged.
     lift_source_to_water_vp: float | None = None
+    # Truncated backward (sweep BoundaryOptions.tail_steps): when set, each
+    # stage's solver saves/reverses only the last ``probe_samples +
+    # bwd_tail_margin`` steps. The margin buys (a) the adjoint field's decay
+    # through the absorbing boundary after the probe window closes and (b) the
+    # one-step restore alignment tax -- so it should be >= 1. None = exact
+    # full-nt backward (default, bit-identical to before this field existed).
+    bwd_tail_margin: int | None = Field(default=None, ge=0)
+    # Same knob in SECONDS, converted per stage with that stage's dt.
+    bwd_tail_margin_s: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_margin_convention(self):
+        if self.bwd_tail_margin is not None and self.bwd_tail_margin_s is not None:
+            raise ValueError(
+                "set frequency.bwd_tail_margin (solver steps) or "
+                "bwd_tail_margin_s (seconds), not both")
+        return self
 
     @model_validator(mode="after")
     def _one_source(self):
