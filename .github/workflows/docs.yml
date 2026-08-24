@@ -59,6 +59,22 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           # Published packages (import as `sweep` / `sweep_agent`):
           pip install sweep-solver sweep-agent
+          # A companion's upper pin can silently hold sweep-solver back — that
+          # is how v0.2.0 shipped with the umbrella still resolving 0.1.0, and
+          # the only symptom was mkdocstrings failing to collect a class that
+          # the API page documents. Say so here instead.
+          python - <<'PY'
+          import importlib, sys
+          from importlib.metadata import version
+          print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"))
+          for mod in ("sweep", "sweep.parallel", "sweep_agent"):
+              try:
+                  importlib.import_module(mod)
+              except Exception as exc:
+                  sys.exit(f"::error::{mod} is not importable ({exc}) — the docs "
+                           f"reference it, so a resolver downgrade would fail later "
+                           f"with an unreadable mkdocstrings error")
+          PY
           # NOTE: sweep-tasks is still a PRIVATE repo, so neither pip nor
           # multirepo can reach it from CI. Its Tasks tab is commented out in
           # mkdocs.yml — re-enable both (here and there) once sweep-tasks is
