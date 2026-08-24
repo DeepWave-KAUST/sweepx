@@ -267,7 +267,13 @@ class FreqselRunnerMixin:
                   f"{_tl - fspec.probe_samples} steps; reverse depth "
                   f"{_tl - 1})", flush=True)
         def _make_solver(storage=None):
-            """Build (and DD-wrap) the stage solver, optionally forcing storage."""
+            """Build (and DD-wrap) the stage solver, optionally forcing storage.
+
+            SWEEP_FREQSEL_BOUNDARY_STORAGE overrides the config, which is how
+            an operator re-runs a stage that ran out of card: the core fixes
+            the boundary's home at construction, so this is the only door.
+            """
+            storage = storage or os.environ.get("SWEEP_FREQSEL_BOUNDARY_STORAGE") or None
             be = (stage_backend if storage is None
                   else backend_with_boundary_storage(stage_backend, storage))
             sv = _build_solver(spec.physics, be, _solver_shape, float(dh),
@@ -667,6 +673,19 @@ class FreqselRunnerMixin:
                     _oom = int(_v.item())
                 if not _oom:
                     break
+                if world > 1:
+                    # No in-process recovery under DD. The out-of-memory lands
+                    # inside a backward, whose halo exchanges are collectives;
+                    # an interrupted collective leaves the communicator unusable
+                    # and rebuilding the wrapper from there aborts a rank
+                    # (SIGABRT, with the NCCL watchdog close behind). The core
+                    # also fixes the boundary's home at construction. So say
+                    # what to do and stop, rather than corrupt the run.
+                    raise RuntimeError(
+                        f"[freqsel] s{si} it {it}: CUDA out of memory. Re-run "
+                        "this stage with SWEEP_FREQSEL_BOUNDARY_STORAGE=cpu "
+                        "(the boundary then stages through the host), or give "
+                        "it more ranks.")
                 if boundary_on_host:
                     raise RuntimeError(
                         f"[freqsel] s{si} it {it}: out of memory with the "
