@@ -45,6 +45,18 @@ hide:
 <p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
 <div class="sweep-new__grid">
 
+  <a class="sweep-new__card" href="solver/user-guide/parallel/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Domain decomposition</div>
+    <div class="sweep-new__desc">A model too big for one GPU now splits across several — one tile per rank, a halo per step, and a gradient that is <em>bit-identical</em> to the single-GPU one.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/user-guide/propagators/#memory-saving-features">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Pick how the gradient is stored</div>
+    <div class="sweep-new__desc">Full, boundary or checkpoint — one three-way choice, same on both backends. Plus thinner CPML buffers and a truncated reverse pass for steady-state objectives.</div>
+  </a>
+
   <a class="sweep-new__card" href="getting-started/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">docs</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">One docs site for the whole stack</div>
@@ -58,7 +70,7 @@ hide:
   </a>
 
   <a class="sweep-new__card" href="solver/notebooks/24_wavefield_per_edge_free_surface/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge sweep-new__badge--dev">dev</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">Per-edge free surface</div>
     <div class="sweep-new__desc">Turn the free surface on for any subset of faces, elastic included — with fp16 boundary storage and a body-force <code>rho</code> gradient fix.</div>
   </a>
@@ -67,18 +79,6 @@ hide:
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
     <div class="sweep-new__name">On PyPI, CUDA included</div>
     <div class="sweep-new__desc">A single <code>py3-none</code> wheel: the CUDA backend JIT-compiles against <em>your</em> PyTorch on first use, so there's no version matrix to match.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/playground/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
-    <div class="sweep-new__name">Interactive Playground</div>
-    <div class="sweep-new__desc">Dispersion, anisotropy, modelling and seismograms — explored in the browser, no install.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/notebooks/23_batched_local_window_fwi/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
-    <div class="sweep-new__name">Per-shot batched models</div>
-    <div class="sweep-new__desc">Give every shot in a batch its own velocity model — local-window FWI in one call, Acoustic and Elastic 2D.</div>
   </a>
 
 </div>
