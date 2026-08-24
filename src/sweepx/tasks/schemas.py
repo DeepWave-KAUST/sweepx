@@ -983,10 +983,25 @@ class FreqSelectionSpec(_Forbid):
     # stage's solver saves/reverses only the last ``probe_samples +
     # bwd_tail_margin`` steps. The margin buys (a) the adjoint field's decay
     # through the absorbing boundary after the probe window closes and (b) the
-    # one-step restore alignment tax -- so it should be >= 1. None = exact
+    # one-step restore alignment tax — so it should be >= 1, and the measured
+    # gradient-vs-full cosine converges monotonically as it grows (0.992 ->
+    # 1.000000 over margin 0 -> 800 on the validation model). None = exact
     # full-nt backward (default, bit-identical to before this field existed).
     bwd_tail_margin: int | None = Field(default=None, ge=0)
-    # Same knob in SECONDS, converted per stage with that stage's dt.
+    # Same knob in SECONDS, converted per stage with that stage's dt. Prefer
+    # this in a multi-rate cascade: the margin is a physical decay time, and a
+    # flat step count silently rescales with dt — 2000 steps is 2 s at
+    # dt=1 ms but 13.6 s at dt=6.8 ms, which can eat the entire saving.
+    #
+    # Production recipe (measured on a 3-D field-survey DD cascade): set
+    # the margin on the EXPENSIVE rungs only -- the finer half of the ladder
+    # low bands unset — most of the cascade saving comes from the last two
+    # rungs, while a low band's long probe leaves little to skip. Per-band
+    # control is native: the field lives on each stage's `frequency:` block,
+    # unset = exact full-nt backward for that stage. The margin scales with
+    # DOMAIN size (adjoint drain time), not with the model at hand's dt:
+    # ~1-2 s sufficed on open 2-D marine lines, a ~20 km-scale 3-D volume
+    # needed 6-8 s.
     bwd_tail_margin_s: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
