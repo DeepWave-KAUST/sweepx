@@ -118,6 +118,23 @@ def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None
     return out
 
 
+def backend_with_boundary_storage(backend, storage: str):
+    """Copy of ``backend`` with the boundary strips staged on ``storage``.
+
+    Used for the out-of-memory fallback: the card is the right home while the
+    strips fit, since they are written and read every step, but a stage that
+    runs slower on the host beats one that dies.
+    """
+    out = backend.model_copy(deep=True)
+    mem = getattr(getattr(out, "cuda_options", None), "memory", None)
+    if mem is None or mem.boundary is None:
+        raise ValueError(
+            "boundary storage fallback needs cuda_options.memory.boundary "
+            "(set memory.strategy='boundary')")
+    mem.boundary.storage = storage
+    return out
+
+
 def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     """Warn when a stage's ``frequency:`` block silently drops a global setting.
 
@@ -249,14 +266,27 @@ class FreqselRunnerMixin:
                   f"{_tl} of nt={nt} (probe {fspec.probe_samples} + margin "
                   f"{_tl - fspec.probe_samples} steps; reverse depth "
                   f"{_tl - 1})", flush=True)
-        solver = _build_solver(spec.physics, stage_backend,
-                               _solver_shape, float(dh),
+        def _make_solver(storage=None):
+            """Build (and DD-wrap) the stage solver, optionally forcing storage."""
+            be = (stage_backend if storage is None
+                  else backend_with_boundary_storage(stage_backend, storage))
+            sv = _build_solver(spec.physics, be, _solver_shape, float(dh),
                                float(dt), nt, dev)
-        if dd_on:
-            from sweep.parallel import MeshTopology
-            mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
-                                world_size=world, rank=rank)
-            solver = _dd_wrap(solver, mesh)
+            if dd_on:
+                from sweep.parallel import MeshTopology
+                _mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
+                                     world_size=world, rank=rank)
+                sv = _dd_wrap(sv, _mesh)
+            return sv
+
+        solver = _make_solver()
+        # Boundary storage falls back GPU -> host on the first out-of-memory,
+        # for the rest of the stage. The card is where this belongs when it
+        # fits: the strips are written and read every step, and staging them
+        # through the host costs a PCIe round trip each way. But the fine bands
+        # do not fit -- a fine rung can exhaust an 80 GB card even split four ways, in
+        # use -- and a stage that runs slower is worth more than one that dies.
+        boundary_on_host = False
 
         illum_solver = getattr(solver, "prop", solver)
         if illum_on:
@@ -590,28 +620,67 @@ class FreqselRunnerMixin:
             leaves, models = _get_models()
             leaf = leaves[0]
             _pf_sync(); _pf["render"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            syn = solver(
-                fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
-                targets.node_grid[pool][None].astype(np.int32), rec_table,
-                models=models)
-            _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
-            # + owned receiver indices — localizes DD-vs-single divergence to
-            # receivers/onset times. Diagnostic only.
-            _rdump = os.environ.get("SWEEP_FREQSEL_DUMP_REC")
-            if _rdump and it < int(os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
-                os.makedirs(_rdump, exist_ok=True)
-                _own_i = getattr(solver, "_own_rec_idx", None)
-                np.savez(os.path.join(
-                    _rdump, f"rec_s{si}_it{it}_r{rank}.npz"),
-                    syn=syn.detach().cpu().numpy(),
-                    own=(np.arange(targets.n_union) if _own_i is None
-                         else np.asarray(_own_i)),
-                    pool=np.asarray(pool), bins=np.asarray(bins))
-            J, npool = loss_fn(syn, pool, bins)
-            _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            J.backward()
-            _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+            # One retry, on the host, if the card cannot hold the boundary.
+            # The switch has to be COLLECTIVE: a rank that quietly moved its
+            # strips to the host while its neighbours stayed on the card would
+            # desynchronise the next halo exchange. So every rank votes each
+            # iteration -- one scalar all-reduce against a 35-130 s step -- and
+            # they fall back together or not at all.
+            for _attempt in (0, 1):
+                _oom = 0
+                try:
+                    syn = solver(
+                        fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
+                        targets.node_grid[pool][None].astype(np.int32), rec_table,
+                        models=models)
+                    _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                    # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
+                    # + owned receiver indices — localizes DD-vs-single divergence to
+                    # receivers/onset times. Diagnostic only.
+                    _rdump = os.environ.get("SWEEP_FREQSEL_DUMP_REC")
+                    if _rdump and it < int(os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
+                        os.makedirs(_rdump, exist_ok=True)
+                        _own_i = getattr(solver, "_own_rec_idx", None)
+                        np.savez(os.path.join(
+                            _rdump, f"rec_s{si}_it{it}_r{rank}.npz"),
+                            syn=syn.detach().cpu().numpy(),
+                            own=(np.arange(targets.n_union) if _own_i is None
+                                 else np.asarray(_own_i)),
+                            pool=np.asarray(pool), bins=np.asarray(bins))
+                    J, npool = loss_fn(syn, pool, bins)
+                    _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                    J.backward()
+                    _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                except torch.OutOfMemoryError:
+                    _oom = 1
+                if world > 1:
+                    import torch.distributed as _d
+                    _v = torch.tensor([_oom], device=dev, dtype=torch.int32)
+                    _d.all_reduce(_v, op=_d.ReduceOp.MAX)
+                    _oom = int(_v.item())
+                if not _oom:
+                    break
+                if boundary_on_host:
+                    raise RuntimeError(
+                        f"[freqsel] s{si} it {it}: out of memory with the "
+                        "boundary already staged on the host; lower the batch, "
+                        "add ranks, or coarsen this stage")
+                syn = J = None
+                optimizer.zero_grad(set_to_none=True)
+                del solver
+                if use_cuda:
+                    torch.cuda.empty_cache()
+                solver = _make_solver(storage="cpu")
+                boundary_on_host = True
+                # The failed backward already freed the reparam half of the
+                # graph, so the retry has to render again -- reusing ``models``
+                # would walk a graph that is no longer there.
+                leaves, models = _get_models()
+                leaf = leaves[0]
+                if rank == 0:
+                    print(f"[freqsel] s{si} it {it}: boundary saving fell back "
+                          "to host memory after a CUDA OOM (all ranks)",
+                          flush=True)
             g = leaf.grad
             # Optional water-column gradient freeze: zero the vp gradient above
             # the seabed so the inversion never updates the (known) water
