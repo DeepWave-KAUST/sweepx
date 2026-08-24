@@ -546,10 +546,17 @@ class FreqselRunnerMixin:
         pool0 = sched.pools[0]
         bins0 = np.arange(len(pool0))
         leaves, models0 = _get_models()
-        rec0 = solver(
-            fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
-            targets.node_grid[pool0][None].astype(np.int32), rec_table,
-            models=models0)
+        # No grad: this record only feeds the steady-state check, which takes
+        # it detached and then drops it. Under grad the c backend saves the
+        # boundary for a backward that never comes -- on a fine rung that is
+        # most of the card, and the check itself then has nowhere to put its
+        # own few GB. That is how a resumed fine stage died before its first
+        # iteration.
+        with torch.no_grad():
+            rec0 = solver(
+                fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
+                targets.node_grid[pool0][None].astype(np.int32), rec_table,
+                models=models0)
         own = getattr(solver, "_own_rec_idx", None)
         # Debug: audit receiver ownership across ranks (SWEEP_FREQSEL_OWN_AUDIT=1).
         # Duplicated/dropped receivers at tile cut planes would bias the GCN loss.
@@ -864,8 +871,8 @@ class FreqselRunnerMixin:
                 # NCCL watchdog default is 600 s; freqsel's iteration 0 at fine
                 # grids runs ~520 s of one-time warmup (first adjoint launch,
                 # boundary buffer allocs), so the default is one bad node away
-                # from a spurious SIGABRT (observed at 2-16Hz with 12 c2f
-                # levels). 1800 s default, env-overridable.
+                # from a spurious SIGABRT (seen on the finest rung of a
+                # production cascade). 1800 s default, env-overridable.
                 from datetime import timedelta
                 dist.init_process_group("nccl", timeout=timedelta(seconds=int(
                     os.environ.get("SWEEP_DD_NCCL_TIMEOUT_S", "1800"))))
