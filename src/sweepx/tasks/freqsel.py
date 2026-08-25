@@ -375,13 +375,57 @@ class FreqSelTargets:
             freqs = p["freqs"].copy()
             ks = p["ks"].astype(np.int64)
             meta = json.loads(str(p["meta"]))
-        if meta["n_p"] != comb.n_p or abs(meta["dt_solver"] - comb.dt) > 1e-12 \
-                or not np.array_equal(ks, comb.ks):
+        if abs(meta["dt_solver"] - comb.dt) > 1e-12:
             raise ValueError(
                 "extraction comb does not match the configured comb "
-                f"(shards: n_p={meta['n_p']} dt={meta['dt_solver']}; "
-                f"spec: n_p={comb.n_p} dt={comb.dt})")
-        nb = len(freqs)
+                f"(shards: dt={meta['dt_solver']}; spec: dt={comb.dt})")
+        shard_np = int(meta["n_p"])
+        if shard_np == comb.n_p and np.array_equal(ks, comb.ks):
+            self._bin_cols = None                       # the ordinary case
+        else:
+            # A configured comb may be an integer DECIMATION of the extracted
+            # one. Orthogonality needs ``k * W / n_p`` whole, so the extracted
+            # bins whose index is divisible by ``m`` stay mutually orthogonal
+            # over a window ``W = n_p / m`` -- and their frequencies are
+            # unchanged, ``(k/m) / (W*dt) == k / (n_p*dt)``. So a SHORTER
+            # record can reuse shards extracted at the long one, no re-DTFT.
+            #
+            # This is what makes the bin count a run-time knob: the record
+            # length is ``O + N/B``, so halving the comb halves the boundary
+            # buffer, which is what actually decides how many cards a band
+            # needs. Pick ``probe_samples`` highly composite at EXTRACTION time
+            # and the whole ladder (m = 2, 3, 4, ...) opens up later.
+            #
+            # Amplitude is not a concern: the two windows differ by a real
+            # normalisation, and the GCN loss is invariant to any per-node
+            # complex scale.
+            if comb.n_p <= 0 or shard_np % comb.n_p:
+                raise ValueError(
+                    "configured comb is neither the extracted comb nor an "
+                    f"integer decimation of it (shards: n_p={shard_np}; "
+                    f"spec: n_p={comb.n_p}; {shard_np}/{comb.n_p} is not whole)")
+            m = shard_np // comb.n_p
+            want = np.asarray(comb.ks, np.int64) * m
+            order = np.argsort(ks)
+            pos = np.searchsorted(ks[order], want)
+            if pos.max(initial=-1) >= len(ks) or \
+                    not np.array_equal(ks[order][np.clip(pos, 0, len(ks) - 1)], want):
+                missing = int(want[0]) if len(want) else -1
+                raise ValueError(
+                    f"configured comb decimates the extracted one by m={m}, "
+                    f"but bin k={missing}*... is absent from the shards "
+                    f"(extracted k in [{int(ks.min())}, {int(ks.max())}]); "
+                    "every configured k*m must exist in the extraction")
+            self._bin_cols = order[pos]
+            # Never silent: this branch also accepts m == 1, i.e. a plain
+            # SUBSET of the extracted bins, which the old exact-equality check
+            # rejected outright. That is physically fine (it is the same window,
+            # just fewer nodes fired) but it is exactly the shape a wrong-band
+            # config has, so say so rather than let it pass unremarked.
+            print(f"[freqsel] comb decimation m={m}: using {len(comb.ks)} of "
+                  f"{len(ks)} extracted bins, window {shard_np} -> {comb.n_p} "
+                  f"samples", flush=True)
+        nb = len(comb.ks) if self._bin_cols is not None else len(freqs)
         # Metadata-only pass — the coefficient table D is NOT loaded here.
         # Every DD rank constructs this object, so holding the full table per
         # rank (tens of GB on a full-survey node set) OOM-kills the host;
@@ -479,6 +523,18 @@ class FreqSelTargets:
                      for s in range(self.n_nodes)],
         }
 
+    def _cols(self, blk):
+        """The coefficient columns this run actually uses.
+
+        ``None`` means the configured comb IS the extracted one -- the common
+        case, and a plain slice. Otherwise the run decimates the extraction and
+        only the divisible bins are read.
+        """
+        blk = np.asarray(blk)
+        if self._bin_cols is None:
+            return blk[:, :self._nb]
+        return blk[:, self._bin_cols]
+
     @staticmethod
     def _memmap_member(pth, name):
         """Memory-map an uncompressed .npy member of a .npz.
@@ -553,7 +609,8 @@ class FreqSelTargets:
                 sc = np.ones(ni, np.float32)
                 if _rk == 0:
                     for s in range(len(ptr) - 1):
-                        a = float(np.abs(Dm[ptr[s]:ptr[s + 1], :self._nb]).max(initial=0.0))
+                        a = float(np.abs(self._cols(
+                            Dm[ptr[s]:ptr[s + 1]])).max(initial=0.0))
                         sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
                 if _ws > 1:
                     import torch as _t
@@ -570,7 +627,7 @@ class FreqSelTargets:
                 CH = 1 << 19
                 for a0 in range(0, len(rows), CH):
                     r = rows[a0:a0 + CH]
-                    blk = np.asarray(Dm[r, :self._nb])
+                    blk = self._cols(np.asarray(Dm[r]))
                     Dh[off + a0:off + a0 + len(r), :, 0] = blk.real / rs[a0:a0 + len(r)]
                     Dh[off + a0:off + a0 + len(r), :, 1] = blk.imag / rs[a0:a0 + len(r)]
                     del blk
