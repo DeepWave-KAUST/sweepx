@@ -74,7 +74,12 @@ def test_stage_override_warning_covers_the_new_key():
 
 
 def test_margin_in_seconds_scales_with_the_stage_dt():
-    """A flat step count silently rescales with dt; seconds must not."""
+    """A flat step count silently rescales with dt; seconds must not.
+
+    The second dt is deliberately one that does NOT divide the margin evenly
+    (2.0 / 0.003 = 666.7): the conversion ceils, and an even divisor would let
+    a round() regression through unnoticed.
+    """
     b = _backend()
     f = _fspec(bwd_tail_margin_s=2.0)
     for dt, want in ((0.001, 32000 + 2000), (0.003, 32000 + 667)):
