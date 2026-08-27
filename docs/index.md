@@ -45,6 +45,12 @@ hide:
 <p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
 <div class="sweep-new__grid">
 
+  <a class="sweep-new__card" href="solver/user-guide/equations/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge sweep-new__badge--dev">dev</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Elastic TTI in 3-D</div>
+    <div class="sweep-new__desc">A tilted symmetry axis in three dimensions, where the azimuth finally matters — plus the Oh-2020 displacement form on <code>(v<sub>h</sub>, &eta;)</code>, held stable by a multiaxial PML. CUDA gradients for every parameter.</div>
+  </a>
+
   <a class="sweep-new__card" href="solver/user-guide/parallel/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">Domain decomposition</div>
@@ -73,12 +79,6 @@ hide:
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">Per-edge free surface</div>
     <div class="sweep-new__desc">Turn the free surface on for any subset of faces, elastic included — with fp16 boundary storage and a body-force <code>rho</code> gradient fix.</div>
-  </a>
-
-  <a class="sweep-new__card" href="getting-started/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.1.0</span><span class="sweep-new__date">2026-07</span></div>
-    <div class="sweep-new__name">On PyPI, CUDA included</div>
-    <div class="sweep-new__desc">A single <code>py3-none</code> wheel: the CUDA backend JIT-compiles against <em>your</em> PyTorch on first use, so there's no version matrix to match.</div>
   </a>
 
 </div>
