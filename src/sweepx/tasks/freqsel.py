@@ -178,6 +178,42 @@ def _comb_kernel(comb: FrequencyComb, nt: int,
     return np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
 
 
+def _fold_cells(D, trc):
+    """Average the traces that landed in one receiver cell.
+
+    Real acquisition puts several traces in a cell whenever the shot interval
+    is finer than the grid — a 12.5 m shot line on a 50 m grid gives four.
+    :class:`FreqSelTargets` requires the cells of a node to be distinct (it
+    scatters them into a per-node column map), so a shard that keeps the
+    duplicates is rejected at load time, after the extraction has been paid
+    for.  Averaging is what the cell means: one coefficient per (node, cell),
+    with ``fold`` recording how many traces are behind it.
+
+    The mean, not the sum: fold varies across cells, and a sum would scale
+    each cell by its own trace count — a purely geometric amplitude that the
+    inversion would read as structure.  Summation runs in the array's own
+    complex64 and the divisor is float64 with ``out=``, which keeps the ufunc
+    from promoting the whole table to complex128 (a full extra copy at double
+    width).
+
+    Returns ``(D_folded, cells_unique, fold)``; when every cell is already
+    distinct this is the identity plus a ``fold`` of ones.
+    """
+    if len(trc) < 2:
+        return D, trc, np.ones(len(trc), np.int64)
+    order = np.lexsort(trc.T[::-1])
+    ts = trc[order]
+    new = np.ones(len(ts), bool)
+    new[1:] = (ts[1:] != ts[:-1]).any(1)
+    bnd = np.flatnonzero(new)
+    if len(bnd) == len(ts):                    # already distinct
+        return D, trc, np.ones(len(trc), np.int64)
+    fold = np.diff(np.append(bnd, len(ts)))
+    Ds = np.add.reduceat(D[order], bnd, axis=0)
+    np.divide(Ds, fold[:, None].astype(np.float64), out=Ds, casting="unsafe")
+    return Ds, ts[bnd], fold
+
+
 def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                           *, dt_record: float | None = None,
                           verbose: bool = False) -> str:
@@ -200,7 +236,7 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
     coefficients are kept, so a survey whose gathers do not fit in host RAM
     still extracts in one pass.
     """
-    D_parts, node_rows, trace_parts, ptr = [], [], [], [0]
+    D_parts, node_rows, trace_parts, fold_parts, ptr = [], [], [], [], [0]
     ndim = nt = None
     E = None
     for i, (record, node_xyz, trace_xyz) in enumerate(gathers):
@@ -227,14 +263,21 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                 "every gather must share one time axis")
         elif len(node) != ndim or trc.shape[1] != ndim:
             raise ValueError(f"gather {i}: inconsistent ndim")
-        D_parts.append((arr.T @ E.T).astype(np.complex64))
+        Dg, trc, fold_g = _fold_cells((arr.T @ E.T).astype(np.complex64), trc)
+        D_parts.append(Dg)
         node_rows.append(node)
         trace_parts.append(trc)
-        ptr.append(ptr[-1] + arr.shape[1])
+        fold_parts.append(fold_g)
+        ptr.append(ptr[-1] + len(trc))
         if verbose and (i + 1) % 25 == 0:
             print(f"[freqsel] extracted {i + 1} gathers", flush=True)
     if not D_parts:
         raise ValueError("gathers yielded nothing")
+    _fold = np.concatenate(fold_parts)
+    if (_fold > 1).any():
+        print(f"[freqsel] folded {int(_fold.sum())} traces onto {len(_fold)} "
+              f"cells (max {int(_fold.max())}, mean {_fold.mean():.3f})",
+              flush=True)
 
     n_nodes = len(D_parts)
     np.savez(out_path,
@@ -242,7 +285,7 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
              node_grid_xyz=np.asarray(node_rows, np.int32),
              node_ptr=np.asarray(ptr, np.int64),
              D=np.concatenate(D_parts, 0),
-             fold=np.ones(ptr[-1], np.int32),
+             fold=_fold.astype(np.int32),
              trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
              freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
              meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
