@@ -778,7 +778,8 @@ def _extract_coeff_from_plan(args) -> int:
 
     from sweep_io.seismic_plan import PlanReader, SeismicPlan
 
-    from sweep_tasks.freqsel import FrequencyComb, extract_shard_gathers
+    from sweep_tasks.freqsel import (FrequencyComb, extract_shard_gathers,
+                                    offset_top_mute)
 
     if args.dh_m is None:
         print("error: --plan needs --dh-m to quantize metres onto grid cells")
@@ -842,6 +843,13 @@ def _extract_coeff_from_plan(args) -> int:
               f"the FWI will need n_pools >= "
               f"{int(np.ceil(len(keep) / comb.n_bins))}, or a longer n_p")
 
+    if args.mute_v is not None:
+        print(f"[extract-coeff] top mute ON: t = {args.mute_t0} + x/{args.mute_v}"
+              f" + {args.mute_a}*sqrt(x) - {args.mute_guard} s, taper "
+              f"{args.mute_taper} s")
+    else:
+        print("[extract-coeff] no mute (pass --mute-v to switch it on)")
+
     reader = PlanReader(plan)
     grp = np.asarray(plan.group_xyz)               # nodes = the plan's groups
 
@@ -849,17 +857,41 @@ def _extract_coeff_from_plan(args) -> int:
         c = np.rint((np.asarray(a, np.float64)[..., [0, 2]] - origin[[0, 2]]) / dh)
         return c.astype(np.int64)
 
+    src_xyz = np.asarray(plan.row_source_xyz)
+    rcv_xyz = np.asarray(plan.row_receiver_xyz)
+    t_ax = np.arange(plan.samples_per_trace, dtype=np.float64) * dt_rec
+
+    def _apply_mute(rec, sl):
+        # Source-receiver offset per trace: the curve is shaped by the offset,
+        # not by the node, which is the point — the arrivals it removes are the
+        # ones whose moveout says they cannot be what the band is being asked
+        # to explain.  Columns 0 and 2 are the horizontal pair (1 is depth),
+        # matching _cells above.
+        off = np.hypot(src_xyz[sl, 0] - rcv_xyz[sl, 0],
+                       src_xyz[sl, 2] - rcv_xyz[sl, 2])
+        return offset_top_mute(rec, off, t_ax, v=args.mute_v, t0=args.mute_t0,
+                               a=args.mute_a, guard=args.mute_guard,
+                               taper=args.mute_taper)
+
     def _gathers():
         for n, g in enumerate(keep):
             sl = plan.group_slice(int(g))
             rec = np.asarray(reader.read_group(int(g)), np.float64)   # (n_tr, nt)
+            if args.mute_v is not None:
+                rec = _apply_mute(rec, sl)
             yield rec.T, _cells(grp[int(g)]), _cells(trace_xyz[sl])
             if args.verbose and (n + 1) % 25 == 0:
                 print(f"[extract-coeff] {n + 1}/{len(keep)} nodes", flush=True)
 
     out = Path(args.out).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    extract_shard_gathers(str(out), _gathers(), comb, dt_record=dt_rec)
+    _meta = {}
+    if args.mute_v is not None:
+        _meta["mute"] = dict(t0=args.mute_t0, v=args.mute_v, a=args.mute_a,
+                             guard=args.mute_guard, taper=args.mute_taper,
+                             form="t0 + x/v + a*sqrt(x) - guard")
+    extract_shard_gathers(str(out), _gathers(), comb, dt_record=dt_rec,
+                          meta_extra=_meta or None)
     print(f"[extract-coeff] wrote {out}")
     print("[extract-coeff] point the FWI YAML at it with "
           "source_encoding.frequency.coeff_shards")
@@ -1391,6 +1423,28 @@ def main(argv: list[str] | None = None) -> int:
                          "solver's.")
     ec.add_argument("--verbose", action="store_true",
                     help="Print per-chunk extraction progress.")
+    ec.add_argument("--mute-v", dest="mute_v", type=float, default=None,
+                    metavar="M_PER_S",
+                    help="Apparent velocity of an offset-dependent TOP mute, "
+                         "applied to the gathers BEFORE the DTFT. Giving this "
+                         "switches the mute on; the other --mute-* flags shape "
+                         "it. A shard is a coefficient over the WHOLE record, "
+                         "so a time window cannot be applied to it afterwards "
+                         "— it has to happen here or not at all.")
+    ec.add_argument("--mute-t0", dest="mute_t0", type=float, default=0.0,
+                    metavar="S", help="Intercept of the mute curve "
+                                      "t = t0 + x/v + a*sqrt(x) - guard.")
+    ec.add_argument("--mute-a", dest="mute_a", type=float, default=0.0,
+                    metavar="S_PER_SQRT_M",
+                    help="sqrt(offset) term of the mute curve, for the "
+                         "curvature a straight apparent velocity misses.")
+    ec.add_argument("--mute-guard", dest="mute_guard", type=float, default=0.0,
+                    metavar="S", help="Shift the curve earlier by this much, "
+                                      "so the taper starts before the event.")
+    ec.add_argument("--mute-taper", dest="mute_taper", type=float, default=0.0,
+                    metavar="S",
+                    help="Raised-cosine ramp length. 0 makes the mute a step, "
+                         "which rings across every comb bin.")
 
     # `sweep-tasks build-plan` — SEGYIndex npz + filters → SeismicPlan npz.
     bp = subparsers.add_parser(

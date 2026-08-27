@@ -178,6 +178,45 @@ def _comb_kernel(comb: FrequencyComb, nt: int,
     return np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
 
 
+def offset_top_mute(rec, offsets, t_axis, *, v, t0=0.0, a=0.0,
+                    guard=0.0, taper=0.0):
+    """Zero each trace above its apparent-velocity ceiling, in place.
+
+    ``t_cut = t0 + x/v + a*sqrt(x) - guard`` per trace; the weight is 0 before
+    the cut, a raised cosine over ``taper`` seconds, then 1.  This has to run
+    on the gathers, BEFORE the DTFT: an extraction shard is one coefficient
+    per (node, cell, bin) over the whole record, so every bin already carries
+    whatever else was in the gather and no time window can be applied to the
+    shard afterwards.
+
+    ``taper=0`` gives a step, which is almost never what you want — a
+    discontinuity in time is broadband in frequency, so it leaks into every
+    comb bin, including the ones the step was meant to clean.
+
+    ``rec`` is ``(n_traces, n_samples)`` and is modified in place.
+    """
+    rec = np.asarray(rec)
+    off = np.asarray(offsets, np.float64)
+    if rec.shape[0] != off.shape[0]:
+        raise ValueError(f"offsets ({off.shape[0]}) must match the "
+                         f"{rec.shape[0]} traces in rec")
+    if rec.shape[1] != len(t_axis):
+        raise ValueError(f"t_axis ({len(t_axis)}) must match the "
+                         f"{rec.shape[1]} samples in rec")
+    if v <= 0:
+        raise ValueError(f"mute velocity must be positive; got {v}")
+    if taper < 0:
+        raise ValueError(f"mute taper must not be negative; got {taper}")
+    tcut = t0 + off / v + a * np.sqrt(np.maximum(off, 0.0)) - guard
+    t = np.asarray(t_axis, np.float64)[None, :]
+    if taper > 0:
+        ramp = np.clip((t - tcut[:, None]) / taper, 0.0, 1.0)
+        rec *= 0.5 - 0.5 * np.cos(np.pi * ramp)
+    else:
+        rec *= (t >= tcut[:, None])
+    return rec
+
+
 def _fold_cells(D, trc):
     """Average the traces that landed in one receiver cell.
 
@@ -216,6 +255,7 @@ def _fold_cells(D, trc):
 
 def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                           *, dt_record: float | None = None,
+                          meta_extra: dict | None = None,
                           verbose: bool = False) -> str:
     """Ragged sibling of :func:`extract_shard` — one gather at a time.
 
@@ -291,7 +331,8 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
              meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
                                   synthetic=False, nt_record=int(nt),
                                   dt_record=float(comb.dt if dt_record is None
-                                                  else dt_record))))
+                                                  else dt_record),
+                                  **(meta_extra or {}))))
     return out_path
 
 
