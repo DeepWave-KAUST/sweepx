@@ -59,14 +59,24 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           # Published packages (import as `sweep` / `sweep_agent`):
           pip install sweep-solver sweep-agent
-          # A companion's upper pin can silently hold sweep-solver back — that
-          # is how v0.2.0 shipped with the umbrella still resolving 0.1.0, and
-          # the only symptom was mkdocstrings failing to collect a class that
+          # mkdocs.yml imports the Solver docs from sweep@dev, so an API page can
+          # document a class that is not in the released wheel yet — ElasticTTI2nd
+          # and ElasticTTISG3D did exactly that and aborted the build. Render the
+          # API against the same ref the docs come from. Installed AFTER
+          # sweep-agent so its resolver cannot pull the released wheel back over
+          # it, --force-reinstall because dev carries the same version string as
+          # PyPI, --no-deps because dev adds no runtime dependency of its own.
+          pip install --force-reinstall --no-deps \
+            "sweep-solver @ git+https://github.com/DeepWave-KAUST/sweep@dev"
+          # A companion's upper pin can also silently hold sweep-solver back —
+          # that is how v0.2.0 shipped with the umbrella still resolving 0.1.0,
+          # and the only symptom was mkdocstrings failing to collect a class that
           # the API page documents. Say so here instead.
           python - <<'PY'
           import importlib, sys
           from importlib.metadata import version
           print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"))
+          print("sweep imported from", importlib.import_module("sweep").__file__)
           for mod in ("sweep", "sweep.parallel", "sweep_agent"):
               try:
                   importlib.import_module(mod)
