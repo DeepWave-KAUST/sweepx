@@ -1412,6 +1412,13 @@ class StageSpec(_Forbid):
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
     - ``bandpass``: filter obs before this stage runs (uses sweep-preproc)
+    - ``boundary``: per-stage override of
+      ``backend.cuda_options.memory.boundary``. ONLY the fields you set are
+      overridden; everything else inherits the top-level block, so a stage can
+      move the strips to a different home without restating dtype / interval /
+      ring buffers. The band cascade needs exactly this: the coarse bands'
+      strips fit on the card (fastest home, and no host staging at all) while
+      the fine bands do not and must be staged on the host.
     - ``frequency``: per-stage frequency-selection sub-spec (comb + coeff
       shards). Only used on the ``source_encoding.mode='frequency_selection'``
       path; overrides the top-level ``source_encoding.frequency`` for this
@@ -1433,6 +1440,7 @@ class StageSpec(_Forbid):
     batch_size: int | None = Field(default=None, ge=1)
     bandpass: StageBandpass | None = None
     frequency: "FreqSelectionSpec | None" = None
+    boundary: BoundaryOptionsModel | None = None
 
 
 class OptimizerAdam(_Forbid):
