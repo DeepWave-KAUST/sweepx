@@ -890,6 +890,25 @@ class SteadyGCNLoss:
         return record[0, :, :, 0].transpose(0, 1)          # (nrec, nt)
 
     def _probes(self, bins, start):
+        if os.environ.get("SWEEP_FREQSEL_GPU_PROBES") == "1":
+            # Same table, built on the card in fp64 instead of as a large
+            # host complex128 array that is then split and copied up.  Last-ulp
+            # different (libm vs CUDA transcendentals), not bit-exact.
+            import math
+            f = torch.as_tensor(np.asarray(self.comb.freqs[bins], np.float64),
+                                dtype=torch.float64, device=self.device)
+            m = torch.arange(self.comb.n_p, dtype=torch.float64,
+                             device=self.device)
+            ph = (-2.0 * math.pi) * f[:, None] * (
+                start * self.comb.dt + m[None] * self.comb.dt)
+            s = 2.0 / self.comb.n_p
+            # ph already carries the minus sign of exp(-2j*pi*f*tau), so
+            # sin(ph) IS -sin(2*pi*f*tau) -- multiplying by -s here would flip
+            # the imaginary probe and silently invert ui in the loss.  The
+            # microbenchmark caught exactly that: real matched to 0.0 while
+            # imag was off by the full 2s range.
+            return (torch.cos(ph).mul_(s).float(),
+                    torch.sin(ph).mul_(s).float())
         m = np.arange(self.comb.n_p, dtype=np.float64)
         ph = np.exp(-2j * np.pi * self.comb.freqs[bins][:, None]
                     * (start * self.comb.dt + m[None] * self.comb.dt)) \
@@ -903,6 +922,15 @@ class SteadyGCNLoss:
         ywin = y[:, start:start + self.comb.n_p]
         er, ei = self._probes(bins, start)
         b = self.targets.bound
+        if os.environ.get("SWEEP_FREQSEL_BATCHED_LOSS") == "1":
+            if b.get("dup_free", False):
+                return self._call_batched(ywin, pool, bins, er, ei, b)
+            if not getattr(self, "_dup_warned", False):
+                print("[freqsel] batched loss requested but some node has "
+                      "several traces on one receiver cell (dup_free=False); a "
+                      "dense scatter would drop the repeats, so falling back to "
+                      "the pool loop.", flush=True)
+                self._dup_warned = True
         D = b["D"]
         part = torch.zeros(len(pool), 4, device=self.device)
         for j, s in enumerate(pool):
@@ -934,6 +962,49 @@ class SteadyGCNLoss:
             part[j, 1] = (ui * dr - ur * di).sum()
             part[j, 2] = (ur ** 2 + ui ** 2).sum()
             part[j, 3] = (dr ** 2 + di ** 2).sum()
+        tot = _SumAcrossRanks.apply(part) if self.distributed else part
+        num = torch.sqrt(tot[:, 0] ** 2 + tot[:, 1] ** 2 + self.eps)
+        den = torch.sqrt(tot[:, 2] + self.eps) * torch.sqrt(tot[:, 3] + self.eps)
+        return (1.0 - num / den).sum(), len(pool)
+
+    def _call_batched(self, ywin, pool, bins, er, ei, b):
+        """The pool loop as ONE GEMM.
+
+        The loop form reads the whole window once per node -- hundreds of nodes,
+        most of the owned rows each -- and every read is a bandwidth-bound GEMV.  The
+        projection is the same for all of them, so do it once:
+        ``P = ywin @ [er; ei]``, then each node's four partials are column
+        reductions against its D scattered into a dense (nrec, npool) column.
+        Same arithmetic, same FLOPs, one pass over the window; NOT bit-exact,
+        because a GEMM and a GEMV reduce in different orders.
+        """
+        nrec, npool = ywin.shape[0], len(pool)
+        dev = self.device
+        D = b["D"]
+        on_gpu = b.get("D_on_gpu", True)
+        with torch.no_grad():
+            Dr = torch.zeros(nrec, npool, device=dev)
+            Di = torch.zeros(nrec, npool, device=dev)
+            Mk = torch.zeros(nrec, npool, device=dev)
+            for j, s in enumerate(pool):
+                gi = b["groups"][s]
+                if len(gi) == 0:
+                    continue
+                ds = b["dsel"][s]
+                c = _dcol(b, s, bins[j])
+                dr, di = D[ds, c, 0], D[ds, c, 1]
+                if not on_gpu:
+                    dr, di = dr.to(dev), di.to(dev)
+                Dr[gi, j] = dr.float()
+                Di[gi, j] = di.float()
+                Mk[gi, j] = 1.0
+        E = torch.cat([er, ei], 0).t().contiguous()          # (n_p, 2*npool)
+        P = ywin @ E
+        Pr, Pi = P[:, :npool], P[:, npool:]
+        part = torch.stack([(Pr * Dr + Pi * Di).sum(0),
+                            (Pi * Dr - Pr * Di).sum(0),
+                            ((Pr * Pr + Pi * Pi) * Mk).sum(0),
+                            (Dr * Dr + Di * Di).sum(0)], 1)
         tot = _SumAcrossRanks.apply(part) if self.distributed else part
         num = torch.sqrt(tot[:, 0] ** 2 + tot[:, 1] ** 2 + self.eps)
         den = torch.sqrt(tot[:, 2] + self.eps) * torch.sqrt(tot[:, 3] + self.eps)
