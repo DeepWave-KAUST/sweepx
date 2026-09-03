@@ -840,6 +840,12 @@ class _SumAcrossRanks(torch.autograd.Function):
         return g
 
 
+# Peak bytes for one gathered window chunk in two_window_check.  512 MB is
+# small next to the wavefield yet large enough that the chunk loop costs
+# nothing measurable.
+_TWC_CHUNK_BYTES = 512 * 1024 * 1024
+
+
 def _dcol(b, s, bin_k):
     """Local column of node ``s``'s comb bin ``bin_k`` in the bound table.
 
@@ -1020,14 +1026,33 @@ class SteadyGCNLoss:
         b = self.targets.bound
         us = {}
         diffs = []
+        # Row budget for the gathered window.  ``y[gi]`` used to copy the whole
+        # nt-long record for every owned receiver before slicing it down to
+        # n_p -- on a full field survey that throws away as much as it
+        # keeps, and it exhausted an 80 GB card on a QC statistic.
+        # Slice first (a view), gather in row chunks, and the peak is one chunk.
+        # Not bit-identical once it chunks: cuBLAS picks its kernel from the
+        # matrix shape, so a large GEMM and a small one reduce in
+        # different orders.  Measured 5.7e-07 relative on the returned median --
+        # a QC number that is printed and carried in the summary, never fed to
+        # the gradient, against a target of ~1e-2.
+        rows = max(1, _TWC_CHUNK_BYTES // max(1, self.comb.n_p * 4))
         for tag, st in (("late", n_ss + slack), ("early", n_ss)):
             er, ei = self._probes(bins, st)
+            ywin = y[:, st:st + self.comb.n_p]
             for j, s in enumerate(pool):
                 gi = b["groups"][s]
                 if len(gi) == 0:
                     continue
-                ys = y[gi][:, st:st + self.comb.n_p]
-                u = torch.complex(ys @ er[j], ys @ ei[j])
+                if len(gi) <= rows:
+                    ys = ywin[gi]
+                    u = torch.complex(ys @ er[j], ys @ ei[j])
+                else:
+                    chunks = []
+                    for k in range(0, len(gi), rows):
+                        ys = ywin[gi[k:k + rows]]
+                        chunks.append(torch.complex(ys @ er[j], ys @ ei[j]))
+                    u = torch.cat(chunks)
                 if tag == "late":
                     us[j] = u
                 else:
