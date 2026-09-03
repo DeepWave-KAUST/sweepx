@@ -208,6 +208,49 @@ def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
 
 
 class FreqselRunnerMixin:
+    @staticmethod
+    def _restore_optimizer_state(spec, optimizer, rank):
+        """Restore Adam's first/second moments.
+
+        Restoring only the network weights is not equivalent to a continuous
+        run, so a missing file RAISES rather than silently leaving a zero
+        state: a silent fall back reads as "resumed, and the mismatch is
+        something else".
+        """
+        import torch
+        from pathlib import Path
+        rp = getattr(spec, "reparam", None)
+        iof = getattr(rp, "init_optimizer_from", None) if rp is not None else None
+        if not iof:
+            return
+        if str(iof) == "auto":
+            _if = getattr(rp, "init_from", None)
+            if not _if:
+                raise ValueError(
+                    "reparam.init_optimizer_from='auto' needs reparam.init_from "
+                    "set as well -- it is derived from that path")
+            op = Path(str(_if).replace("reparam_net_iter", "optim_iter"))
+            if op == Path(str(_if)):
+                op = Path(str(_if)).with_name("optim.pt")
+        else:
+            op = Path(str(iof))
+        if not op.exists():
+            raise FileNotFoundError(
+                f"reparam.init_optimizer_from -> {op} does not exist. Without "
+                "Adam's moments a resume is not equivalent to a continuous run "
+                "(the first dozen steps take a completely different step "
+                "scale), so this refuses to continue silently. Either provide "
+                "the file or set init_optimizer_from to null.")
+        sd = torch.load(str(op), map_location="cpu", weights_only=False)
+        os_ = sd["optimizer"] if isinstance(sd, dict) and "optimizer" in sd else sd
+        optimizer.load_state_dict(os_)
+        st = os_.get("state", {})
+        step = next((float(v["step"]) for v in st.values() if "step" in v), None)
+        if rank == 0:
+            print(f"[freqsel] init_optimizer_from: Adam state <- {op} "
+                  f"(tensors={len(st)}, step={step}, meta="
+                  f"{sd.get('meta') if isinstance(sd, dict) else None})", flush=True)
+
     def _freqsel_run_stage(
         self, spec, stage, si, fspec, dh, dt, dev,
         dd_on, dd_py, dd_px, rank, world, task_dir,
@@ -486,6 +529,7 @@ class FreqselRunnerMixin:
                         dist.broadcast(p.data, src=0)
                 optimizer = torch.optim.Adam(net.parameters(),
                                              lr=float(spec.reparam.lr))
+                self._restore_optimizer_state(spec, optimizer, rank)
             else:
                 vp = base_t.clone().requires_grad_(True)
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
@@ -903,6 +947,13 @@ class FreqselRunnerMixin:
                                     or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
                     torch.save(net.state_dict(),
                                task_dir / f"reparam_net_iter{gi + 1:04d}.pt")
+                    # Save Adam's moments with the weights, or resuming from
+                    # this snapshot is not equivalent to a continuous run.
+                    if bool(getattr(spec.reparam, "save_optimizer", True)):
+                        torch.save({"optimizer": optimizer.state_dict(),
+                                    "meta": {"global_iter": gi + 1, "stage": si,
+                                             "lr": float(spec.reparam.lr)}},
+                                   task_dir / f"optim_iter{gi + 1:04d}.pt")
                 np.savez(task_dir / "curves.npz",
                          losses=np.array(losses), iter_s=np.array(times),
                          peak_gb=np.array(peaks))
@@ -1073,6 +1124,12 @@ class FreqselRunnerMixin:
                 net_path = task_dir / "reparam_net.pt"
                 torch.save(net.state_dict(), net_path)
                 artifacts["reparam_net"] = str(net_path)
+                if bool(getattr(spec.reparam, "save_optimizer", True)):
+                    _op = task_dir / "optim.pt"
+                    torch.save({"optimizer": optimizer.state_dict(),
+                                "meta": {"global_iter": None, "stage": None,
+                                         "lr": float(spec.reparam.lr)}}, _op)
+                    artifacts["optimizer_state"] = str(_op)
                 print(f"[freqsel] saved reparam net -> {net_path}", flush=True)
             print(f"[freqsel] DONE ({len(stages)} stage(s)) "
                   f"mean(1-GCN) {losses[0]:.4f} -> {losses[-1]:.4f}",
