@@ -135,6 +135,47 @@ def backend_with_boundary_storage(backend, storage: str):
     return out
 
 
+def backend_with_stage_boundary(backend, ov):
+    """Copy of ``backend`` with a stage's ``boundary:`` block merged in.
+
+    Only the fields the stage EXPLICITLY set are copied (``model_fields_set``),
+    so an override of ``storage`` alone keeps the global dtype / interval /
+    ring buffers instead of silently reverting them to schema defaults -- the
+    same trap ``stage_freq_override_warnings`` exists to flag for ``frequency``.
+    ``ov`` unset -> ``backend`` unchanged, bit-identical behaviour.
+    """
+    if ov is None:
+        return backend
+    fields = getattr(ov, "model_fields_set", None) or set()
+    if not fields:
+        return backend
+    out = backend.model_copy(deep=True)
+    mem = getattr(getattr(out, "cuda_options", None), "memory", None)
+    if mem is None or mem.boundary is None:
+        raise ValueError(
+            "stage 'boundary:' override needs cuda_options.memory.boundary "
+            "(set memory.strategy='boundary')")
+    for k in sorted(fields):
+        setattr(mem.boundary, k, getattr(ov, k))
+    # A stage that flips storage to the card inherits the global block's
+    # staging knobs, and those are cpu/disk-only -- the core rejects the pair
+    # rather than ignoring them. Say which knobs and how to clear them here,
+    # where the YAML vocabulary still exists, instead of letting it surface as
+    # a bare ValueError from deep inside BoundaryOptions.
+    if mem.boundary.storage == "gpu":
+        stale = [k for k in ("transfer_interval", "pinned_memory",
+                             "ring_buffers", "disk_dir")
+                 if getattr(mem.boundary, k, None) is not None]
+        if stale:
+            raise ValueError(
+                f"stage boundary override sets storage='gpu' but inherits "
+                f"{stale} from the global block; those are only valid for "
+                f"storage='cpu'/'disk'. Set them to null in the SAME stage "
+                f"'boundary:' block (an override only replaces the fields it "
+                f"names).")
+    return out
+
+
 def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     """Warn when a stage's ``frequency:`` block silently drops a global setting.
 
@@ -269,13 +310,17 @@ class FreqselRunnerMixin:
         def _make_solver(storage=None):
             """Build (and DD-wrap) the stage solver, optionally forcing storage.
 
-            SWEEP_FREQSEL_BOUNDARY_STORAGE overrides the config, which is how
-            an operator re-runs a stage that ran out of card: the core fixes
-            the boundary's home at construction, so this is the only door.
+            Precedence: the explicit argument (the out-of-memory fallback)
+            beats SWEEP_FREQSEL_BOUNDARY_STORAGE (operator override of a stage
+            that ran out of card) beats the stage's own ``boundary:`` block
+            beats the top-level backend. The core fixes the boundary's home at
+            construction, so this is the only door.
             """
+            be = backend_with_stage_boundary(stage_backend,
+                                             getattr(stage, "boundary", None))
             storage = storage or os.environ.get("SWEEP_FREQSEL_BOUNDARY_STORAGE") or None
-            be = (stage_backend if storage is None
-                  else backend_with_boundary_storage(stage_backend, storage))
+            if storage is not None:
+                be = backend_with_boundary_storage(be, storage)
             sv = _build_solver(spec.physics, be, _solver_shape, float(dh),
                                float(dt), nt, dev)
             if dd_on:
@@ -578,8 +623,18 @@ class FreqselRunnerMixin:
                 print(f"[freqsel][own-audit] n_union={targets.n_union} "
                       f"duplicated={_dup} dropped={_drop} "
                       f"(sum_owned={int(_cnt.sum())})", flush=True)
+        # Column pruning needs the draw schedule BEFORE the table is built.
+        # sched.plan() is side-effect free (RNG snapshot/restore), so asking
+        # for it here does not perturb the sequence draw() serves the loop.
+        _bin_use = None
+        if os.environ.get("SWEEP_FREQSEL_D_PRUNE") == "1":
+            _plan = sched.plan(int(stage.epochs))
+            _bin_use = np.zeros((targets.n_nodes, comb.n_bins), bool)
+            for _p, _b in _plan:
+                _bin_use[np.asarray(_p, np.int64), np.asarray(_b, np.int64)] = True
         targets.bind_ownership(
-            np.arange(targets.n_union) if own is None else own, dev)
+            np.arange(targets.n_union) if own is None else own, dev,
+            bin_use=_bin_use)
         chk = loss_fn.two_window_check(
             rec0.detach(), pool0, bins0, int(fspec.steady_samples),
             int(fspec.slack_samples))
