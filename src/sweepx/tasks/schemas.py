@@ -1272,6 +1272,14 @@ class ReparamSpec(_Forbid):
     # freqsel and plan-streaming paths. The env var SWEEP_SAVE_REPARAM_NET=1 forces it
     # on regardless (backward compat). Off by default (large file).
     save_net: bool = False
+    # Adam's moments are dumped alongside the weights. A resume that restores
+    # only the network is NOT equivalent to a continuous run -- the first dozen
+    # steps take a completely different step scale.
+    save_optimizer: bool = True
+    # Restore the optimizer state: a path, or "auto" to derive it from
+    # ``init_from`` (``reparam_net_iter`` -> ``optim_iter``, else ``optim.pt``
+    # beside it). A missing file is an error, never a silent zero state.
+    init_optimizer_from: str | None = None
     hidden_features: int = Field(ge=1, default=64)
     hidden_layers: int = Field(ge=1, default=3)
     first_omega0: float = Field(gt=0, default=30.0)

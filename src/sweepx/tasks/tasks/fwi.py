@@ -459,6 +459,42 @@ class FWIRunnerMixin:
             optimizer = _build_reparam_optimizer(
                 spec.optimizer, reparam_net.parameters(), float(spec.reparam.lr),
             )
+            # Restoring only the network weights is not equivalent to a
+            # continuous run, so a missing state file raises rather than
+            # silently leaving a zero state -- that reads as "resumed, and the
+            # mismatch is something else".
+            _iof = getattr(spec.reparam, "init_optimizer_from", None)
+            if _iof:
+                from pathlib import Path as _P
+                if str(_iof) == "auto":
+                    _if = getattr(spec.reparam, "init_from", None)
+                    if not _if:
+                        raise ValueError(
+                            "reparam.init_optimizer_from='auto' needs "
+                            "reparam.init_from set as well -- it is derived "
+                            "from that path")
+                    _op = _P(str(_if).replace("reparam_net_iter", "optim_iter"))
+                    if _op == _P(str(_if)):
+                        _op = _P(str(_if)).with_name("optim.pt")
+                else:
+                    _op = _P(str(_iof))
+                if not _op.exists():
+                    raise FileNotFoundError(
+                        f"reparam.init_optimizer_from -> {_op} does not exist. "
+                        "Without Adam's moments a resume is not equivalent to a "
+                        "continuous run (the first dozen steps take a completely "
+                        "different step scale), so this refuses to continue "
+                        "silently. Either provide the file or set "
+                        "init_optimizer_from to null.")
+                _sd = torch.load(str(_op), map_location="cpu", weights_only=False)
+                _os = (_sd["optimizer"]
+                       if isinstance(_sd, dict) and "optimizer" in _sd else _sd)
+                optimizer.load_state_dict(_os)
+                _st = _os.get("state", {})
+                _step = next((float(v["step"]) for v in _st.values()
+                              if "step" in v), None)
+                print(f"[reparam] init_optimizer_from: Adam state <- {_op} "
+                      f"(tensors={len(_st)}, step={_step})", flush=True)
         else:
             optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
         scheduler = _build_scheduler(spec.scheduler, optimizer, total_epochs)
