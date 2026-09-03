@@ -585,8 +585,9 @@ class FreqSelTargets:
         desynchronise the cross-rank partial sums.  Raw field DTFT
         coefficients run past the half-float range (observed max|D| ~ 1.2e5 >
         65504 -> inf -> nan loss), so the scale has to exist before the cast.
-        Rank 0 makes that full pass once and broadcasts the result; the others
-        skip straight to their own rows.
+        Every rank scans the node blocks assigned to it and the maxima are
+        reduced with MAX, so each node is scanned exactly once and the read is
+        spread over ``world_size`` ranks.
         """
         _ws, _rk, _dist = 1, 0, None
         try:
@@ -606,21 +607,35 @@ class FreqSelTargets:
                     ptr = p["node_ptr"]
                     if Dm is None:                       # compressed fallback
                         Dm = p["D"]
-                sc = np.ones(ni, np.float32)
-                if _rk == 0:
-                    for s in range(len(ptr) - 1):
-                        a = float(np.abs(self._cols(
-                            Dm[ptr[s]:ptr[s + 1]])).max(initial=0.0))
-                        sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
+                # Each node is scanned by exactly one rank and the maxima are
+                # reduced with MAX, which reproduces the old rank-0 full pass
+                # BIT FOR BIT while the read is spread over the ranks.
+                #
+                # The old shape was an operational problem, not just slow: rank 0
+                # read the WHOLE shard (hundreds of GB at large comb sizes) while
+                # every other rank sat in the broadcast. NCCL spin-waits occupy
+                # SMs, so the idle ranks register as ~85% busy and the one rank
+                # actually working registers as idle -- a per-GPU utilisation
+                # rule then fires on GPU 0 alone (observed: 73.3% against
+                # 84.8/84.8/83.5). It also cut the page-cache burst to 1/N.
+                #
+                # 0 is the identity for MAX here: blocks this rank did not scan
+                # stay 0 and lose the reduction, and the 0 -> 1.0 substitution
+                # afterwards is exactly the old ``a if a > 0 else 1.0``.
+                sc = np.zeros(ni, np.float32)
+                for s in range(_rk, len(ptr) - 1, _ws):
+                    sc[ptr[s]:ptr[s + 1]] = np.abs(self._cols(
+                        Dm[ptr[s]:ptr[s + 1]])).max(initial=0.0)
                 if _ws > 1:
                     import torch as _t
                     # NCCL has no CPU backend, so the scale has to make the
-                    # round trip through the device to be broadcast at all.
+                    # round trip through the device to be reduced at all.
                     _dev = (_t.device("cuda", _t.cuda.current_device())
                             if _t.cuda.is_available() else _t.device("cpu"))
                     _b = _t.from_numpy(sc).to(_dev)
-                    _dist.broadcast(_b, src=0)
+                    _dist.all_reduce(_b, op=_dist.ReduceOp.MAX)
                     sc = _b.cpu().numpy()
+                sc = np.where(sc > 0, sc, np.float32(1.0)).astype(np.float32)
                 rows = np.nonzero(m)[0]
                 rs = sc[rows][:, None]
                 # chunked so the gather never holds more than a slice
