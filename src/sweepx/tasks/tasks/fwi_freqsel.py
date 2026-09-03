@@ -623,8 +623,18 @@ class FreqselRunnerMixin:
                 print(f"[freqsel][own-audit] n_union={targets.n_union} "
                       f"duplicated={_dup} dropped={_drop} "
                       f"(sum_owned={int(_cnt.sum())})", flush=True)
+        # Column pruning needs the draw schedule BEFORE the table is built.
+        # sched.plan() is side-effect free (RNG snapshot/restore), so asking
+        # for it here does not perturb the sequence draw() serves the loop.
+        _bin_use = None
+        if os.environ.get("SWEEP_FREQSEL_D_PRUNE") == "1":
+            _plan = sched.plan(int(stage.epochs))
+            _bin_use = np.zeros((targets.n_nodes, comb.n_bins), bool)
+            for _p, _b in _plan:
+                _bin_use[np.asarray(_p, np.int64), np.asarray(_b, np.int64)] = True
         targets.bind_ownership(
-            np.arange(targets.n_union) if own is None else own, dev)
+            np.arange(targets.n_union) if own is None else own, dev,
+            bin_use=_bin_use)
         chk = loss_fn.two_window_check(
             rec0.detach(), pool0, bins0, int(fspec.steady_samples),
             int(fspec.slack_samples))

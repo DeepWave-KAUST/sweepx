@@ -479,7 +479,7 @@ class FreqSelTargets:
             "receiver cells must be distinct"
         self._bound = None
 
-    def bind_ownership(self, own_cols, device) -> None:
+    def bind_ownership(self, own_cols, device, bin_use=None) -> None:
         own_cols = np.asarray(own_cols, np.int64)
         g2l = np.full(self.n_union, -1, np.int64)
         g2l[own_cols] = np.arange(len(own_cols))
@@ -489,6 +489,14 @@ class FreqSelTargets:
         no = self.node_of_item[items]
         o = np.argsort(no, kind="stable")
         bounds = np.searchsorted(no[o], np.arange(self.n_nodes + 1))
+        # Does any node have TWO items on the same union cell?  The loop form
+        # sums both (two field traces, one modelled sample); a dense scatter
+        # would keep only the last one.  So the batched form is only equivalent
+        # when this is false -- decide it once, here, on the real index arrays,
+        # not by hoping.
+        _key = no.astype(np.int64) * np.int64(self.n_union) + lrow.astype(np.int64)
+        dup_free = bool(len(np.unique(_key)) == len(_key))
+        del _key
         # Stream the shards, keeping only this tile's rows, straight into
         # fp16 (the GCN is scale-invariant per node, so half-float relative
         # precision sits far below the steady-state residual); shards are
@@ -501,8 +509,28 @@ class FreqSelTargets:
         # multiply the shard term by four: on a production cascade the shards
         # run to hundreds of GB each, and a 4-rank run was OOM-killed at its host
         # allocation while the GPUs sat nearly idle.
-        Dh = np.empty((len(items), self._nb, 2), np.float16)
-        self._load_shards(Dh, loc)
+        colmap = None
+        if bin_use is not None:
+            bu = np.asarray(bin_use, bool)
+            if bu.shape != (self.n_nodes, self._nb):
+                raise ValueError(f"bin_use must be ({self.n_nodes}, "
+                                 f"{self._nb}); got {bu.shape}")
+            colmap = np.full((self.n_nodes, self._nb), -1, np.int32)
+            k = int(bu.sum(1).max(initial=0))
+            for s in range(self.n_nodes):
+                cs = np.nonzero(bu[s])[0]
+                colmap[s, cs] = np.arange(len(cs), dtype=np.int32)
+            Dh = np.zeros((len(items), max(k, 1), 2), np.float16)
+            self._load_shards(Dh, loc, colmap=colmap, node_of_row=no)
+            _tot = self.n_items * self._nb * 4 / 2 ** 30
+            _now = self.n_items * max(k, 1) * 4 / 2 ** 30
+            print(f"[freqsel] D column pruning: at most {k}/{self._nb} bins per "
+                  f"node are scheduled (median {int(np.median(bu.sum(1)))}); "
+                  f"table {_tot:.1f} -> {_now:.1f} GiB across ranks; "
+                  f"dup_free={dup_free}", flush=True)
+        else:
+            Dh = np.empty((len(items), self._nb, 2), np.float16)
+            self._load_shards(Dh, loc)
         # The observed table stays on the HOST by default.  The loss reads
         # ``D[dsel[s], bins[j]]`` -- one frequency column of one node's rows --
         # so a whole iteration touches well under 1% of it.  At production comb
@@ -514,6 +542,12 @@ class FreqSelTargets:
         self._bound = {
             "D": Dt_.to(device) if d_on_gpu else Dt_,
             "D_on_gpu": d_on_gpu,
+            # None -> D still has one column per comb bin (bins index it
+            # directly).  Otherwise colmap[s, k] is node s's local column for
+            # comb bin k, and -1 means "the schedule said this pair never
+            # happens" -- a hard error at read time, never a silent zero.
+            "colmap": colmap,
+            "dup_free": dup_free,
             "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
                                     dtype=torch.long, device=device)
                        for s in range(self.n_nodes)],
@@ -577,7 +611,7 @@ class FreqSelTargets:
         return np.memmap(pth, dtype=dtype, mode="r", offset=off, shape=shape,
                          order="F" if order else "C")
 
-    def _load_shards(self, Dh, loc) -> None:
+    def _load_shards(self, Dh, loc, colmap=None, node_of_row=None) -> None:
         """Fill ``Dh`` with this rank's rows, reading only those rows.
 
         The per-node max-abs scale has to come from the node's FULL row block
@@ -640,12 +674,34 @@ class FreqSelTargets:
                 rs = sc[rows][:, None]
                 # chunked so the gather never holds more than a slice
                 CH = 1 << 19
-                for a0 in range(0, len(rows), CH):
-                    r = rows[a0:a0 + CH]
-                    blk = self._cols(np.asarray(Dm[r]))
-                    Dh[off + a0:off + a0 + len(r), :, 0] = blk.real / rs[a0:a0 + len(r)]
-                    Dh[off + a0:off + a0 + len(r), :, 1] = blk.imag / rs[a0:a0 + len(r)]
-                    del blk
+                if colmap is None:
+                    for a0 in range(0, len(rows), CH):
+                        r = rows[a0:a0 + CH]
+                        blk = self._cols(np.asarray(Dm[r]))
+                        Dh[off + a0:off + a0 + len(r), :, 0] = blk.real / rs[a0:a0 + len(r)]
+                        Dh[off + a0:off + a0 + len(r), :, 1] = blk.imag / rs[a0:a0 + len(r)]
+                        del blk
+                else:
+                    # Pruned: the kept columns differ per node, so walk the
+                    # node blocks.  The READ is unchanged (a whole row is one
+                    # page either way); what shrinks is what is kept.
+                    for s_loc in range(len(ptr) - 1):
+                        lo = np.searchsorted(rows, ptr[s_loc])
+                        hi = np.searchsorted(rows, ptr[s_loc + 1])
+                        if hi <= lo:
+                            continue
+                        s_glb = int(node_of_row[off + lo])
+                        cs = np.nonzero(colmap[s_glb] >= 0)[0]
+                        if len(cs) == 0:
+                            continue
+                        cs = cs[np.argsort(colmap[s_glb][cs])]
+                        for a0 in range(lo, hi, CH):
+                            r = rows[a0:min(a0 + CH, hi)]
+                            blk = self._cols(np.asarray(Dm[r]))[:, cs]
+                            d = off + a0
+                            Dh[d:d + len(r), :len(cs), 0] = blk.real / rs[a0:a0 + len(r)]
+                            Dh[d:d + len(r), :len(cs), 1] = blk.imag / rs[a0:a0 + len(r)]
+                            del blk
                 del Dm
                 off += n_own
             oi += ni
@@ -731,6 +787,21 @@ class PoolScheduler:
         self._n_nodes = len(order)
         self._rng = np.random.default_rng(self.seed)
 
+    def plan(self, n_iters: int):
+        """The (pool, bins) the next ``n_iters`` ``draw`` calls WILL return.
+
+        Side-effect free: the RNG state is snapshotted and restored, so calling
+        this changes nothing about the sequence ``draw`` then produces. That is
+        the whole point -- the schedule is a pure function of (seed, call
+        count), so the coefficient table can be pruned to the columns the run
+        will actually read before a single iteration has run.
+        """
+        st = self._rng.bit_generator.state
+        try:
+            return [self.draw(i) for i in range(int(n_iters))]
+        finally:
+            self._rng.bit_generator.state = st
+
     def draw(self, iteration: int):
         if self.random_batch:
             pool = np.sort(self._cand[self._rng.choice(
@@ -767,6 +838,26 @@ class _SumAcrossRanks(torch.autograd.Function):
     @staticmethod
     def backward(ctx, g):
         return g
+
+
+def _dcol(b, s, bin_k):
+    """Local column of node ``s``'s comb bin ``bin_k`` in the bound table.
+
+    Identity when the table is unpruned.  When it is pruned, a -1 means the
+    schedule that sized the table never paired this node with this bin, so
+    something advanced the RNG differently than ``plan()`` saw -- loud, because
+    reading the wrong column would just quietly invert a different dataset.
+    """
+    cm = b.get("colmap")
+    if cm is None:
+        return int(bin_k)
+    c = int(cm[int(s), int(bin_k)])
+    if c < 0:
+        raise RuntimeError(
+            f"pruned D has no column for (node {int(s)}, bin {int(bin_k)}); "
+            "the draw schedule diverged from the one the table was built for. "
+            "Set SWEEP_FREQSEL_D_PRUNE=0 to load the full table.")
+    return c
 
 
 class SteadyGCNLoss:
@@ -822,9 +913,10 @@ class SteadyGCNLoss:
             ys = ywin[gi]
             ur = ys @ er[j]
             ui = ys @ ei[j]
+            _c = _dcol(b, s, bins[j])
             if b.get("D_on_gpu", True):
-                dr = D[ds, bins[j], 0].float()
-                di = D[ds, bins[j], 1].float()
+                dr = D[ds, _c, 0].float()
+                di = D[ds, _c, 1].float()
             else:
                 # Host gather, one small transfer per component (69 KB each
                 # (tens of KB).  The two components are indexed separately so the
@@ -836,8 +928,8 @@ class SteadyGCNLoss:
                 # 1.3e-5 over 99.96% of cells.  That was duplicate source cells
                 # colliding in the atomicAdd source kernel, since fixed; see
                 # PoolScheduler.  What is left sits in the absorbing boundary.
-                dr = D[ds, bins[j], 0].to(self.device).float()
-                di = D[ds, bins[j], 1].to(self.device).float()
+                dr = D[ds, _c, 0].to(self.device).float()
+                di = D[ds, _c, 1].to(self.device).float()
             part[j, 0] = (ur * dr + ui * di).sum()
             part[j, 1] = (ui * dr - ur * di).sum()
             part[j, 2] = (ur ** 2 + ui ** 2).sum()
