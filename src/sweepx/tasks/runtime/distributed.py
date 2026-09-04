@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -59,7 +60,16 @@ def init_process_group(backend: str = "nccl") -> None:
     """
     if not is_torchrun() or dist.is_initialized():
         return
-    dist.init_process_group(backend=backend)
+    # NCCL's watchdog default is 10 minutes, which is shorter than a legitimate
+    # stage start: building the observed-coefficient table streams hundreds of
+    # GB and the per-shard scale reduction sits inside that window. A band that
+    # takes 16 min to stage is not hung, but the watchdog aborts every rank as
+    # if it were. Honour the knob fwi_freqsel already reads for its own
+    # re-init, so both paths agree.
+    dist.init_process_group(
+        backend=backend,
+        timeout=timedelta(seconds=int(
+            os.environ.get("SWEEP_DD_NCCL_TIMEOUT_S", "1800"))))
 
 
 def world_size() -> int:

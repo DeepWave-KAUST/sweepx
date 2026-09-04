@@ -67,8 +67,28 @@ class BoundaryOptionsModel(_Forbid):
     ring_buffers: int | None = None
     disk_async_read: bool = False
 
+    # Truncated backward: save boundary strips for (and reverse through) only
+    # the LAST ``tail_steps`` of the record. The forward still runs full nt.
+    # Effective reverse depth is ``tail_steps - 1`` (the restore at loop step
+    # ``it`` consumes step ``it-1``'s strip), so callers must include that
+    # one-step alignment tax in their margin. Only valid when the loss reads
+    # nothing before the tail (freqsel's steady-window GCN); an impulsive
+    # misfit genuinely needs the early adjoint correlation and will lose it.
+    # On a sweep without this feature ``to_dataclass`` raises TypeError —
+    # a free capability check instead of a silently ignored truncation.
+    tail_steps: int | None = Field(default=None, gt=0)
+
     def to_dataclass(self) -> BoundaryOptions:
-        return BoundaryOptions(**self.model_dump())
+        dump = self.model_dump()
+        # None means "feature not requested" — drop the key entirely so this
+        # model still drives every sweep released before tail truncation
+        # existed. Only an actually-set tail_steps reaches the dataclass, so
+        # the TypeError-on-old-sweep capability check fires exactly when the
+        # user asked for something their core cannot do, not always.
+        if dump.get("tail_steps") is None:
+            dump.pop("tail_steps", None)
+        return BoundaryOptions(**dump)
+
 
 
 class CkptOptionsModel(_Forbid):
@@ -959,6 +979,38 @@ class FreqSelectionSpec(_Forbid):
     # ``min`` so nodes already in water are left untouched. None (default) leaves
     # the shard node_grid_xyz z unchanged.
     lift_source_to_water_vp: float | None = None
+    # Truncated backward (sweep BoundaryOptions.tail_steps): when set, each
+    # stage's solver saves/reverses only the last ``probe_samples +
+    # bwd_tail_margin`` steps. The margin buys (a) the adjoint field's decay
+    # through the absorbing boundary after the probe window closes and (b) the
+    # one-step restore alignment tax — so it should be >= 1, and the measured
+    # gradient-vs-full cosine converges monotonically as it grows (0.992 ->
+    # 1.000000 over margin 0 -> 800 on the validation model). None = exact
+    # full-nt backward (default, bit-identical to before this field existed).
+    bwd_tail_margin: int | None = Field(default=None, ge=0)
+    # Same knob in SECONDS, converted per stage with that stage's dt. Prefer
+    # this in a multi-rate cascade: the margin is a physical decay time, and a
+    # flat step count silently rescales with dt — 2000 steps is 2 s at
+    # dt=1 ms but 13.6 s at dt=6.8 ms, which can eat the entire saving.
+    #
+    # Production recipe (measured on a 3-D field-survey DD cascade): set
+    # the margin on the EXPENSIVE rungs only -- the finer half of the ladder
+    # low bands unset — most of the cascade saving comes from the last two
+    # rungs, while a low band's long probe leaves little to skip. Per-band
+    # control is native: the field lives on each stage's `frequency:` block,
+    # unset = exact full-nt backward for that stage. The margin scales with
+    # DOMAIN size (adjoint drain time), not with the model at hand's dt:
+    # ~1-2 s sufficed on open 2-D marine lines, a ~20 km-scale 3-D volume
+    # needed 6-8 s.
+    bwd_tail_margin_s: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_margin_convention(self):
+        if self.bwd_tail_margin is not None and self.bwd_tail_margin_s is not None:
+            raise ValueError(
+                "set frequency.bwd_tail_margin (solver steps) or "
+                "bwd_tail_margin_s (seconds), not both")
+        return self
 
     @model_validator(mode="after")
     def _one_source(self):
@@ -1220,6 +1272,14 @@ class ReparamSpec(_Forbid):
     # freqsel and plan-streaming paths. The env var SWEEP_SAVE_REPARAM_NET=1 forces it
     # on regardless (backward compat). Off by default (large file).
     save_net: bool = False
+    # Adam's moments are dumped alongside the weights. A resume that restores
+    # only the network is NOT equivalent to a continuous run -- the first dozen
+    # steps take a completely different step scale.
+    save_optimizer: bool = True
+    # Restore the optimizer state: a path, or "auto" to derive it from
+    # ``init_from`` (``reparam_net_iter`` -> ``optim_iter``, else ``optim.pt``
+    # beside it). A missing file is an error, never a silent zero state.
+    init_optimizer_from: str | None = None
     hidden_features: int = Field(ge=1, default=64)
     hidden_layers: int = Field(ge=1, default=3)
     first_omega0: float = Field(gt=0, default=30.0)
@@ -1360,6 +1420,13 @@ class StageSpec(_Forbid):
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
     - ``bandpass``: filter obs before this stage runs (uses sweep-preproc)
+    - ``boundary``: per-stage override of
+      ``backend.cuda_options.memory.boundary``. ONLY the fields you set are
+      overridden; everything else inherits the top-level block, so a stage can
+      move the strips to a different home without restating dtype / interval /
+      ring buffers. The band cascade needs exactly this: the coarse bands'
+      strips fit on the card (fastest home, and no host staging at all) while
+      the fine bands do not and must be staged on the host.
     - ``frequency``: per-stage frequency-selection sub-spec (comb + coeff
       shards). Only used on the ``source_encoding.mode='frequency_selection'``
       path; overrides the top-level ``source_encoding.frequency`` for this
@@ -1381,6 +1448,7 @@ class StageSpec(_Forbid):
     batch_size: int | None = Field(default=None, ge=1)
     bandpass: StageBandpass | None = None
     frequency: "FreqSelectionSpec | None" = None
+    boundary: BoundaryOptionsModel | None = None
 
 
 class OptimizerAdam(_Forbid):

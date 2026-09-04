@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import glob as _glob
 import json
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -92,6 +93,18 @@ def extract_shard(out_path: str, record, node_grid_xyz: np.ndarray,
     ndim = nodes.shape[1]
     if ndim not in (2, 3):
         raise ValueError(f"node_grid_xyz ndim must be 2 or 3; got {ndim}")
+
+    # Collisions are a property of THIS grid: a pair separated by less than dh
+    # shares a cell here and may not on a finer band. Say so while the shard is
+    # being built -- the inversion fires one source per cell, so a duplicate's
+    # coefficients are computed and stored (these shards run to 100+ GB) for
+    # rows that will then be dropped. See PoolScheduler.
+    _dupe = len(nodes) - len(np.unique(nodes, axis=0))
+    if _dupe:
+        print(f"[freqsel] extract: {len(nodes)} nodes occupy "
+              f"{len(nodes) - _dupe} distinct cells on this grid; {_dupe} "
+              "node(s) share a cell and will be dropped at inversion time",
+              flush=True)
 
     traces = np.asarray(trace_grid_xyz, np.int64)
     if traces.ndim == 2:
@@ -362,13 +375,57 @@ class FreqSelTargets:
             freqs = p["freqs"].copy()
             ks = p["ks"].astype(np.int64)
             meta = json.loads(str(p["meta"]))
-        if meta["n_p"] != comb.n_p or abs(meta["dt_solver"] - comb.dt) > 1e-12 \
-                or not np.array_equal(ks, comb.ks):
+        if abs(meta["dt_solver"] - comb.dt) > 1e-12:
             raise ValueError(
                 "extraction comb does not match the configured comb "
-                f"(shards: n_p={meta['n_p']} dt={meta['dt_solver']}; "
-                f"spec: n_p={comb.n_p} dt={comb.dt})")
-        nb = len(freqs)
+                f"(shards: dt={meta['dt_solver']}; spec: dt={comb.dt})")
+        shard_np = int(meta["n_p"])
+        if shard_np == comb.n_p and np.array_equal(ks, comb.ks):
+            self._bin_cols = None                       # the ordinary case
+        else:
+            # A configured comb may be an integer DECIMATION of the extracted
+            # one. Orthogonality needs ``k * W / n_p`` whole, so the extracted
+            # bins whose index is divisible by ``m`` stay mutually orthogonal
+            # over a window ``W = n_p / m`` -- and their frequencies are
+            # unchanged, ``(k/m) / (W*dt) == k / (n_p*dt)``. So a SHORTER
+            # record can reuse shards extracted at the long one, no re-DTFT.
+            #
+            # This is what makes the bin count a run-time knob: the record
+            # length is ``O + N/B``, so halving the comb halves the boundary
+            # buffer, which is what actually decides how many cards a band
+            # needs. Pick ``probe_samples`` highly composite at EXTRACTION time
+            # and the whole ladder (m = 2, 3, 4, ...) opens up later.
+            #
+            # Amplitude is not a concern: the two windows differ by a real
+            # normalisation, and the GCN loss is invariant to any per-node
+            # complex scale.
+            if comb.n_p <= 0 or shard_np % comb.n_p:
+                raise ValueError(
+                    "configured comb is neither the extracted comb nor an "
+                    f"integer decimation of it (shards: n_p={shard_np}; "
+                    f"spec: n_p={comb.n_p}; {shard_np}/{comb.n_p} is not whole)")
+            m = shard_np // comb.n_p
+            want = np.asarray(comb.ks, np.int64) * m
+            order = np.argsort(ks)
+            pos = np.searchsorted(ks[order], want)
+            if pos.max(initial=-1) >= len(ks) or \
+                    not np.array_equal(ks[order][np.clip(pos, 0, len(ks) - 1)], want):
+                missing = int(want[0]) if len(want) else -1
+                raise ValueError(
+                    f"configured comb decimates the extracted one by m={m}, "
+                    f"but bin k={missing}*... is absent from the shards "
+                    f"(extracted k in [{int(ks.min())}, {int(ks.max())}]); "
+                    "every configured k*m must exist in the extraction")
+            self._bin_cols = order[pos]
+            # Never silent: this branch also accepts m == 1, i.e. a plain
+            # SUBSET of the extracted bins, which the old exact-equality check
+            # rejected outright. That is physically fine (it is the same window,
+            # just fewer nodes fired) but it is exactly the shape a wrong-band
+            # config has, so say so rather than let it pass unremarked.
+            print(f"[freqsel] comb decimation m={m}: using {len(comb.ks)} of "
+                  f"{len(ks)} extracted bins, window {shard_np} -> {comb.n_p} "
+                  f"samples", flush=True)
+        nb = len(comb.ks) if self._bin_cols is not None else len(freqs)
         # Metadata-only pass — the coefficient table D is NOT loaded here.
         # Every DD rank constructs this object, so holding the full table per
         # rank (tens of GB on a full-survey node set) OOM-kills the host;
@@ -413,9 +470,16 @@ class FreqSelTargets:
             self.union_xyz = np.stack(
                 [ukey // ny, ukey % ny, np.zeros_like(ukey)], -1).astype(np.int32)
         self.n_union = len(ukey)
+        # Receivers are unique by construction (np.unique above) — the solver
+        # gets one entry per cell, never the 22.8 M raw (node, trace) pairs.
+        # It matters for the same reason it does for sources: the adjoint
+        # injects residuals through the same atomicAdd source kernel, so a
+        # repeated cell would make the gradient depend on arrival order.
+        assert len(np.unique(self.union_xyz, axis=0)) == self.n_union, \
+            "receiver cells must be distinct"
         self._bound = None
 
-    def bind_ownership(self, own_cols, device) -> None:
+    def bind_ownership(self, own_cols, device, bin_use=None) -> None:
         own_cols = np.asarray(own_cols, np.int64)
         g2l = np.full(self.n_union, -1, np.int64)
         g2l[own_cols] = np.arange(len(own_cols))
@@ -425,50 +489,223 @@ class FreqSelTargets:
         no = self.node_of_item[items]
         o = np.argsort(no, kind="stable")
         bounds = np.searchsorted(no[o], np.arange(self.n_nodes + 1))
+        # Does any node have TWO items on the same union cell?  The loop form
+        # sums both (two field traces, one modelled sample); a dense scatter
+        # would keep only the last one.  So the batched form is only equivalent
+        # when this is false -- decide it once, here, on the real index arrays,
+        # not by hoping.
+        _key = no.astype(np.int64) * np.int64(self.n_union) + lrow.astype(np.int64)
+        dup_free = bool(len(np.unique(_key)) == len(_key))
+        del _key
         # Stream the shards, keeping only this tile's rows, straight into
         # fp16 (the GCN is scale-invariant per node, so half-float relative
-        # precision sits far below the steady-state residual). Host peak =
-        # one decompressed shard + the owned fp16 block; shards are
+        # precision sits far below the steady-state residual); shards are
         # consecutive item ranges, so per-shard selection preserves the
         # global ``items`` order.
-        Dh = np.empty((len(items), self._nb, 2), np.float16)
+        #
+        # Ranks take turns.  ``p["D"]`` decompresses a whole shard member, so
+        # the host peak is one shard plus the owned blocks -- but only if one
+        # rank is inside the loop at a time.  Four ranks entering together
+        # multiply the shard term by four: on a production cascade the shards
+        # run to hundreds of GB each, and a 4-rank run was OOM-killed at its host
+        # allocation while the GPUs sat nearly idle.
+        colmap = None
+        if bin_use is not None:
+            bu = np.asarray(bin_use, bool)
+            if bu.shape != (self.n_nodes, self._nb):
+                raise ValueError(f"bin_use must be ({self.n_nodes}, "
+                                 f"{self._nb}); got {bu.shape}")
+            colmap = np.full((self.n_nodes, self._nb), -1, np.int32)
+            k = int(bu.sum(1).max(initial=0))
+            for s in range(self.n_nodes):
+                cs = np.nonzero(bu[s])[0]
+                colmap[s, cs] = np.arange(len(cs), dtype=np.int32)
+            Dh = np.zeros((len(items), max(k, 1), 2), np.float16)
+            self._load_shards(Dh, loc, colmap=colmap, node_of_row=no)
+            _tot = self.n_items * self._nb * 4 / 2 ** 30
+            _now = self.n_items * max(k, 1) * 4 / 2 ** 30
+            print(f"[freqsel] D column pruning: at most {k}/{self._nb} bins per "
+                  f"node are scheduled (median {int(np.median(bu.sum(1)))}); "
+                  f"table {_tot:.1f} -> {_now:.1f} GiB across ranks; "
+                  f"dup_free={dup_free}", flush=True)
+        else:
+            Dh = np.empty((len(items), self._nb, 2), np.float16)
+            self._load_shards(Dh, loc)
+        # The observed table stays on the HOST by default.  The loss reads
+        # ``D[dsel[s], bins[j]]`` -- one frequency column of one node's rows --
+        # so a whole iteration touches well under 1% of it.  At production comb
+        # sizes the resident table costs tens of GB of card and can force DD
+        # purely to make it fit.
+        # fit.  Set SWEEP_FREQSEL_D_ON_GPU=1 to restore the resident table.
+        d_on_gpu = os.environ.get("SWEEP_FREQSEL_D_ON_GPU", "") == "1"
+        Dt_ = torch.from_numpy(Dh)
+        self._bound = {
+            "D": Dt_.to(device) if d_on_gpu else Dt_,
+            "D_on_gpu": d_on_gpu,
+            # None -> D still has one column per comb bin (bins index it
+            # directly).  Otherwise colmap[s, k] is node s's local column for
+            # comb bin k, and -1 means "the schedule said this pair never
+            # happens" -- a hard error at read time, never a silent zero.
+            "colmap": colmap,
+            "dup_free": dup_free,
+            "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
+                                    dtype=torch.long, device=device)
+                       for s in range(self.n_nodes)],
+            # dsel indexes D, so it has to live wherever D lives
+            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]], dtype=torch.long,
+                                  device=device if d_on_gpu else "cpu")
+                     for s in range(self.n_nodes)],
+        }
+
+    def _cols(self, blk):
+        """The coefficient columns this run actually uses.
+
+        ``None`` means the configured comb IS the extracted one -- the common
+        case, and a plain slice. Otherwise the run decimates the extraction and
+        only the divisible bins are read.
+        """
+        blk = np.asarray(blk)
+        if self._bin_cols is None:
+            return blk[:, :self._nb]
+        return blk[:, self._bin_cols]
+
+    @staticmethod
+    def _memmap_member(pth, name):
+        """Memory-map an uncompressed .npy member of a .npz.
+
+        ``np.load`` materialises a whole member; at production comb sizes these run to hundreds of GB.  The
+        writer leaves them STORED, so the bytes are already a plain .npy at a
+        known offset and can be mapped instead -- each rank then touches only
+        the rows it owns.
+        """
+        import zipfile
+        from numpy.lib import format as _npf
+        zf = zipfile.ZipFile(pth)
+        info = zf.getinfo(name)
+        if info.compress_type != zipfile.ZIP_STORED:
+            zf.close()
+            return None                       # compressed: caller falls back
+        with zf.open(info) as fh:
+            ver = _npf.read_magic(fh)
+            # Version-keyed public readers.  numpy.lib.format._read_array_header
+            # is private and is not present in every numpy the cluster runs --
+            # it exists on the box the tests ran on and not on the one the
+            # cascade ran on, which is why this crashed 53 s into a 40 h job.
+            rd = {(1, 0): getattr(_npf, "read_array_header_1_0", None),
+                  (2, 0): getattr(_npf, "read_array_header_2_0", None)}.get(ver)
+            if rd is None:
+                zf.close()
+                return None                   # unknown version: use np.load
+            shape, order, dtype = rd(fh)
+            hdr = fh.tell()                   # .npy header, inside the member
+        zf.close()
+        # Parse the local file header that is actually in the file.  Do not use
+        # ZipInfo.FileHeader(): it re-synthesises one, and its extra field need
+        # not match the stored bytes, which puts the map a few bytes off.
+        with open(pth, "rb") as f:
+            f.seek(info.header_offset)
+            lfh = f.read(30)
+            n_name = int.from_bytes(lfh[26:28], "little")
+            n_extra = int.from_bytes(lfh[28:30], "little")
+        off = info.header_offset + 30 + n_name + n_extra + hdr
+        return np.memmap(pth, dtype=dtype, mode="r", offset=off, shape=shape,
+                         order="F" if order else "C")
+
+    def _load_shards(self, Dh, loc, colmap=None, node_of_row=None) -> None:
+        """Fill ``Dh`` with this rank's rows, reading only those rows.
+
+        The per-node max-abs scale has to come from the node's FULL row block
+        so every DD rank derives the same value -- a per-rank max would
+        desynchronise the cross-rank partial sums.  Raw field DTFT
+        coefficients run past the half-float range (observed max|D| ~ 1.2e5 >
+        65504 -> inf -> nan loss), so the scale has to exist before the cast.
+        Every rank scans the node blocks assigned to it and the maxima are
+        reduced with MAX, so each node is scanned exactly once and the read is
+        spread over ``world_size`` ranks.
+        """
+        _ws, _rk, _dist = 1, 0, None
+        try:
+            import torch.distributed as _d
+            if _d.is_available() and _d.is_initialized():
+                _dist, _ws, _rk = _d, _d.get_world_size(), _d.get_rank()
+        except Exception:
+            pass
         off = oi = 0
         for t, pth in enumerate(self._paths):
             ni = self._sizes[t]
             m = loc[oi:oi + ni] >= 0
             n_own = int(m.sum())
             if n_own:
+                Dm = self._memmap_member(pth, "D.npy")
                 with np.load(pth) as p:
-                    Dt = p["D"][:, :self._nb]
                     ptr = p["node_ptr"]
-                # Per-node max-abs normalisation ahead of the fp16 cast: raw
-                # field DTFT coefficients exceed the half-float range (observed
-                # max|D| ~ 1.2e5 > 65504 -> inf -> nan loss). The GCN is
-                # exactly invariant to a real per-node scale, and the scale is
-                # taken over the node's FULL row block so every DD rank
-                # derives the same value (a per-rank max would desynchronise
-                # the cross-rank partial sums).
-                sc = np.ones(ni, np.float32)
-                for s in range(len(ptr) - 1):
-                    a = float(np.abs(Dt[ptr[s]:ptr[s + 1]]).max(initial=0.0))
-                    sc[ptr[s]:ptr[s + 1]] = a if a > 0 else 1.0
-                Ds = Dt[m]
-                rs = sc[m][:, None]
-                Dh[off:off + n_own, :, 0] = Ds.real / rs
-                Dh[off:off + n_own, :, 1] = Ds.imag / rs
-                del Dt, Ds
+                    if Dm is None:                       # compressed fallback
+                        Dm = p["D"]
+                # Each node is scanned by exactly one rank and the maxima are
+                # reduced with MAX, which reproduces the old rank-0 full pass
+                # BIT FOR BIT while the read is spread over the ranks.
+                #
+                # The old shape was an operational problem, not just slow: rank 0
+                # read the WHOLE shard (hundreds of GB at large comb sizes) while
+                # every other rank sat in the broadcast. NCCL spin-waits occupy
+                # SMs, so the idle ranks register as ~85% busy and the one rank
+                # actually working registers as idle -- a per-GPU utilisation
+                # rule then fires on GPU 0 alone (observed: 73.3% against
+                # 84.8/84.8/83.5). It also cut the page-cache burst to 1/N.
+                #
+                # 0 is the identity for MAX here: blocks this rank did not scan
+                # stay 0 and lose the reduction, and the 0 -> 1.0 substitution
+                # afterwards is exactly the old ``a if a > 0 else 1.0``.
+                sc = np.zeros(ni, np.float32)
+                for s in range(_rk, len(ptr) - 1, _ws):
+                    sc[ptr[s]:ptr[s + 1]] = np.abs(self._cols(
+                        Dm[ptr[s]:ptr[s + 1]])).max(initial=0.0)
+                if _ws > 1:
+                    import torch as _t
+                    # NCCL has no CPU backend, so the scale has to make the
+                    # round trip through the device to be reduced at all.
+                    _dev = (_t.device("cuda", _t.cuda.current_device())
+                            if _t.cuda.is_available() else _t.device("cpu"))
+                    _b = _t.from_numpy(sc).to(_dev)
+                    _dist.all_reduce(_b, op=_dist.ReduceOp.MAX)
+                    sc = _b.cpu().numpy()
+                sc = np.where(sc > 0, sc, np.float32(1.0)).astype(np.float32)
+                rows = np.nonzero(m)[0]
+                rs = sc[rows][:, None]
+                # chunked so the gather never holds more than a slice
+                CH = 1 << 19
+                if colmap is None:
+                    for a0 in range(0, len(rows), CH):
+                        r = rows[a0:a0 + CH]
+                        blk = self._cols(np.asarray(Dm[r]))
+                        Dh[off + a0:off + a0 + len(r), :, 0] = blk.real / rs[a0:a0 + len(r)]
+                        Dh[off + a0:off + a0 + len(r), :, 1] = blk.imag / rs[a0:a0 + len(r)]
+                        del blk
+                else:
+                    # Pruned: the kept columns differ per node, so walk the
+                    # node blocks.  The READ is unchanged (a whole row is one
+                    # page either way); what shrinks is what is kept.
+                    for s_loc in range(len(ptr) - 1):
+                        lo = np.searchsorted(rows, ptr[s_loc])
+                        hi = np.searchsorted(rows, ptr[s_loc + 1])
+                        if hi <= lo:
+                            continue
+                        s_glb = int(node_of_row[off + lo])
+                        cs = np.nonzero(colmap[s_glb] >= 0)[0]
+                        if len(cs) == 0:
+                            continue
+                        cs = cs[np.argsort(colmap[s_glb][cs])]
+                        for a0 in range(lo, hi, CH):
+                            r = rows[a0:min(a0 + CH, hi)]
+                            blk = self._cols(np.asarray(Dm[r]))[:, cs]
+                            d = off + a0
+                            Dh[d:d + len(r), :len(cs), 0] = blk.real / rs[a0:a0 + len(r)]
+                            Dh[d:d + len(r), :len(cs), 1] = blk.imag / rs[a0:a0 + len(r)]
+                            del blk
+                del Dm
                 off += n_own
             oi += ni
-        assert off == len(items)
-        self._bound = {
-            "D": torch.from_numpy(Dh).to(device),
-            "groups": [torch.tensor(lrow[o[bounds[s]:bounds[s + 1]]],
-                                    dtype=torch.long, device=device)
-                       for s in range(self.n_nodes)],
-            "dsel": [torch.tensor(o[bounds[s]:bounds[s + 1]],
-                                  dtype=torch.long, device=device)
-                     for s in range(self.n_nodes)],
-        }
+        assert off == len(Dh)
 
     @property
     def bound(self):
@@ -495,6 +732,8 @@ class PoolScheduler:
     permutation is the method's one mandatory stochastic ingredient (a fixed
     assignment overfits its spectral lines; see the V3 experiment in the notes).
     ``k`` (or the max pool size) must not exceed ``n_bins`` comb frequencies.
+
+    Nodes sharing a grid cell are collapsed to one: see :attr:`dropped_nodes`.
     """
 
     node_grid: np.ndarray
@@ -503,9 +742,28 @@ class PoolScheduler:
     seed: int
     random_batch: int | None = None
     pools: list = field(init=False)
+    dropped_nodes: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        order = np.argsort(self.node_grid[:, 1], kind="stable")
+        # One source per grid cell, always. Two sources in the same cell are
+        # injected into the same u[] element, and the CUDA source kernel does
+        # that with atomicAdd -- the summation order then varies between runs,
+        # so the wavefield and everything downstream stop being reproducible.
+        # It is a geometry statement too: at this dh the grid cannot separate
+        # the two, so the second node would be modelled from a position it is
+        # not at. Keep the lowest-indexed node of each cell and say what went.
+        _, first = np.unique(self.node_grid, axis=0, return_index=True)
+        keep = np.sort(first)
+        self.dropped_nodes = np.setdiff1d(
+            np.arange(len(self.node_grid)), keep)
+        if len(self.dropped_nodes):
+            _d = self.dropped_nodes
+            print(f"[freqsel] {len(self.node_grid)} nodes occupy {len(keep)} "
+                  f"distinct grid cells; dropping {len(_d)} duplicate(s): "
+                  f"{_d[:20].tolist()}{' ...' if len(_d) > 20 else ''}",
+                  flush=True)
+        self._cand = keep
+        order = keep[np.argsort(self.node_grid[keep, 1], kind="stable")]
         npool = self.n_pools
         if self.random_batch:
             # size the fixed interleaved pools to the random batch (used only
@@ -520,16 +778,40 @@ class PoolScheduler:
             raise ValueError(
                 f"batch size {bs} exceeds {self.n_bins} comb bins; "
                 "raise n_pools, lower random_batch, or widen the comb")
+        if self.random_batch and int(self.random_batch) > len(keep):
+            raise ValueError(
+                f"random_batch {self.random_batch} exceeds the {len(keep)} "
+                f"distinct source cells ({len(self.node_grid)} nodes collapse "
+                f"onto {len(keep)} cells at this dh); lower random_batch or "
+                "refine the grid")
         self._n_nodes = len(order)
         self._rng = np.random.default_rng(self.seed)
 
+    def plan(self, n_iters: int):
+        """The (pool, bins) the next ``n_iters`` ``draw`` calls WILL return.
+
+        Side-effect free: the RNG state is snapshotted and restored, so calling
+        this changes nothing about the sequence ``draw`` then produces. That is
+        the whole point -- the schedule is a pure function of (seed, call
+        count), so the coefficient table can be pruned to the columns the run
+        will actually read before a single iteration has run.
+        """
+        st = self._rng.bit_generator.state
+        try:
+            return [self.draw(i) for i in range(int(n_iters))]
+        finally:
+            self._rng.bit_generator.state = st
+
     def draw(self, iteration: int):
         if self.random_batch:
-            pool = np.sort(self._rng.choice(
-                self._n_nodes, size=int(self.random_batch), replace=False))
+            pool = np.sort(self._cand[self._rng.choice(
+                self._n_nodes, size=int(self.random_batch), replace=False)])
         else:
             pool = self.pools[iteration % self.n_pools]
         bins = self._rng.permutation(self.n_bins)[:len(pool)]
+        # the invariant this class exists to hold up; cheap at these sizes
+        assert len(np.unique(self.node_grid[pool], axis=0)) == len(pool), \
+            "source cells must be distinct"
         return pool, bins
 
 
@@ -556,6 +838,32 @@ class _SumAcrossRanks(torch.autograd.Function):
     @staticmethod
     def backward(ctx, g):
         return g
+
+
+# Peak bytes for one gathered window chunk in two_window_check.  512 MB is
+# small next to the wavefield yet large enough that the chunk loop costs
+# nothing measurable.
+_TWC_CHUNK_BYTES = 512 * 1024 * 1024
+
+
+def _dcol(b, s, bin_k):
+    """Local column of node ``s``'s comb bin ``bin_k`` in the bound table.
+
+    Identity when the table is unpruned.  When it is pruned, a -1 means the
+    schedule that sized the table never paired this node with this bin, so
+    something advanced the RNG differently than ``plan()`` saw -- loud, because
+    reading the wrong column would just quietly invert a different dataset.
+    """
+    cm = b.get("colmap")
+    if cm is None:
+        return int(bin_k)
+    c = int(cm[int(s), int(bin_k)])
+    if c < 0:
+        raise RuntimeError(
+            f"pruned D has no column for (node {int(s)}, bin {int(bin_k)}); "
+            "the draw schedule diverged from the one the table was built for. "
+            "Set SWEEP_FREQSEL_D_PRUNE=0 to load the full table.")
+    return c
 
 
 class SteadyGCNLoss:
@@ -588,6 +896,25 @@ class SteadyGCNLoss:
         return record[0, :, :, 0].transpose(0, 1)          # (nrec, nt)
 
     def _probes(self, bins, start):
+        if os.environ.get("SWEEP_FREQSEL_GPU_PROBES") == "1":
+            # Same table, built on the card in fp64 instead of as a large
+            # host complex128 array that is then split and copied up.  Last-ulp
+            # different (libm vs CUDA transcendentals), not bit-exact.
+            import math
+            f = torch.as_tensor(np.asarray(self.comb.freqs[bins], np.float64),
+                                dtype=torch.float64, device=self.device)
+            m = torch.arange(self.comb.n_p, dtype=torch.float64,
+                             device=self.device)
+            ph = (-2.0 * math.pi) * f[:, None] * (
+                start * self.comb.dt + m[None] * self.comb.dt)
+            s = 2.0 / self.comb.n_p
+            # ph already carries the minus sign of exp(-2j*pi*f*tau), so
+            # sin(ph) IS -sin(2*pi*f*tau) -- multiplying by -s here would flip
+            # the imaginary probe and silently invert ui in the loss.  The
+            # microbenchmark caught exactly that: real matched to 0.0 while
+            # imag was off by the full 2s range.
+            return (torch.cos(ph).mul_(s).float(),
+                    torch.sin(ph).mul_(s).float())
         m = np.arange(self.comb.n_p, dtype=np.float64)
         ph = np.exp(-2j * np.pi * self.comb.freqs[bins][:, None]
                     * (start * self.comb.dt + m[None] * self.comb.dt)) \
@@ -601,6 +928,15 @@ class SteadyGCNLoss:
         ywin = y[:, start:start + self.comb.n_p]
         er, ei = self._probes(bins, start)
         b = self.targets.bound
+        if os.environ.get("SWEEP_FREQSEL_BATCHED_LOSS") == "1":
+            if b.get("dup_free", False):
+                return self._call_batched(ywin, pool, bins, er, ei, b)
+            if not getattr(self, "_dup_warned", False):
+                print("[freqsel] batched loss requested but some node has "
+                      "several traces on one receiver cell (dup_free=False); a "
+                      "dense scatter would drop the repeats, so falling back to "
+                      "the pool loop.", flush=True)
+                self._dup_warned = True
         D = b["D"]
         part = torch.zeros(len(pool), 4, device=self.device)
         for j, s in enumerate(pool):
@@ -611,12 +947,70 @@ class SteadyGCNLoss:
             ys = ywin[gi]
             ur = ys @ er[j]
             ui = ys @ ei[j]
-            dr = D[ds, bins[j], 0].float()
-            di = D[ds, bins[j], 1].float()
+            _c = _dcol(b, s, bins[j])
+            if b.get("D_on_gpu", True):
+                dr = D[ds, _c, 0].float()
+                di = D[ds, _c, 1].float()
+            else:
+                # Host gather, one small transfer per component (69 KB each
+                # (tens of KB).  The two components are indexed separately so the
+                # result is contiguous, matching the resident path's layout.
+                #
+                # Bit-identical to the resident path outside the PML.  This
+                # comment used to say the opposite -- that the gradient simply
+                # was not reproducible, two runs of one binary differing by
+                # 1.3e-5 over 99.96% of cells.  That was duplicate source cells
+                # colliding in the atomicAdd source kernel, since fixed; see
+                # PoolScheduler.  What is left sits in the absorbing boundary.
+                dr = D[ds, _c, 0].to(self.device).float()
+                di = D[ds, _c, 1].to(self.device).float()
             part[j, 0] = (ur * dr + ui * di).sum()
             part[j, 1] = (ui * dr - ur * di).sum()
             part[j, 2] = (ur ** 2 + ui ** 2).sum()
             part[j, 3] = (dr ** 2 + di ** 2).sum()
+        tot = _SumAcrossRanks.apply(part) if self.distributed else part
+        num = torch.sqrt(tot[:, 0] ** 2 + tot[:, 1] ** 2 + self.eps)
+        den = torch.sqrt(tot[:, 2] + self.eps) * torch.sqrt(tot[:, 3] + self.eps)
+        return (1.0 - num / den).sum(), len(pool)
+
+    def _call_batched(self, ywin, pool, bins, er, ei, b):
+        """The pool loop as ONE GEMM.
+
+        The loop form reads the whole window once per node -- hundreds of nodes,
+        most of the owned rows each -- and every read is a bandwidth-bound GEMV.  The
+        projection is the same for all of them, so do it once:
+        ``P = ywin @ [er; ei]``, then each node's four partials are column
+        reductions against its D scattered into a dense (nrec, npool) column.
+        Same arithmetic, same FLOPs, one pass over the window; NOT bit-exact,
+        because a GEMM and a GEMV reduce in different orders.
+        """
+        nrec, npool = ywin.shape[0], len(pool)
+        dev = self.device
+        D = b["D"]
+        on_gpu = b.get("D_on_gpu", True)
+        with torch.no_grad():
+            Dr = torch.zeros(nrec, npool, device=dev)
+            Di = torch.zeros(nrec, npool, device=dev)
+            Mk = torch.zeros(nrec, npool, device=dev)
+            for j, s in enumerate(pool):
+                gi = b["groups"][s]
+                if len(gi) == 0:
+                    continue
+                ds = b["dsel"][s]
+                c = _dcol(b, s, bins[j])
+                dr, di = D[ds, c, 0], D[ds, c, 1]
+                if not on_gpu:
+                    dr, di = dr.to(dev), di.to(dev)
+                Dr[gi, j] = dr.float()
+                Di[gi, j] = di.float()
+                Mk[gi, j] = 1.0
+        E = torch.cat([er, ei], 0).t().contiguous()          # (n_p, 2*npool)
+        P = ywin @ E
+        Pr, Pi = P[:, :npool], P[:, npool:]
+        part = torch.stack([(Pr * Dr + Pi * Di).sum(0),
+                            (Pi * Dr - Pr * Di).sum(0),
+                            ((Pr * Pr + Pi * Pi) * Mk).sum(0),
+                            (Dr * Dr + Di * Di).sum(0)], 1)
         tot = _SumAcrossRanks.apply(part) if self.distributed else part
         num = torch.sqrt(tot[:, 0] ** 2 + tot[:, 1] ** 2 + self.eps)
         den = torch.sqrt(tot[:, 2] + self.eps) * torch.sqrt(tot[:, 3] + self.eps)
@@ -632,14 +1026,33 @@ class SteadyGCNLoss:
         b = self.targets.bound
         us = {}
         diffs = []
+        # Row budget for the gathered window.  ``y[gi]`` used to copy the whole
+        # nt-long record for every owned receiver before slicing it down to
+        # n_p -- on a full field survey that throws away as much as it
+        # keeps, and it exhausted an 80 GB card on a QC statistic.
+        # Slice first (a view), gather in row chunks, and the peak is one chunk.
+        # Not bit-identical once it chunks: cuBLAS picks its kernel from the
+        # matrix shape, so a large GEMM and a small one reduce in
+        # different orders.  Measured 5.7e-07 relative on the returned median --
+        # a QC number that is printed and carried in the summary, never fed to
+        # the gradient, against a target of ~1e-2.
+        rows = max(1, _TWC_CHUNK_BYTES // max(1, self.comb.n_p * 4))
         for tag, st in (("late", n_ss + slack), ("early", n_ss)):
             er, ei = self._probes(bins, st)
+            ywin = y[:, st:st + self.comb.n_p]
             for j, s in enumerate(pool):
                 gi = b["groups"][s]
                 if len(gi) == 0:
                     continue
-                ys = y[gi][:, st:st + self.comb.n_p]
-                u = torch.complex(ys @ er[j], ys @ ei[j])
+                if len(gi) <= rows:
+                    ys = ywin[gi]
+                    u = torch.complex(ys @ er[j], ys @ ei[j])
+                else:
+                    chunks = []
+                    for k in range(0, len(gi), rows):
+                        ys = ywin[gi[k:k + rows]]
+                        chunks.append(torch.complex(ys @ er[j], ys @ ei[j]))
+                    u = torch.cat(chunks)
                 if tag == "late":
                     us[j] = u
                 else:

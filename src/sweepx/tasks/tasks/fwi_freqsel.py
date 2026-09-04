@@ -49,6 +49,133 @@ from sweep_tasks._helpers.util import (
 )
 
 
+def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None):
+    """Per-stage backend spec with truncated-backward boundary saving.
+
+    ``fspec.bwd_tail_margin`` set -> return a deep copy of ``backend`` whose
+    boundary config carries ``tail_steps = probe_samples + bwd_tail_margin``
+    (per stage: every rung has its own probe window). Unset -> ``backend``
+    unchanged, bit-identical behaviour.
+
+    Guards raise HERE, with the YAML vocabulary, rather than letting sweep
+    fail deep inside the propagator: truncation needs the c-backend
+    boundary-saving adjoint (no ckpt, no eager). DD is supported — tail_steps
+    rides the boundary config into every tile — with equation coverage
+    guarded by the core (Acoustic 2D/3D).
+    """
+    margin = getattr(fspec, "bwd_tail_margin", None)
+    margin_s = getattr(fspec, "bwd_tail_margin_s", None)
+    if margin is None and margin_s is None:
+        return backend
+    if margin is None:
+        # Seconds -> this stage's steps: the margin is a physical decay time,
+        # so it must rescale with per-stage dt in a multi-rate cascade.
+        if dt is None:
+            raise ValueError("bwd_tail_margin_s needs the stage dt")
+        import math
+        margin = int(math.ceil(float(margin_s) / float(dt)))
+    # DD passes straight through: every tile prop inherits tail_steps from
+    # the boundary config (same route as storage/storage_dtype), which also
+    # makes the reverse-loop stop step identical on every rank — the core
+    # enforces its own capability guards (Acoustic 2D/3D only; a core
+    # predating DD-tail support raises there, not here).
+    if backend.impl != "c":
+        raise ValueError(
+            "frequency.bwd_tail_margin requires backend.impl='c' "
+            f"(got '{backend.impl}'): the truncation lives in the c-backend "
+            "boundary-saving adjoint")
+    if backend.use_ckpt:
+        raise ValueError(
+            "frequency.bwd_tail_margin is incompatible with "
+            "backend.use_ckpt=true — checkpointing replays forward segments "
+            "and cannot skip the head of the record; use "
+            "cuda_options.memory.strategy='boundary'")
+    from sweep_tasks.schemas import (BoundaryOptionsModel, CUDAOptionsModel,
+                                     MemoryOptionsModel)
+    tail = int(fspec.probe_samples) + int(margin)
+    out = backend.model_copy(deep=True)
+    if out.cuda_options is None:
+        out.cuda_options = CUDAOptionsModel(
+            memory=MemoryOptionsModel(strategy="boundary",
+                                      boundary=BoundaryOptionsModel(
+                                          tail_steps=tail)))
+        return out
+    mem = out.cuda_options.memory
+    if mem is None:
+        out.cuda_options.memory = MemoryOptionsModel(
+            strategy="boundary",
+            boundary=BoundaryOptionsModel(tail_steps=tail))
+        return out
+    if mem.strategy != "boundary":
+        raise ValueError(
+            "frequency.bwd_tail_margin requires "
+            "cuda_options.memory.strategy='boundary' "
+            f"(got '{mem.strategy}')")
+    if mem.boundary is None:
+        mem.boundary = BoundaryOptionsModel(tail_steps=tail)
+    else:
+        mem.boundary.tail_steps = tail
+    return out
+
+
+def backend_with_boundary_storage(backend, storage: str):
+    """Copy of ``backend`` with the boundary strips staged on ``storage``.
+
+    Used for the out-of-memory fallback: the card is the right home while the
+    strips fit, since they are written and read every step, but a stage that
+    runs slower on the host beats one that dies.
+    """
+    out = backend.model_copy(deep=True)
+    mem = getattr(getattr(out, "cuda_options", None), "memory", None)
+    if mem is None or mem.boundary is None:
+        raise ValueError(
+            "boundary storage fallback needs cuda_options.memory.boundary "
+            "(set memory.strategy='boundary')")
+    mem.boundary.storage = storage
+    return out
+
+
+def backend_with_stage_boundary(backend, ov):
+    """Copy of ``backend`` with a stage's ``boundary:`` block merged in.
+
+    Only the fields the stage EXPLICITLY set are copied (``model_fields_set``),
+    so an override of ``storage`` alone keeps the global dtype / interval /
+    ring buffers instead of silently reverting them to schema defaults -- the
+    same trap ``stage_freq_override_warnings`` exists to flag for ``frequency``.
+    ``ov`` unset -> ``backend`` unchanged, bit-identical behaviour.
+    """
+    if ov is None:
+        return backend
+    fields = getattr(ov, "model_fields_set", None) or set()
+    if not fields:
+        return backend
+    out = backend.model_copy(deep=True)
+    mem = getattr(getattr(out, "cuda_options", None), "memory", None)
+    if mem is None or mem.boundary is None:
+        raise ValueError(
+            "stage 'boundary:' override needs cuda_options.memory.boundary "
+            "(set memory.strategy='boundary')")
+    for k in sorted(fields):
+        setattr(mem.boundary, k, getattr(ov, k))
+    # A stage that flips storage to the card inherits the global block's
+    # staging knobs, and those are cpu/disk-only -- the core rejects the pair
+    # rather than ignoring them. Say which knobs and how to clear them here,
+    # where the YAML vocabulary still exists, instead of letting it surface as
+    # a bare ValueError from deep inside BoundaryOptions.
+    if mem.boundary.storage == "gpu":
+        stale = [k for k in ("transfer_interval", "pinned_memory",
+                             "ring_buffers", "disk_dir")
+                 if getattr(mem.boundary, k, None) is not None]
+        if stale:
+            raise ValueError(
+                f"stage boundary override sets storage='gpu' but inherits "
+                f"{stale} from the global block; those are only valid for "
+                f"storage='cpu'/'disk'. Set them to null in the SAME stage "
+                f"'boundary:' block (an override only replaces the fields it "
+                f"names).")
+    return out
+
+
 def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     """Warn when a stage's ``frequency:`` block silently drops a global setting.
 
@@ -81,6 +208,49 @@ def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
 
 
 class FreqselRunnerMixin:
+    @staticmethod
+    def _restore_optimizer_state(spec, optimizer, rank):
+        """Restore Adam's first/second moments.
+
+        Restoring only the network weights is not equivalent to a continuous
+        run, so a missing file RAISES rather than silently leaving a zero
+        state: a silent fall back reads as "resumed, and the mismatch is
+        something else".
+        """
+        import torch
+        from pathlib import Path
+        rp = getattr(spec, "reparam", None)
+        iof = getattr(rp, "init_optimizer_from", None) if rp is not None else None
+        if not iof:
+            return
+        if str(iof) == "auto":
+            _if = getattr(rp, "init_from", None)
+            if not _if:
+                raise ValueError(
+                    "reparam.init_optimizer_from='auto' needs reparam.init_from "
+                    "set as well -- it is derived from that path")
+            op = Path(str(_if).replace("reparam_net_iter", "optim_iter"))
+            if op == Path(str(_if)):
+                op = Path(str(_if)).with_name("optim.pt")
+        else:
+            op = Path(str(iof))
+        if not op.exists():
+            raise FileNotFoundError(
+                f"reparam.init_optimizer_from -> {op} does not exist. Without "
+                "Adam's moments a resume is not equivalent to a continuous run "
+                "(the first dozen steps take a completely different step "
+                "scale), so this refuses to continue silently. Either provide "
+                "the file or set init_optimizer_from to null.")
+        sd = torch.load(str(op), map_location="cpu", weights_only=False)
+        os_ = sd["optimizer"] if isinstance(sd, dict) and "optimizer" in sd else sd
+        optimizer.load_state_dict(os_)
+        st = os_.get("state", {})
+        step = next((float(v["step"]) for v in st.values() if "step" in v), None)
+        if rank == 0:
+            print(f"[freqsel] init_optimizer_from: Adam state <- {op} "
+                  f"(tensors={len(st)}, step={step}, meta="
+                  f"{sd.get('meta') if isinstance(sd, dict) else None})", flush=True)
+
     def _freqsel_run_stage(
         self, spec, stage, si, fspec, dh, dt, dev,
         dd_on, dd_py, dd_px, rank, world, task_dir,
@@ -172,14 +342,45 @@ class FreqselRunnerMixin:
                         f"init_models entry with a path")
                 param_bases.append(_prep_base(_model_array(_ref)))
 
-        solver = _build_solver(spec.physics, spec.backend,
-                               _solver_shape, float(dh),
+        stage_backend = backend_with_tail_steps(spec.backend, fspec, dd_on,
+                                                dt=float(dt))
+        if rank == 0 and stage_backend is not spec.backend:
+            _tl = stage_backend.cuda_options.memory.boundary.tail_steps
+            print(f"[freqsel] s{si} truncated backward: boundary tail_steps="
+                  f"{_tl} of nt={nt} (probe {fspec.probe_samples} + margin "
+                  f"{_tl - fspec.probe_samples} steps; reverse depth "
+                  f"{_tl - 1})", flush=True)
+        def _make_solver(storage=None):
+            """Build (and DD-wrap) the stage solver, optionally forcing storage.
+
+            Precedence: the explicit argument (the out-of-memory fallback)
+            beats SWEEP_FREQSEL_BOUNDARY_STORAGE (operator override of a stage
+            that ran out of card) beats the stage's own ``boundary:`` block
+            beats the top-level backend. The core fixes the boundary's home at
+            construction, so this is the only door.
+            """
+            be = backend_with_stage_boundary(stage_backend,
+                                             getattr(stage, "boundary", None))
+            storage = storage or os.environ.get("SWEEP_FREQSEL_BOUNDARY_STORAGE") or None
+            if storage is not None:
+                be = backend_with_boundary_storage(be, storage)
+            sv = _build_solver(spec.physics, be, _solver_shape, float(dh),
                                float(dt), nt, dev)
-        if dd_on:
-            from sweep.parallel import MeshTopology
-            mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
-                                world_size=world, rank=rank)
-            solver = _dd_wrap(solver, mesh)
+            if dd_on:
+                from sweep.parallel import MeshTopology
+                _mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
+                                     world_size=world, rank=rank)
+                sv = _dd_wrap(sv, _mesh)
+            return sv
+
+        solver = _make_solver()
+        # Boundary storage falls back GPU -> host on the first out-of-memory,
+        # for the rest of the stage. The card is where this belongs when it
+        # fits: the strips are written and read every step, and staging them
+        # through the host costs a PCIe round trip each way. But the fine bands
+        # do not fit -- a fine rung can exhaust an 80 GB card even split four ways, in
+        # use -- and a stage that runs slower is worth more than one that dies.
+        boundary_on_host = False
 
         illum_solver = getattr(solver, "prop", solver)
         if illum_on:
@@ -328,6 +529,7 @@ class FreqselRunnerMixin:
                         dist.broadcast(p.data, src=0)
                 optimizer = torch.optim.Adam(net.parameters(),
                                              lr=float(spec.reparam.lr))
+                self._restore_optimizer_state(spec, optimizer, rank)
             else:
                 vp = base_t.clone().requires_grad_(True)
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
@@ -439,10 +641,17 @@ class FreqselRunnerMixin:
         pool0 = sched.pools[0]
         bins0 = np.arange(len(pool0))
         leaves, models0 = _get_models()
-        rec0 = solver(
-            fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
-            targets.node_grid[pool0][None].astype(np.int32), rec_table,
-            models=models0)
+        # No grad: this record only feeds the steady-state check, which takes
+        # it detached and then drops it. Under grad the c backend saves the
+        # boundary for a backward that never comes -- on a fine rung that is
+        # most of the card, and the check itself then has nowhere to put its
+        # own few GB. That is how a resumed fine stage died before its first
+        # iteration.
+        with torch.no_grad():
+            rec0 = solver(
+                fsl.encoded_wavelet(comb, bins0, nt, float(fspec.ramp_s), dev),
+                targets.node_grid[pool0][None].astype(np.int32), rec_table,
+                models=models0)
         own = getattr(solver, "_own_rec_idx", None)
         # Debug: audit receiver ownership across ranks (SWEEP_FREQSEL_OWN_AUDIT=1).
         # Duplicated/dropped receivers at tile cut planes would bias the GCN loss.
@@ -458,8 +667,18 @@ class FreqselRunnerMixin:
                 print(f"[freqsel][own-audit] n_union={targets.n_union} "
                       f"duplicated={_dup} dropped={_drop} "
                       f"(sum_owned={int(_cnt.sum())})", flush=True)
+        # Column pruning needs the draw schedule BEFORE the table is built.
+        # sched.plan() is side-effect free (RNG snapshot/restore), so asking
+        # for it here does not perturb the sequence draw() serves the loop.
+        _bin_use = None
+        if os.environ.get("SWEEP_FREQSEL_D_PRUNE") == "1":
+            _plan = sched.plan(int(stage.epochs))
+            _bin_use = np.zeros((targets.n_nodes, comb.n_bins), bool)
+            for _p, _b in _plan:
+                _bin_use[np.asarray(_p, np.int64), np.asarray(_b, np.int64)] = True
         targets.bind_ownership(
-            np.arange(targets.n_union) if own is None else own, dev)
+            np.arange(targets.n_union) if own is None else own, dev,
+            bin_use=_bin_use)
         chk = loss_fn.two_window_check(
             rec0.detach(), pool0, bins0, int(fspec.steady_samples),
             int(fspec.slack_samples))
@@ -513,28 +732,80 @@ class FreqselRunnerMixin:
             leaves, models = _get_models()
             leaf = leaves[0]
             _pf_sync(); _pf["render"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            syn = solver(
-                fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
-                targets.node_grid[pool][None].astype(np.int32), rec_table,
-                models=models)
-            _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
-            # + owned receiver indices — localizes DD-vs-single divergence to
-            # receivers/onset times. Diagnostic only.
-            _rdump = os.environ.get("SWEEP_FREQSEL_DUMP_REC")
-            if _rdump and it < int(os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
-                os.makedirs(_rdump, exist_ok=True)
-                _own_i = getattr(solver, "_own_rec_idx", None)
-                np.savez(os.path.join(
-                    _rdump, f"rec_s{si}_it{it}_r{rank}.npz"),
-                    syn=syn.detach().cpu().numpy(),
-                    own=(np.arange(targets.n_union) if _own_i is None
-                         else np.asarray(_own_i)),
-                    pool=np.asarray(pool), bins=np.asarray(bins))
-            J, npool = loss_fn(syn, pool, bins)
-            _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
-            J.backward()
-            _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+            # One retry, on the host, if the card cannot hold the boundary.
+            # The switch has to be COLLECTIVE: a rank that quietly moved its
+            # strips to the host while its neighbours stayed on the card would
+            # desynchronise the next halo exchange. So every rank votes each
+            # iteration -- one scalar all-reduce against a 35-130 s step -- and
+            # they fall back together or not at all.
+            for _attempt in (0, 1):
+                _oom = 0
+                try:
+                    syn = solver(
+                        fsl.encoded_wavelet(comb, bins, nt, float(fspec.ramp_s), dev),
+                        targets.node_grid[pool][None].astype(np.int32), rec_table,
+                        models=models)
+                    _pf_sync(); _pf["fwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                    # Debug: dump the raw forward record (SWEEP_FREQSEL_DUMP_REC=<dir>)
+                    # + owned receiver indices — localizes DD-vs-single divergence to
+                    # receivers/onset times. Diagnostic only.
+                    _rdump = os.environ.get("SWEEP_FREQSEL_DUMP_REC")
+                    if _rdump and it < int(os.environ.get("SWEEP_FREQSEL_DUMP_GRAD_ITERS", "1")):
+                        os.makedirs(_rdump, exist_ok=True)
+                        _own_i = getattr(solver, "_own_rec_idx", None)
+                        np.savez(os.path.join(
+                            _rdump, f"rec_s{si}_it{it}_r{rank}.npz"),
+                            syn=syn.detach().cpu().numpy(),
+                            own=(np.arange(targets.n_union) if _own_i is None
+                                 else np.asarray(_own_i)),
+                            pool=np.asarray(pool), bins=np.asarray(bins))
+                    J, npool = loss_fn(syn, pool, bins)
+                    _pf_sync(); _pf["loss"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                    J.backward()
+                    _pf_sync(); _pf["bwd"] += _time.perf_counter() - _pa; _pa = _time.perf_counter()
+                except torch.OutOfMemoryError:
+                    _oom = 1
+                if world > 1:
+                    import torch.distributed as _d
+                    _v = torch.tensor([_oom], device=dev, dtype=torch.int32)
+                    _d.all_reduce(_v, op=_d.ReduceOp.MAX)
+                    _oom = int(_v.item())
+                if not _oom:
+                    break
+                if world > 1:
+                    # No in-process recovery under DD. The out-of-memory lands
+                    # inside a backward, whose halo exchanges are collectives;
+                    # an interrupted collective leaves the communicator unusable
+                    # and rebuilding the wrapper from there aborts a rank
+                    # (SIGABRT, with the NCCL watchdog close behind). The core
+                    # also fixes the boundary's home at construction. So say
+                    # what to do and stop, rather than corrupt the run.
+                    raise RuntimeError(
+                        f"[freqsel] s{si} it {it}: CUDA out of memory. Re-run "
+                        "this stage with SWEEP_FREQSEL_BOUNDARY_STORAGE=cpu "
+                        "(the boundary then stages through the host), or give "
+                        "it more ranks.")
+                if boundary_on_host:
+                    raise RuntimeError(
+                        f"[freqsel] s{si} it {it}: out of memory with the "
+                        "boundary already staged on the host; lower the batch, "
+                        "add ranks, or coarsen this stage")
+                syn = J = None
+                optimizer.zero_grad(set_to_none=True)
+                del solver
+                if use_cuda:
+                    torch.cuda.empty_cache()
+                solver = _make_solver(storage="cpu")
+                boundary_on_host = True
+                # The failed backward already freed the reparam half of the
+                # graph, so the retry has to render again -- reusing ``models``
+                # would walk a graph that is no longer there.
+                leaves, models = _get_models()
+                leaf = leaves[0]
+                if rank == 0:
+                    print(f"[freqsel] s{si} it {it}: boundary saving fell back "
+                          "to host memory after a CUDA OOM (all ranks)",
+                          flush=True)
             g = leaf.grad
             # Optional water-column gradient freeze: zero the vp gradient above
             # the seabed so the inversion never updates the (known) water
@@ -676,6 +947,13 @@ class FreqselRunnerMixin:
                                     or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
                     torch.save(net.state_dict(),
                                task_dir / f"reparam_net_iter{gi + 1:04d}.pt")
+                    # Save Adam's moments with the weights, or resuming from
+                    # this snapshot is not equivalent to a continuous run.
+                    if bool(getattr(spec.reparam, "save_optimizer", True)):
+                        torch.save({"optimizer": optimizer.state_dict(),
+                                    "meta": {"global_iter": gi + 1, "stage": si,
+                                             "lr": float(spec.reparam.lr)}},
+                                   task_dir / f"optim_iter{gi + 1:04d}.pt")
                 np.savez(task_dir / "curves.npz",
                          losses=np.array(losses), iter_s=np.array(times),
                          peak_gb=np.array(peaks))
@@ -718,8 +996,8 @@ class FreqselRunnerMixin:
                 # NCCL watchdog default is 600 s; freqsel's iteration 0 at fine
                 # grids runs ~520 s of one-time warmup (first adjoint launch,
                 # boundary buffer allocs), so the default is one bad node away
-                # from a spurious SIGABRT (observed at 2-16Hz with 12 c2f
-                # levels). 1800 s default, env-overridable.
+                # from a spurious SIGABRT (seen on the finest rung of a
+                # production cascade). 1800 s default, env-overridable.
                 from datetime import timedelta
                 dist.init_process_group("nccl", timeout=timedelta(seconds=int(
                     os.environ.get("SWEEP_DD_NCCL_TIMEOUT_S", "1800"))))
@@ -846,6 +1124,12 @@ class FreqselRunnerMixin:
                 net_path = task_dir / "reparam_net.pt"
                 torch.save(net.state_dict(), net_path)
                 artifacts["reparam_net"] = str(net_path)
+                if bool(getattr(spec.reparam, "save_optimizer", True)):
+                    _op = task_dir / "optim.pt"
+                    torch.save({"optimizer": optimizer.state_dict(),
+                                "meta": {"global_iter": None, "stage": None,
+                                         "lr": float(spec.reparam.lr)}}, _op)
+                    artifacts["optimizer_state"] = str(_op)
                 print(f"[freqsel] saved reparam net -> {net_path}", flush=True)
             print(f"[freqsel] DONE ({len(stages)} stage(s)) "
                   f"mean(1-GCN) {losses[0]:.4f} -> {losses[-1]:.4f}",

@@ -95,12 +95,20 @@ def test_shard_loads_as_targets_3d(tmp_path):
 
 
 def test_targets_reject_a_comb_that_is_not_the_shards(tmp_path):
-    """The comb check is what replaces 'did you use the right wavelet'."""
+    """The comb check is what replaces 'did you use the right wavelet'.
+
+    A configured comb may be an integer decimation of the extracted one (see
+    test_freqsel_comb_decimation), so the check is no longer plain equality --
+    but a comb asking for bins that were never extracted, or a window the
+    extraction does not divide, must still be refused rather than truncated.
+    """
     out = extract_shard(str(tmp_path / "s.npz"), _record(), _nodes(),
                         _traces(), _comb())
-    with pytest.raises(ValueError, match="does not match the configured comb"):
+    # k_hi=9 was never extracted (shard holds k in [4, 8])
+    with pytest.raises(ValueError, match="absent from the shards"):
         FreqSelTargets(out, _comb(k_lo=5, k_hi=9), ny=1)
-    with pytest.raises(ValueError, match="does not match the configured comb"):
+    # a LONGER window than the extraction cannot be a decimation of it
+    with pytest.raises(ValueError, match="not whole"):
         FreqSelTargets(out, _comb(n_p=400), ny=1)
 
 
