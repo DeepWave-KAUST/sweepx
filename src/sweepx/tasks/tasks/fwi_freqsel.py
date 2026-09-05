@@ -207,6 +207,40 @@ def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     return out
 
 
+def _release_card_between_stages(si: int, rank: int) -> None:
+    """Hand the card back to the driver before the next stage builds its mesh.
+
+    A finished stage's blocks go to PyTorch's caching allocator, not to the
+    driver. The next stage constructs a fresh ``ModelParallel``, and
+    ``ModelParallelMesh`` opens ``1 + py*px`` new process groups whose NCCL
+    communicators ``cudaMalloc`` OUTSIDE that allocator. With the cache still
+    owning the card, NCCL gets nothing and the run dies on the stage's first
+    collective with a bare ``ncclUnhandledCudaError: Call to CUDA function
+    failed / Cuda failure 2 'out of memory'`` -- no mention of which
+    allocation failed, and long after the memory that matters was freed.
+
+    Set ``SWEEP_FREQSEL_STAGE_RELEASE=0`` to skip the release; that is the
+    negative arm of the reproduction, not something to run in production.
+    """
+    import gc
+
+    import torch
+
+    gc.collect()
+    if not torch.cuda.is_available():
+        return
+    release = os.environ.get("SWEEP_FREQSEL_STAGE_RELEASE", "1") != "0"
+    free_before, total = torch.cuda.mem_get_info()
+    if release:
+        torch.cuda.empty_cache()
+    free_after, _ = torch.cuda.mem_get_info()
+    if rank == 0:
+        print(f"[freqsel] stage {si} gap: gpu free "
+              f"{free_before / 2 ** 30:.1f} -> {free_after / 2 ** 30:.1f} / "
+              f"{total / 2 ** 30:.1f} GiB "
+              f"(release={'on' if release else 'OFF'})", flush=True)
+
+
 class FreqselRunnerMixin:
     @staticmethod
     def _restore_optimizer_state(spec, optimizer, rank):
@@ -1077,6 +1111,7 @@ class FreqselRunnerMixin:
                 losses, times, peaks, len(losses), total_epochs)
             if chk_first is None:
                 chk_first = chk
+            _release_card_between_stages(si, rank)
 
         artifacts, summary = {}, {}
         if rank == 0:
