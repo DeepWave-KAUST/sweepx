@@ -494,7 +494,7 @@ class FreqselRunnerMixin:
         if rank == 0:
             print(f"[freqsel] stage {si}: {targets.n_nodes} nodes, "
                   f"{targets.n_items} items, {targets.n_union} union cells, "
-                  f"{sched.n_pools} pools, comb {comb.freqs[0]:.4f}-"
+                  f"{sched.selection}, comb {comb.freqs[0]:.4f}-"
                   f"{comb.freqs[-1]:.4f} Hz, nt={nt}, dh={dh}, dt={dt}",
                   flush=True)
 
@@ -960,7 +960,8 @@ class FreqselRunnerMixin:
                          if use_cuda else 0.0)
             if rank == 0 and (it < 30 or it % max(1, stage_epochs // 40) == 0
                               or it == stage_epochs - 1):
-                print(f"[freqsel] s{si} it {it:4d} pool {it % sched.n_pools:2d}"
+                print(f"[freqsel] s{si} it {it:4d} "
+                      f"{sched.iteration_label(it)}"
                       f"  mean(1-GCN)={losses[-1]:.5f}  "
                       f"iter_s={times[-1]:.1f}  peak_gb={peaks[-1]:.2f}",
                       flush=True)

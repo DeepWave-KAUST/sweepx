@@ -787,6 +787,37 @@ class PoolScheduler:
         self._n_nodes = len(order)
         self._rng = np.random.default_rng(self.seed)
 
+    @property
+    def n_cells(self) -> int:
+        """Distinct source cells the scheduler draws from."""
+        return self._n_nodes
+
+    @property
+    def selection(self) -> str:
+        """One phrase naming what ``draw`` actually does, for the log.
+
+        The two modes are not interchangeable and the header used to announce
+        the pool structure either way -- but with ``random_batch`` set,
+        ``__post_init__`` overwrites the configured ``n_pools`` with
+        ``ceil(n_cells / random_batch)`` and ``draw`` then ignores the pools
+        entirely. A run that reported "2 pools" was drawing a fresh random
+        batch of cells every iteration.
+        """
+        if self.random_batch:
+            return f"batch {int(self.random_batch)}/{self._n_nodes}"
+        return f"{self.n_pools} pools"
+
+    def iteration_label(self, iteration: int) -> str:
+        """The per-iteration field: which pool fired, or the batch size.
+
+        In ``random_batch`` mode there is no pool index to report -- the draw
+        is fresh each iteration -- so ``it % n_pools`` was pure iteration
+        parity dressed up as a selection.
+        """
+        if self.random_batch:
+            return f"batch {int(self.random_batch):4d}"
+        return f"pool {iteration % self.n_pools:2d}"
+
     def plan(self, n_iters: int):
         """The (pool, bins) the next ``n_iters`` ``draw`` calls WILL return.
 
