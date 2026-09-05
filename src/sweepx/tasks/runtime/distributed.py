@@ -181,7 +181,14 @@ def init_distributed_if_needed(backend_env: str = "SWEEP_DIST_BACKEND") -> DistI
     if backend is None:
         backend = "nccl" if torch.cuda.is_available() else "gloo"
     if not dist.is_initialized():
-        dist.init_process_group(backend=backend)
+        # Same watchdog knob as init_process_group() above. This is the call
+        # site every caller in the package actually reaches -- runner.py,
+        # fwi, rtm, lsrtm, fwi_plan_streaming -- so patching only the other
+        # one left production on NCCL's 10-minute default.
+        dist.init_process_group(
+            backend=backend,
+            timeout=timedelta(seconds=int(
+                os.environ.get("SWEEP_DD_NCCL_TIMEOUT_S", "1800"))))
 
     rk = int(os.environ.get("RANK", "0"))
     if "LOCAL_RANK" in os.environ:
