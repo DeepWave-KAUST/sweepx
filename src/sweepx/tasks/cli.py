@@ -686,6 +686,73 @@ def _cmd_build_index(args) -> int:
     return 0
 
 
+def _cmd_extract_coeff_segy(args) -> int:
+    """``sweep-tasks extract-coeff-segy`` — raw SEG-Y → freqsel DTFT shard.
+
+    The sibling of ``extract-coeff`` for surveys that never went through a
+    plan: it sweeps the SEG-Y once, bins the traces it finds inside the box by
+    (node cell, source cell), averages each bin and writes the same shard the
+    inversion reads. Everything acquisition-specific is an option, so the
+    command carries no survey knowledge of its own.
+    """
+    import glob as _g
+
+    import numpy as np
+
+    from .freqsel import FrequencyComb
+    from .preproc.segy_coeff import (BoxGrid, SegyLayout, TopMute,
+                                     extract_coeff_from_segy,
+                                     source_bbox_manifest)
+
+    paths = sorted(_g.glob(args.segy))
+    if not paths:
+        print(f"error: --segy matched nothing: {args.segy}")
+        return 2
+    ox, oy = (float(v) for v in str(args.origin).split(","))
+    box = BoxGrid(origin_x=ox, origin_y=oy, dh=float(args.dh),
+                  nx=int(args.nx), ny=int(args.ny))
+    layout = SegyLayout(text_header_bytes=int(args.text_header_bytes),
+                        trace_header_bytes=int(args.trace_header_bytes),
+                        sx=int(args.header_sx), sy=int(args.header_sy),
+                        gx=int(args.header_gx), gy=int(args.header_gy),
+                        coord_scale=float(args.coord_scale))
+    comb = FrequencyComb(n_p=int(args.n_p), dt=float(args.dt_solver),
+                         ks=np.arange(int(args.k_lo), int(args.k_hi) + 1))
+    mute = None
+    if args.mute_taper and float(args.mute_taper) > 0:
+        mute = TopMute(t0=float(args.mute_t0), v=float(args.mute_v),
+                       a=float(args.mute_a), guard=float(args.mute_guard),
+                       taper=float(args.mute_taper))
+    to_model = None
+    if args.rotation:
+        from ._helpers.plan_apply import resolve_rotation_frame
+        frame = resolve_rotation_frame(args.rotation)
+        to_model = frame.to_model
+
+    man = None
+    if args.manifest:
+        if os.path.exists(args.manifest):
+            man = json.load(open(args.manifest))
+            print(f"[extract-coeff-segy] manifest: {len(man)} files known")
+        else:
+            print("[extract-coeff-segy] building source bbox manifest "
+                  f"over {len(paths)} files ...")
+            man = source_bbox_manifest(paths, layout, int(args.nt),
+                                       to_model=to_model, nproc=int(args.nproc),
+                                       out_path=args.manifest)
+    print(f"[extract-coeff-segy] {len(paths)} files, comb {comb.n_bins} bins, "
+          f"box {box.nx}x{box.ny} @ {box.dh} m")
+    out = extract_coeff_from_segy(
+        args.out, paths, layout=layout, box=box, comb=comb, nt=int(args.nt),
+        dt_record=(None if args.dt_record is None else float(args.dt_record)),
+        to_model=to_model, mute=mute, node_quantum=float(args.node_quantum),
+        part=int(args.part), npart=int(args.npart), nproc=int(args.nproc),
+        gpu_chunk=int(args.chunk), manifest=man,
+        manifest_margin=float(args.manifest_margin), verbose=True)
+    print(f"[extract-coeff-segy] wrote {out}")
+    return 0
+
+
 def _cmd_extract_coeff(args) -> int:
     """``sweep-tasks extract-coeff`` — common-node gathers → freqsel DTFT shard.
 
@@ -1447,6 +1514,85 @@ def main(argv: list[str] | None = None) -> int:
                          "which rings across every comb bin.")
 
     # `sweep-tasks build-plan` — SEGYIndex npz + filters → SeismicPlan npz.
+    es = subparsers.add_parser(
+        "extract-coeff-segy",
+        help="Sweep raw SEG-Y once and write a frequency-comb coefficient "
+             "shard: the plan-free sibling of extract-coeff, for surveys "
+             "whose common-node gathers only exist as scattered shot files.",
+    )
+    es.add_argument("--segy", required=True, metavar="GLOB",
+                    help="Glob for the SEG-Y files to sweep. Every file is "
+                         "read once; a node's traces live in all of them.")
+    es.add_argument("-o", "--out", required=True, help="Output shard npz.")
+    es.add_argument("--nt", type=int, required=True, metavar="N",
+                    help="Samples per trace, as written in the files.")
+    es.add_argument("--dt-record", dest="dt_record", type=float, default=None,
+                    metavar="S",
+                    help="Sample interval OF THE RECORD when it differs from "
+                         "--dt-solver (field data is routinely 2 or 4 ms). "
+                         "Comb frequencies are physical and do not change.")
+    es.add_argument("--n-p", "--n_p", dest="n_p", type=int, required=True,
+                    metavar="N", help="Analysis-window length in solver "
+                                      "samples; comb bins are k/(n_p*dt).")
+    es.add_argument("--k-lo", "--k_lo", dest="k_lo", type=int, required=True,
+                    metavar="K", help="First comb bin index.")
+    es.add_argument("--k-hi", "--k_hi", dest="k_hi", type=int, required=True,
+                    metavar="K", help="Last comb bin index, inclusive.")
+    es.add_argument("--dt-solver", dest="dt_solver", type=float, required=True,
+                    metavar="S", help="Solver time step the comb is defined on.")
+    es.add_argument("--origin", default="0,0", metavar="X,Y",
+                    help="Box origin in model metres (default 0,0).")
+    es.add_argument("--dh", type=float, required=True, metavar="M",
+                    help="Aggregation cell size. Traces sharing a cell are "
+                         "averaged, so this sets the fold.")
+    es.add_argument("--nx", type=int, required=True, metavar="N")
+    es.add_argument("--ny", type=int, required=True, metavar="N")
+    es.add_argument("--rotation", default=None, metavar="JSON",
+                    help="Rotation metadata mapping survey coordinates to the "
+                         "model frame. Omit when the headers are already in "
+                         "model coordinates.")
+    es.add_argument("--coord-scale", dest="coord_scale", type=float,
+                    default=100.0, metavar="S",
+                    help="Divisor applied to the header coordinates; 100 for "
+                         "a scalar of -100, 1 for metres (default 100).")
+    es.add_argument("--header-sx", dest="header_sx", type=int, default=72)
+    es.add_argument("--header-sy", dest="header_sy", type=int, default=76)
+    es.add_argument("--header-gx", dest="header_gx", type=int, default=80)
+    es.add_argument("--header-gy", dest="header_gy", type=int, default=84,
+                    help="0-based trace-header byte offsets of the source and "
+                         "receiver coordinates (defaults are SEG-Y rev1).")
+    es.add_argument("--text-header-bytes", dest="text_header_bytes", type=int,
+                    default=3600)
+    es.add_argument("--trace-header-bytes", dest="trace_header_bytes",
+                    type=int, default=240)
+    es.add_argument("--mute-t0", dest="mute_t0", type=float, default=0.0)
+    es.add_argument("--mute-v", dest="mute_v", type=float, default=1500.0)
+    es.add_argument("--mute-a", dest="mute_a", type=float, default=0.0)
+    es.add_argument("--mute-guard", dest="mute_guard", type=float, default=0.0)
+    es.add_argument("--mute-taper", dest="mute_taper", type=float, default=0.0,
+                    metavar="S",
+                    help="Cosine ramp length; 0 disables the top mute. The cut "
+                         "is t0 + offset/v + a*sqrt(offset) - guard.")
+    es.add_argument("--part", type=int, default=0)
+    es.add_argument("--npart", type=int, default=1,
+                    help="Shard the NODES across N passes when the "
+                         "coefficient table does not fit in host RAM. Every "
+                         "pass still reads every file, so use 1 when it fits.")
+    es.add_argument("--node-quantum", dest="node_quantum", type=float,
+                    default=0.1, metavar="M",
+                    help="Rounding applied to receiver coordinates before "
+                         "they become a node id: fine enough to keep two "
+                         "nodes apart, coarse enough to absorb header jitter.")
+    es.add_argument("--manifest", default=None, metavar="JSON",
+                    help="Per-file source bbox cache. Built if absent, used if "
+                         "present, to skip files that cannot reach the box. "
+                         "Unknown files are always read.")
+    es.add_argument("--manifest-margin", dest="manifest_margin", type=float,
+                    default=0.0, metavar="M")
+    es.add_argument("--nproc", type=int, default=8)
+    es.add_argument("--chunk", type=int, default=4096, metavar="N",
+                    help="Traces decoded and transformed at a time.")
+
     bp = subparsers.add_parser(
         "build-plan",
         help="Derive a SeismicPlan (seismic_plan_v1, CSG or CRG grouping) from "
@@ -1776,6 +1922,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_build_plan(args)
     if args.command == "extract-coeff":
         return _cmd_extract_coeff(args)
+    if args.command == "extract-coeff-segy":
+        return _cmd_extract_coeff_segy(args)
     if args.command == "filter-image":
         return _cmd_filter_image(args)
     if args.command == "analyze-wavelet":
