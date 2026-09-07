@@ -27,6 +27,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from collections.abc import Iterable
 import numpy as np
 import torch
 
@@ -178,8 +179,154 @@ def _comb_kernel(comb: FrequencyComb, nt: int,
     return np.exp(-2j * np.pi * comb.freqs[:, None] * t_axis[None, :])
 
 
+def offset_top_mute(rec, offsets, t_axis, *, v, t0=0.0, a=0.0,
+                    guard=0.0, taper=0.0):
+    """Zero each trace above its apparent-velocity ceiling, in place.
+
+    ``t_cut = t0 + x/v + a*sqrt(x) - guard`` per trace; the weight is 0 before
+    the cut, a raised cosine over ``taper`` seconds, then 1.  This has to run
+    on the gathers, BEFORE the DTFT: an extraction shard is one coefficient
+    per (node, cell, bin) over the whole record, so every bin already carries
+    whatever else was in the gather and no time window can be applied to the
+    shard afterwards.
+
+    ``taper=0`` gives a step, which is almost never what you want — a
+    discontinuity in time is broadband in frequency, so it leaks into every
+    comb bin, including the ones the step was meant to clean.
+
+    ``rec`` is ``(n_traces, n_samples)`` and is modified in place.
+    """
+    rec = np.asarray(rec)
+    off = np.asarray(offsets, np.float64)
+    if rec.shape[0] != off.shape[0]:
+        raise ValueError(f"offsets ({off.shape[0]}) must match the "
+                         f"{rec.shape[0]} traces in rec")
+    if rec.shape[1] != len(t_axis):
+        raise ValueError(f"t_axis ({len(t_axis)}) must match the "
+                         f"{rec.shape[1]} samples in rec")
+    if v <= 0:
+        raise ValueError(f"mute velocity must be positive; got {v}")
+    if taper < 0:
+        raise ValueError(f"mute taper must not be negative; got {taper}")
+    tcut = t0 + off / v + a * np.sqrt(np.maximum(off, 0.0)) - guard
+    t = np.asarray(t_axis, np.float64)[None, :]
+    if taper > 0:
+        ramp = np.clip((t - tcut[:, None]) / taper, 0.0, 1.0)
+        rec *= 0.5 - 0.5 * np.cos(np.pi * ramp)
+    else:
+        rec *= (t >= tcut[:, None])
+    return rec
+
+
+def _fold_cells(D, trc):
+    """Average the traces that landed in one receiver cell.
+
+    Real acquisition puts several traces in a cell whenever the shot interval
+    is finer than the grid — a 12.5 m shot line on a 50 m grid gives four.
+    :class:`FreqSelTargets` requires the cells of a node to be distinct (it
+    scatters them into a per-node column map), so a shard that keeps the
+    duplicates is rejected at load time, after the extraction has been paid
+    for.  Averaging is what the cell means: one coefficient per (node, cell),
+    with ``fold`` recording how many traces are behind it.
+
+    The mean, not the sum: fold varies across cells, and a sum would scale
+    each cell by its own trace count — a purely geometric amplitude that the
+    inversion would read as structure.  Summation runs in the array's own
+    complex64 and the divisor is float64 with ``out=``, which keeps the ufunc
+    from promoting the whole table to complex128 (a full extra copy at double
+    width).
+
+    Returns ``(D_folded, cells_unique, fold)``; when every cell is already
+    distinct this is the identity plus a ``fold`` of ones.
+    """
+    if len(trc) < 2:
+        return D, trc, np.ones(len(trc), np.int64)
+    order = np.lexsort(trc.T[::-1])
+    ts = trc[order]
+    new = np.ones(len(ts), bool)
+    new[1:] = (ts[1:] != ts[:-1]).any(1)
+    bnd = np.flatnonzero(new)
+    if len(bnd) == len(ts):                    # already distinct
+        return D, trc, np.ones(len(trc), np.int64)
+    fold = np.diff(np.append(bnd, len(ts)))
+    Ds = np.add.reduceat(D[order], bnd, axis=0)
+    np.divide(Ds, fold[:, None].astype(np.float64), out=Ds, casting="unsafe")
+    return Ds, ts[bnd], fold
+
+
+def write_npz_streamed(out_path: str, *, stream_name: str,
+                       stream_parts: Iterable[np.ndarray],
+                       stream_shape, stream_dtype, **members) -> str:
+    """``np.savez`` with one member fed from a list of parts, never concatenated.
+
+    ``np.savez(..., D=np.concatenate(parts, 0))`` holds the parts AND their
+    concatenation at the same instant, so the peak is TWICE the coefficient
+    table. On a field survey that is the difference between fitting in host
+    RAM and not: the caller has already paid for the parts, and the copy buys
+    nothing, because the parts are already the destination's rows in order.
+
+    npz is a ZIP_STORED container, so a member is just its raw bytes; writing
+    the parts back to back into the member's stream produces the same bytes.
+    Each part is released as soon as it is written, so the peak is the parts
+    minus what has been drained. ``stream_parts`` may be a list -- consumed in
+    place, entries set to ``None``, so pass one you own -- or any iterable,
+    including a generator that builds each block on demand, which is how a
+    producer too large to hold the whole table feeds this writer.
+
+    The row count must be known up front for the ``.npy`` header; it is
+    checked against what the parts actually deliver, so a mismatch is an
+    error and not a truncated shard.
+    """
+    import zipfile
+    import numpy.lib.format as _fmt
+
+    shape = tuple(int(v) for v in stream_shape)
+    dt = np.dtype(stream_dtype)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+        with z.open(stream_name + ".npy", "w", force_zip64=True) as fp:
+            hdr = dict(descr=_fmt.dtype_to_descr(dt), fortran_order=False,
+                       shape=shape)
+            try:
+                _fmt.write_array_header_1_0(fp, hdr)   # what np.savez emits
+            except ValueError:                         # header > 64 KiB
+                _fmt.write_array_header_2_0(fp, hdr)
+            rows = 0
+            # A list is consumed in place so the caller's parts are released as
+            # they are written; any other iterable (a generator that BUILDS the
+            # blocks) is just drained, which lets a producer that cannot hold
+            # the whole table feed this writer one block at a time.
+            if isinstance(stream_parts, list):
+                src = ((i, stream_parts) for i in range(len(stream_parts)))
+                def _take(it):
+                    i, lst = it
+                    v = lst[i]; lst[i] = None
+                    return v
+            else:
+                src = iter(stream_parts)
+                def _take(it):
+                    return it
+            for i, item in enumerate(src):
+                part = np.ascontiguousarray(_take(item), dtype=dt)
+                if part.ndim != len(shape) or part.shape[1:] != shape[1:]:
+                    raise ValueError(
+                        f"{stream_name}: part {i} has shape {part.shape}, "
+                        f"incompatible with {shape}")
+                fp.write(memoryview(part).cast("B"))
+                rows += len(part)
+                del part
+            if rows != shape[0]:
+                raise ValueError(
+                    f"{stream_name}: parts delivered {rows} rows, header "
+                    f"declares {shape[0]}")
+        for k, v in members.items():
+            with z.open(k + ".npy", "w", force_zip64=True) as fp:
+                _fmt.write_array(fp, np.asanyarray(v), allow_pickle=False)
+    return out_path
+
+
 def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                           *, dt_record: float | None = None,
+                          meta_extra: dict | None = None,
                           verbose: bool = False) -> str:
     """Ragged sibling of :func:`extract_shard` — one gather at a time.
 
@@ -200,7 +347,7 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
     coefficients are kept, so a survey whose gathers do not fit in host RAM
     still extracts in one pass.
     """
-    D_parts, node_rows, trace_parts, ptr = [], [], [], [0]
+    D_parts, node_rows, trace_parts, fold_parts, ptr = [], [], [], [], [0]
     ndim = nt = None
     E = None
     for i, (record, node_xyz, trace_xyz) in enumerate(gathers):
@@ -227,29 +374,42 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                 "every gather must share one time axis")
         elif len(node) != ndim or trc.shape[1] != ndim:
             raise ValueError(f"gather {i}: inconsistent ndim")
-        D_parts.append((arr.T @ E.T).astype(np.complex64))
+        Dg, trc, fold_g = _fold_cells((arr.T @ E.T).astype(np.complex64), trc)
+        D_parts.append(Dg)
         node_rows.append(node)
         trace_parts.append(trc)
-        ptr.append(ptr[-1] + arr.shape[1])
+        fold_parts.append(fold_g)
+        ptr.append(ptr[-1] + len(trc))
         if verbose and (i + 1) % 25 == 0:
             print(f"[freqsel] extracted {i + 1} gathers", flush=True)
     if not D_parts:
         raise ValueError("gathers yielded nothing")
+    _fold = np.concatenate(fold_parts)
+    if (_fold > 1).any():
+        print(f"[freqsel] folded {int(_fold.sum())} traces onto {len(_fold)} "
+              f"cells (max {int(_fold.max())}, mean {_fold.mean():.3f})",
+              flush=True)
 
     n_nodes = len(D_parts)
-    np.savez(out_path,
-             node_ids=np.arange(n_nodes, dtype=np.int32),
-             node_grid_xyz=np.asarray(node_rows, np.int32),
-             node_ptr=np.asarray(ptr, np.int64),
-             D=np.concatenate(D_parts, 0),
-             fold=np.ones(ptr[-1], np.int32),
-             trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
-             freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
-             meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
-                                  synthetic=False, nt_record=int(nt),
-                                  dt_record=float(comb.dt if dt_record is None
-                                                  else dt_record))))
-    return out_path
+    # D streamed, not concatenated: the docstring above promises one pass over
+    # host RAM and ``np.concatenate(D_parts, 0)`` broke that promise for the
+    # coefficients even though it kept it for the records -- parts plus their
+    # copy is 2x the table. See :func:`write_npz_streamed`.
+    return write_npz_streamed(
+        out_path,
+        stream_name="D", stream_parts=D_parts,
+        stream_shape=(int(ptr[-1]), int(comb.n_bins)), stream_dtype=np.complex64,
+        node_ids=np.arange(n_nodes, dtype=np.int32),
+        node_grid_xyz=np.asarray(node_rows, np.int32),
+        node_ptr=np.asarray(ptr, np.int64),
+        fold=_fold.astype(np.int32),
+        trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
+        freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
+        meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
+                             synthetic=False, nt_record=int(nt),
+                             dt_record=float(comb.dt if dt_record is None
+                                             else dt_record),
+                             **(meta_extra or {}))))
 
 
 def synthesize_shard(out_path: str, solver, vp_true: torch.Tensor,
