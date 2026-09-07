@@ -27,6 +27,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from collections.abc import Iterable
 import numpy as np
 import torch
 
@@ -253,6 +254,76 @@ def _fold_cells(D, trc):
     return Ds, ts[bnd], fold
 
 
+def write_npz_streamed(out_path: str, *, stream_name: str,
+                       stream_parts: Iterable[np.ndarray],
+                       stream_shape, stream_dtype, **members) -> str:
+    """``np.savez`` with one member fed from a list of parts, never concatenated.
+
+    ``np.savez(..., D=np.concatenate(parts, 0))`` holds the parts AND their
+    concatenation at the same instant, so the peak is TWICE the coefficient
+    table. On a field survey that is the difference between fitting in host
+    RAM and not: the caller has already paid for the parts, and the copy buys
+    nothing, because the parts are already the destination's rows in order.
+
+    npz is a ZIP_STORED container, so a member is just its raw bytes; writing
+    the parts back to back into the member's stream produces the same bytes.
+    Each part is released as soon as it is written, so the peak is the parts
+    minus what has been drained. ``stream_parts`` may be a list -- consumed in
+    place, entries set to ``None``, so pass one you own -- or any iterable,
+    including a generator that builds each block on demand, which is how a
+    producer too large to hold the whole table feeds this writer.
+
+    The row count must be known up front for the ``.npy`` header; it is
+    checked against what the parts actually deliver, so a mismatch is an
+    error and not a truncated shard.
+    """
+    import zipfile
+    import numpy.lib.format as _fmt
+
+    shape = tuple(int(v) for v in stream_shape)
+    dt = np.dtype(stream_dtype)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+        with z.open(stream_name + ".npy", "w", force_zip64=True) as fp:
+            hdr = dict(descr=_fmt.dtype_to_descr(dt), fortran_order=False,
+                       shape=shape)
+            try:
+                _fmt.write_array_header_1_0(fp, hdr)   # what np.savez emits
+            except ValueError:                         # header > 64 KiB
+                _fmt.write_array_header_2_0(fp, hdr)
+            rows = 0
+            # A list is consumed in place so the caller's parts are released as
+            # they are written; any other iterable (a generator that BUILDS the
+            # blocks) is just drained, which lets a producer that cannot hold
+            # the whole table feed this writer one block at a time.
+            if isinstance(stream_parts, list):
+                src = ((i, stream_parts) for i in range(len(stream_parts)))
+                def _take(it):
+                    i, lst = it
+                    v = lst[i]; lst[i] = None
+                    return v
+            else:
+                src = iter(stream_parts)
+                def _take(it):
+                    return it
+            for i, item in enumerate(src):
+                part = np.ascontiguousarray(_take(item), dtype=dt)
+                if part.ndim != len(shape) or part.shape[1:] != shape[1:]:
+                    raise ValueError(
+                        f"{stream_name}: part {i} has shape {part.shape}, "
+                        f"incompatible with {shape}")
+                fp.write(memoryview(part).cast("B"))
+                rows += len(part)
+                del part
+            if rows != shape[0]:
+                raise ValueError(
+                    f"{stream_name}: parts delivered {rows} rows, header "
+                    f"declares {shape[0]}")
+        for k, v in members.items():
+            with z.open(k + ".npy", "w", force_zip64=True) as fp:
+                _fmt.write_array(fp, np.asanyarray(v), allow_pickle=False)
+    return out_path
+
+
 def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
                           *, dt_record: float | None = None,
                           meta_extra: dict | None = None,
@@ -320,20 +391,25 @@ def extract_shard_gathers(out_path: str, gathers, comb: FrequencyComb,
               flush=True)
 
     n_nodes = len(D_parts)
-    np.savez(out_path,
-             node_ids=np.arange(n_nodes, dtype=np.int32),
-             node_grid_xyz=np.asarray(node_rows, np.int32),
-             node_ptr=np.asarray(ptr, np.int64),
-             D=np.concatenate(D_parts, 0),
-             fold=_fold.astype(np.int32),
-             trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
-             freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
-             meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
-                                  synthetic=False, nt_record=int(nt),
-                                  dt_record=float(comb.dt if dt_record is None
-                                                  else dt_record),
-                                  **(meta_extra or {}))))
-    return out_path
+    # D streamed, not concatenated: the docstring above promises one pass over
+    # host RAM and ``np.concatenate(D_parts, 0)`` broke that promise for the
+    # coefficients even though it kept it for the records -- parts plus their
+    # copy is 2x the table. See :func:`write_npz_streamed`.
+    return write_npz_streamed(
+        out_path,
+        stream_name="D", stream_parts=D_parts,
+        stream_shape=(int(ptr[-1]), int(comb.n_bins)), stream_dtype=np.complex64,
+        node_ids=np.arange(n_nodes, dtype=np.int32),
+        node_grid_xyz=np.asarray(node_rows, np.int32),
+        node_ptr=np.asarray(ptr, np.int64),
+        fold=_fold.astype(np.int32),
+        trace_grid_xyz=np.concatenate(trace_parts, 0).astype(np.int32),
+        freqs=comb.freqs, ks=comb.ks, qc_freqs=np.zeros(0),
+        meta=json.dumps(dict(n_p=comb.n_p, dt_solver=comb.dt,
+                             synthetic=False, nt_record=int(nt),
+                             dt_record=float(comb.dt if dt_record is None
+                                             else dt_record),
+                             **(meta_extra or {}))))
 
 
 def synthesize_shard(out_path: str, solver, vp_true: torch.Tensor,
