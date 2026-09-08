@@ -118,6 +118,51 @@ def _launch_env_header(info: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+# Blocks whose merge reads ``model_fields_set``: writing them out with every
+# field explicit turns "inherit this" into "override with the schema default",
+# so the resolved config must record them EXACTLY as the author wrote them.
+# (attribute on a stage, the merge that depends on it)
+_SETWISE_STAGE_OVERRIDES = (
+    ("boundary", "tasks.fwi_freqsel.backend_with_stage_boundary copies only "
+                 "the fields the stage named"),
+)
+
+
+def _prune_setwise_overrides(spec, cfg):
+    """Rewrite ``model_fields_set``-sensitive override blocks as written.
+
+    ``config_resolved.yaml`` is advertised as re-runnable (the header prints
+    the exact ``sweep-tasks run config_resolved.yaml`` command), so a full
+    dump has to round-trip to the SAME run. For a partial-override block it
+    does not: a stage that named ``storage`` alone comes back naming all eight
+    boundary fields, and the seven it never wrote now override the global
+    block with their schema defaults. On a production band cascade that
+    silently turned an inherited ``storage_dtype: int8`` into ``fp32`` -- a 4x
+    bigger boundary buffer in a config nobody had edited.
+
+    The values dropped here are not lost: they are the global block's, which
+    is dumped in full a few lines above. Only the *override* shrinks, back to
+    what it actually overrides.
+    """
+    stages = getattr(spec, "stages", None) or ()
+    cfg_stages = cfg.get("stages") if isinstance(cfg, dict) else None
+    if not stages or not isinstance(cfg_stages, list):
+        return cfg
+    if len(cfg_stages) != len(stages):
+        return cfg  # shape we do not recognise: leave the dump alone
+    for stage, dumped in zip(stages, cfg_stages):
+        if not isinstance(dumped, dict):
+            continue
+        for name, _why in _SETWISE_STAGE_OVERRIDES:
+            block = dumped.get(name)
+            override = getattr(stage, name, None)
+            if override is None or not isinstance(block, dict):
+                continue
+            named = set(getattr(override, "model_fields_set", ()) or ())
+            dumped[name] = {k: v for k, v in block.items() if k in named}
+    return cfg
+
+
 def _dump_run_metadata(
     spec,
     task_dir,
@@ -130,8 +175,11 @@ def _dump_run_metadata(
     to reproduce / interpret the result:
 
     * ``config_resolved.yaml`` — the post-pydantic-validation spec with
-      ALL fields explicit (defaults expanded). Diffing this against any
-      hand-written YAML shows exactly what fields the pipeline saw.
+      ALL fields explicit (defaults expanded), EXCEPT the partial-override
+      blocks listed in ``_SETWISE_STAGE_OVERRIDES``, which stay exactly as
+      written so the file re-runs as itself. Diffing this against any
+      hand-written YAML shows what fields the pipeline saw; for an override
+      block, read it together with the global block it overrides.
     * ``run_meta.json`` — host, time, CUDA device, conda env path, key
       package versions (sweep-tasks, sweep-nn, sweep-io, sweep,
       sweep-loss, sweep-preproc, torch, numpy), git SHA / dirty-flag
@@ -164,6 +212,9 @@ def _dump_run_metadata(
         cfg = spec.model_dump(mode="json")
     except Exception:  # pydantic v1 fallback
         cfg = spec.dict()
+    # Partial-override blocks go back to what they actually override, or this
+    # file does not re-run as itself. See _prune_setwise_overrides.
+    cfg = _prune_setwise_overrides(spec, cfg)
     try:
         (task_dir / "config_resolved.yaml").write_text(
             _launch_env_header(launch)

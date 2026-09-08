@@ -155,6 +155,22 @@ def backend_with_stage_boundary(backend, ov):
         raise ValueError(
             "stage 'boundary:' override needs cuda_options.memory.boundary "
             "(set memory.strategy='boundary')")
+    # An override that names EVERY field inherits nothing. Nobody writes that
+    # by hand -- it is the signature of a config derived from a pre-2026-09
+    # ``config_resolved.yaml``, which dumped overrides with all defaults
+    # expanded. Say which values that silently replaces, because the damage is
+    # invisible whenever the expanded default happens to be a legal value: an
+    # inherited ``storage_dtype: int8`` came back as ``fp32`` and the boundary
+    # buffer grew 4x.
+    if fields >= set(type(ov).model_fields):
+        stolen = [f"{k}: {getattr(mem.boundary, k)!r} -> {getattr(ov, k)!r}"
+                  for k in sorted(fields)
+                  if getattr(ov, k) != getattr(mem.boundary, k)]
+        if stolen:
+            print("[freqsel] WARNING stage 'boundary:' override names every "
+                  "field, so it inherits nothing from the global block. If it "
+                  "came from a config_resolved.yaml, these are schema defaults "
+                  "overriding your settings: " + "; ".join(stolen), flush=True)
     for k in sorted(fields):
         setattr(mem.boundary, k, getattr(ov, k))
     # A stage that flips storage to the card inherits the global block's
