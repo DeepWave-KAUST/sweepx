@@ -75,3 +75,34 @@ def test_stage_accepts_the_block():
     s = StageSpec(epochs=1, boundary=BoundaryOptionsModel(storage="gpu"))
     assert s.boundary.storage == "gpu"
     assert StageSpec(epochs=1).boundary is None
+
+
+def test_full_field_override_warns_about_what_it_replaced(capsys):
+    """A block naming every field inherits nothing -- say what that costs.
+
+    This is the shape a pre-2026-09 ``config_resolved.yaml`` produces: the
+    author wrote ``storage`` only, the dump expanded it to all eight fields,
+    and ``storage_dtype`` came back as the schema default. Legal value, wrong
+    run -- so the only way to notice is to be told.
+    """
+    be = _backend()
+    ov = BoundaryOptionsModel(storage="gpu", storage_dtype="fp32",
+                              transfer_interval=None, pinned_memory=None,
+                              disk_dir=None, ring_buffers=None,
+                              disk_async_read=False, tail_steps=None)
+    assert set(ov.model_fields_set) == set(BoundaryOptionsModel.model_fields)
+    out = backend_with_stage_boundary(be, ov)
+    msg = capsys.readouterr().out
+    assert "inherits nothing" in msg
+    assert "storage_dtype: 'int8' -> 'fp32'" in msg
+    assert _bnd(out).storage_dtype == "fp32", "the warning must not change it"
+
+
+def test_partial_override_does_not_warn(capsys):
+    """The normal case stays quiet, or the warning is noise nobody reads."""
+    be = _backend()
+    backend_with_stage_boundary(be, BoundaryOptionsModel(storage="gpu",
+                                                         transfer_interval=None,
+                                                         pinned_memory=None,
+                                                         ring_buffers=None))
+    assert capsys.readouterr().out == ""
