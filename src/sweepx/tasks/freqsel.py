@@ -1057,11 +1057,27 @@ def _dcol(b, s, bin_k):
     return c
 
 
+def _dd_record_is_canonical() -> bool:
+    """Whether sweep's ModelParallel hands back the single-card record layout.
+
+    From sweep-solver 0.3.0 the DD tile record is permuted to ``(B, nt, nrec, nfield)``
+    at the solver's Python boundary (``dd_propagator._cuda_record_to_canonical``);
+    before that it came back raw, ``(B, nrec, nt)`` / ``(nfield, B, nrec, nt)``.
+    A property of the installed solver, so read it there instead of guessing from a shape.
+    """
+    try:
+        from sweep.parallel import dd_propagator
+    except ImportError:
+        return False
+    return hasattr(dd_propagator, "_cuda_record_to_canonical")
+
+
 class SteadyGCNLoss:
     """Steady-window extraction + per-node masked complex-cosine loss.
 
-    ``__call__(record, pool, bins)`` expects the RAW per-tile record from
-    ModelParallel (time innermost) or the canonical single-domain record;
+    ``__call__(record, pool, bins)`` expects the canonical ``(B, nt, nrec, nfield)``
+    record (single-domain, and ModelParallel from sweep-solver 0.3.0) or the RAW
+    per-tile record older ModelParallel returned (time innermost);
     extracts ``U(f_s, r)`` over the window ``[start, start + n_p)`` with the
     ``2/n_p`` factor and the phase reference to the window start, then
     reduces the per-node GCN across tiles with a differentiable sum.
@@ -1075,14 +1091,15 @@ class SteadyGCNLoss:
         self.start = n_ss + slack
         self.device = device
         self.distributed = distributed
+        self._dd_raw = bool(distributed) and not _dd_record_is_canonical()
         self.eps = eps
 
     def _as_rec_time(self, record: torch.Tensor) -> torch.Tensor:
-        # ModelParallel returns the RAW tile record, time innermost:
-        # (B, nrec, nt) or (nfield, B, nrec, nt). Single-domain PropTorch
-        # returns the canonical (B, nt, nrec, nfield). Distinguish by the
-        # construction flag, not by shape heuristics.
-        if self.distributed:
+        # Single-domain PropTorch returns the canonical (B, nt, nrec, nfield), and so
+        # does ModelParallel from sweep-solver 0.3.0; older ModelParallel returned the
+        # RAW tile record, time innermost: (B, nrec, nt) or (nfield, B, nrec, nt).
+        # Decided at construction from the installed solver, not from the shape.
+        if self._dd_raw:
             return record.reshape(-1, record.shape[-2], record.shape[-1])[0]
         return record[0, :, :, 0].transpose(0, 1)          # (nrec, nt)
 
