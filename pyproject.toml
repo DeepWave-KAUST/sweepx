@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sweepx"
-version = "0.1.1"
+version = "0.3.0"
 description = "Install handle for the sweep engine: `pip install sweepx`, then `import sweep`."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,8 +31,8 @@ classifiers = [
 # them here when they ship; users keep the same `pip install sweepx`.
 # NOTE: sweep-agent depends on sweep-solver (not on sweepx) — no dependency cycle.
 dependencies = [
-    "sweep-solver>=0.1,<0.2",
-    "sweep-agent>=0.0.1",
+    "sweep-solver>=0.3,<0.4",
+    "sweep-agent>=0.0.5",
 ]
 
 [project.urls]

@@ -66,24 +66,27 @@ taken on PyPI, so the installable is named `sweepx`.
 
 ## CUDA backend
 
-`sweep`'s GPU backend (`impl='c'`) is **JIT-compiled against your own PyTorch on
-first use** — so a single wheel works with **any** torch version and any Python 3,
-with no prebuilt CUDA/torch/Python matrix. It needs a CUDA GPU and `nvcc >= 12.4`
-(a system toolkit, `module load cuda`, or `conda install -c nvidia cuda-toolkit`):
+`sweep`'s GPU backend (`impl='c'`) ships **prebuilt**: the `sweep-solver` wheel
+carries one CUDA core per CUDA major -- `cu12` (V100 through H100/H200, Blackwell via
+PTX) and `cu13` (T4/RTX 20 and newer, Blackwell native, driver >= 580) -- and loads
+the one your torch's CUDA major names. After `pip install` **nothing compiles**: no
+nvcc, no C++ compiler, no CUDA headers, and the same wheel works with any torch
+version and any Python 3.
 
 ```python
 import sweep
-sweep.precompile()   # optional: build the CUDA backend now (~3-5 min, then cached)
+sweep.precompile()   # optional: check that a CUDA core is in place and load it (compiles nothing)
 ```
 
-Drop `precompile()` and the compile happens automatically on first use of
-`impl='c'`, cached thereafter in `~/.cache/torch_extensions`. The pure-Python
-eager / JAX backends need no nvcc.
+An nvcc of your torch's CUDA major is needed only when no shipped core fits -- a
+torch built for another CUDA major, a GPU older than the shipped archs (e.g. Pascal),
+or an install from source -- and then only the core is built, once, locally. The
+pure-Python eager / JAX backends need none of this.
 
 ```python
 import sweep
-print(sweep.is_torch_binding_available())          # torch + CUDA GPU + nvcc present?
-print(sweep.backend.torch.binding.diagnostics())   # usable / reason / cuda_home / built
+print(sweep.is_torch_binding_available())          # torch + CUDA GPU + a usable core?
+print(sweep.backend.torch.binding.diagnostics())   # usable / reason / shipped_core
 ```
 
 ## License
