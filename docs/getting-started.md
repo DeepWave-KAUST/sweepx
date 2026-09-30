@@ -37,7 +37,7 @@ from sweep.propagator.torch import PropTorch
 from sweep.signal import ricker
 
 dev    = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=2e-3, dev=dev)
+solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=2e-3, device=dev)
 
 wavelet   = ricker(np.arange(600) * 2e-3 - 0.12, f=10.0).astype(np.float32)
 sources   = np.array([[64, 2]], dtype=np.int64)
