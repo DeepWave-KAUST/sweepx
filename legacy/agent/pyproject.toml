@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sweep-agent"
-version = "0.0.4"
+version = "0.0.5"
 description = "Offline-LLM natural-language control layer for the sweep stack. Routes user intent (chat / files) through a local LLM (vLLM/Ollama/llama.cpp) into validated sweep-tasks specs and executes them."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,7 +33,7 @@ classifiers = [
 # when it's missing, so everything else keeps working. Install sweep-tasks from
 # source for the full FWI pipeline (see README).
 dependencies = [
-    "sweep-solver>=0.1,<0.3",
+    "sweep-solver>=0.1,<0.4",
     "pydantic>=2.0",
     "httpx>=0.25",
     "PyYAML>=6.0",
