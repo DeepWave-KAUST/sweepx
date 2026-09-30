@@ -9,8 +9,8 @@ want to work — Python, or plain language.
 pip install sweepx
 ```
 
-That pulls the engine ([sweep-solver](../solver/)) and the natural-language layer
-([sweep-agent](../agent/)). **Import as `sweep`**, not `sweepx` — same pattern as
+That pulls the engine ([sweep-solver](solver/index.md)) and the natural-language layer
+([sweep-agent](agent/index.md)). **Import as `sweep`**, not `sweepx` — same pattern as
 `scikit-learn` → `sklearn`:
 
 ```python
@@ -60,7 +60,7 @@ loss.backward()          # vp.grad is a plain torch Tensor — feed any optimize
 
 ## …or say it in plain language
 
-[sweep-agent](../agent/) turns a sentence into a validated run, driven by a **local**
+[sweep-agent](agent/index.md) turns a sentence into a validated run, driven by a **local**
 LLM (Ollama on a Mac, vLLM on a GPU node):
 
 ```bash
@@ -72,14 +72,14 @@ sweep-agent chat
 
 <div class="grid cards" markdown>
 
--   :material-waves: __[Solver](../solver/)__
+-   :material-waves: __[Solver](solver/index.md)__
 
     ---
 
     Equations, propagators, backends, boundary-saving — and 26 runnable
     notebooks under [Examples](../solver/examples/).
 
--   :material-message-processing-outline: __[Agent](../agent/)__
+-   :material-message-processing-outline: __[Agent](agent/index.md)__
 
     ---
 

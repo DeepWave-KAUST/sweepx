@@ -51,6 +51,12 @@ hide:
     <div class="sweep-new__desc">The wheel carries the compiled kernels, so <code>impl='c'</code> runs straight after <code>pip install</code> — no nvcc, no first-use build, one wheel for any PyTorch version.</div>
   </a>
 
+  <a class="sweep-new__card" href="solver/notebooks/29_wavefield_visco_acoustic/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-08</span></div>
+    <div class="sweep-new__name">Attenuation, with gradients</div>
+    <div class="sweep-new__desc">Near-constant <em>Q</em> in 2-D on the fractional-Laplacian form of Zhu &amp; Harris (2014), with a compiled backend and a per-edge free surface. <code>vp</code> <em>and</em> <code>Q</code> are both invertible.</div>
+  </a>
+
   <a class="sweep-new__card" href="solver/user-guide/equations/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">Elastic TTI in 3-D</div>
@@ -73,12 +79,6 @@ hide:
     <div class="sweep-new__hd"><span class="sweep-new__badge">agent 0.0.3</span><span class="sweep-new__date">2026-08</span></div>
     <div class="sweep-new__name">Natural-language control</div>
     <div class="sweep-new__desc">Natural-language control on a plain <code>pip install</code>: forward modelling (acoustic <em>and</em> elastic) plus benchmark models, no <code>sweep-tasks</code> needed.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/notebooks/24_wavefield_per_edge_free_surface/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
-    <div class="sweep-new__name">Per-edge free surface</div>
-    <div class="sweep-new__desc">Turn the free surface on for any subset of faces, elastic included — with fp16 boundary storage and a body-force <code>rho</code> gradient fix.</div>
   </a>
 
 </div>
