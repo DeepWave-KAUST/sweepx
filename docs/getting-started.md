@@ -18,14 +18,14 @@ import sweep
 print(sweep.__version__)
 ```
 
-Python 3.10+. The pure-Python torch / JAX backends need nothing else; the
-native-CUDA backend (`impl='c'`) is JIT-compiled against your own PyTorch on
-first use and needs a CUDA GPU with `nvcc >= 12.4`:
+Python 3.10+. The wheel ships a prebuilt CUDA core, so the native-CUDA backend
+(`impl='c'`) runs straight after install with any PyTorch version: no nvcc, no
+compile step, just an NVIDIA GPU and driver. The pure-Python torch / JAX backends
+need nothing else.
 
 ```python
 import sweep
-print(sweep.is_torch_binding_available())   # torch + CUDA GPU + nvcc present?
-sweep.precompile()                          # optional: build it now (~3-5 min, then cached)
+print(sweep.is_torch_binding_available())   # torch + CUDA GPU + a fitting core?
 ```
 
 ## Your first forward model
