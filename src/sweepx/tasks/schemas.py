@@ -497,7 +497,10 @@ class PhysicsSpec(_Forbid):
     spatial_order: int = 8
     abcn: int = 20
     free_surface: bool = False
-    pml_type: str = "cpmlr"
+    # None = the equation's own PML (sweep's ``default_pml_type``): every
+    # equation ships one, and sweep refuses any other. Set it only to pick
+    # Acoustic1st's alternative, 'spml'.
+    pml_type: str | None = None
     source_type: list[str] = Field(default_factory=lambda: ["h1"])
     receiver_type: list[str] = Field(default_factory=lambda: ["h1"])
     # Irregular free-surface topography for curvilinear-grid equations

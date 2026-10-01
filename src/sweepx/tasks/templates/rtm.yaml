@@ -77,7 +77,6 @@ physics:
   spatial_order: 6
   abcn: 20
   free_surface: true
-  pml_type: cpmlr
   source_type: ["h1"]
   receiver_type: ["h1"]
 

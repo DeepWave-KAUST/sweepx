@@ -78,7 +78,6 @@ physics:
   spatial_order: 8                  # FD order 2/4/6/8
   abcn: 20                          # PML thickness [cells]
   free_surface: false               # true for marine (z=0 free surface)
-  pml_type: cpmlr
   source_type: [h1]                 # pressure / hydrophone component
   receiver_type: [h1]
   # topography: /path/surface_row.npy   # curvilinear free-surface topo
