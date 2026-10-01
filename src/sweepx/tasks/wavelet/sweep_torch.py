@@ -926,7 +926,6 @@ def build_sweep_solver(config: WaveletInversionConfig, data: PreparedWaveletData
         receiver_type=["h1"],
         abcn=config.abcn,
         free_surface=config.free_surface,
-        pml_type="cpmlr",
     )
     if config.backend == "cuda":
         cuda_options = CUDAOptions(

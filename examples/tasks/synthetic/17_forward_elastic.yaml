@@ -1,25 +1,17 @@
 # Elastic forward modelling — P and S in one record.
 #
-# Teaches:  the velocity-stress elastic equation, and the one configuration
-#           coupling that no other example exposes: `pml_type` has to match the
-#           equation's GRID, not just be a boundary you like the sound of.
+# Teaches:  the velocity-stress elastic equation: several models, and source /
+#           receiver components that are not `h1`.
 # Needs:    nothing — every model is built in memory, no dataset, no download.
 # Produces: output/record.npy (nshots, nt, nrec, 2) + sources/receivers.
 #
 # Run:
 #   sweep-tasks run examples/synthetic/17_forward_elastic.yaml
 #
-# `pml_type: cpmls` is not decoration. Elastic is solved on a STAGGERED grid,
-# where velocities and stresses live half a cell apart, so its PML needs damping
-# profiles on the half-grid as well as the full grid — eight of them
-# (az, bz, azh, bzh, ax, bx, axh, bxh) against the six a collocated equation
-# uses. Leave the default `cpmlr` in place and the run dies mid-step with
-#
-#     ValueError: not enough values to unpack (expected 8, got 6)
-#
-# which is the profile tuple, not anything about your models or geometry. Some
-# equations catch this and say so (`ElasticTTISG requires pml_type='cpmls'`);
-# `Elastic` does not, so it is worth recognising on sight.
+# There is no `pml_type:` below, on purpose. Elastic is solved on a STAGGERED
+# grid, so its PML is the staggered `cpmls` (eight damping profiles, against the
+# six of the collocated `cpmlr` the acoustic equations use). Left unset, every
+# equation gets the one PML it ships; naming another is refused by sweep.
 #
 # The rest of the multi-parameter pattern is the same as 16:
 #   * `models:` lists EVERY model the equation declares — [vp, vs, rho] here.
@@ -82,8 +74,6 @@ physics:
   equation: Elastic
   spatial_order: 8
   abcn: 20
-  pml_type: cpmls           # REQUIRED — see the header. The default `cpmlr`
-                            # only builds the six collocated-grid profiles.
   free_surface: false       # true adds the Rayleigh wave, which dominates
                             # everything else on this geometry
   source_type: [sxx, szz]   # explosive = equal normal stresses; no `h1` exists

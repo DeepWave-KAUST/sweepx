@@ -77,7 +77,6 @@ physics:
                             # ample for an 18 Hz source in 2200 m/s (122 m).
   free_surface: false       # true puts a reflecting free surface on top, which
                             # adds the ghost and surface multiples (see 06)
-  pml_type: cpmlr           # the C-PML variant used on the absorbing sides
   source_type: [h1]         # what the source injects and what the receivers
   receiver_type: [h1]       # record. `h1` is pressure for the acoustic
                             # equations; elastic ones accept vx / vz / p / …

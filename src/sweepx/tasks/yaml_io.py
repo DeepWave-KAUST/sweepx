@@ -145,7 +145,6 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
             "spatial_order": 8,
             "abcn": 20,
             "free_surface": True,
-            "pml_type": "cpmlr",
             "source_type": ["h1"],
             "receiver_type": ["h1"],
         },

@@ -140,7 +140,6 @@ physics:
   spatial_order: 6                  # FD order 2/4/6/8 (6 = sweet spot)
   abcn: 20                          # PML thickness [cells]
   free_surface: true                # z=0 free surface (marine)
-  pml_type: cpmlr                   # C-backend complex-frequency PML
   source_type: ["h1"]               # hydrophone / pressure component
   receiver_type: ["h1"]
   # topography: /path/surface_row.npy   # curvilinear free-surface topo (optional)

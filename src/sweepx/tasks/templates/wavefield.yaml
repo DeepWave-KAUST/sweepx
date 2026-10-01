@@ -56,7 +56,6 @@ physics:
   abcn: 20                        # absorbing-boundary width in cells
   free_surface: false             # true = pressure-release at z=0: adds the
                                   # surface ghost and the surface multiples
-  pml_type: cpmlr
   source_type: [h1]
   receiver_type: [h1]
 
