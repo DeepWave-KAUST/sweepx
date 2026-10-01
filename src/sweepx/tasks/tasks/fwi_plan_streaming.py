@@ -1633,7 +1633,7 @@ class PlanStreamingFWIMixin:
             valid_mask_local = None  # set in the per-shot per-CRG branch below
             if encoding_on:
                 # ----- encoded supershot path (1 GPU, B=1) -----
-                # source-encoding (sweep IO contract geophyai 24e91c9): sources
+                # source-encoding (sweep IO contract geophyai 49ca6bf1): sources
                 # (1, nsrc, 3), receivers batch 1, wavelet (nsrc, nt) [per-source signed].
                 sources_super = sources_grid[None, :, :].astype(np.int64)
                 receivers_super = recv_grid[None, :, :].astype(np.int64)
@@ -1682,7 +1682,7 @@ class PlanStreamingFWIMixin:
                     dummy_slice = False
                 B_local = local_end - local_start
                 sources_local = sources_grid[local_start:local_end].astype(np.int64)
-                # sweep IO contract (geophyai 24e91c9): per-shot multi-shot uses
+                # sweep IO contract (geophyai 49ca6bf1): per-shot multi-shot uses
                 # 2-D sources (nshots, ndim) + 2-D per-shot wavelet (nshots, nt);
                 # 3-D (1, nsrc, ndim) is reserved for source-encoding mode.
                 sources_super = sources_local                                      # (B_local, 3)
@@ -1925,7 +1925,7 @@ class PlanStreamingFWIMixin:
                 # No source_encoding= on any solver call: sweep reads the mode
                 # off the source shape built above, (1, nsrc, 3) encoded and
                 # (B_local, 3) per shot. The keyword left the API in geophyai
-                # 24e91c9; solvers up to 0.2 ignored it, 0.3.0 rejects it.
+                # 49ca6bf1; solvers up to 0.2 ignored it, 0.3.0 rejects it.
                 syn = solver(
                     wavelet_super, sources_super, receivers_super,
                     models=models,

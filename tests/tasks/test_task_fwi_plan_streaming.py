@@ -445,7 +445,7 @@ def test_plan_streaming_fwi_data_mask_runs_end_to_end(tmp_path):
 
 @pytest.mark.parametrize("path", ["encoded", "per_shot", "per_crg"])
 def test_plan_streaming_solver_mode_comes_from_source_shape(tmp_path, monkeypatch, path):
-    """sweep has no ``source_encoding=`` keyword since geophyai 24e91c9: the source
+    """sweep has no ``source_encoding=`` keyword since geophyai 49ca6bf1: the source
     shape selects the mode. Solvers up to 0.2 ignored the keyword, sweep-solver
     0.3.0 rejects it, which failed every plan-streaming run. The call is checked
     directly so a stray keyword fails on any installed solver, and the shape that
