@@ -85,7 +85,7 @@ class BuildFwiParams(BaseModel):
     free_surface: bool = Field(False)
     source_type: list[str] | None = Field(None, description="Source field components; None = equation defaults (Elastic→sxx/szz, etc.).")
     receiver_type: list[str] | None = Field(None, description="Receiver field components; None = equation defaults.")
-    pml_type: str | None = Field(None, description="PML kind; None = equation default (acoustic→cpmlr, Elastic/VTI-3D→cpmls).")
+    pml_type: str | None = Field(None, description="PML kind. Leave None: each equation has one (acoustic→cpmlr, Elastic/VTI-3D→cpmls) and sweep refuses any other.")
     backend_impl: Literal["eager", "c"] = Field("eager")
     use_compile: bool = Field(False, description="torch.compile the eager step (needs sweep.torch + inductor). Default off.")
 
