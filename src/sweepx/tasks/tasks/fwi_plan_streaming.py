@@ -84,7 +84,7 @@ class PlanStreamingFWIMixin:
         every iteration draws a shared-shots batch from a
         ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`,
         encodes it as a ±1-signed supershot, runs one ``Acoustic3D``
-        forward + adjoint with ``source_encoding=True``, and steps the
+        forward + adjoint on that supershot, and steps the
         optimizer. Per-shot multi-GPU CRG mode (without encoding) is not
         yet wired and will raise a clear error.
 
@@ -151,8 +151,8 @@ class PlanStreamingFWIMixin:
         # B.2 (2026-05-22): per-shot multi-GPU CRG path. When
         # ``source_encoding.enabled=false`` (or absent), the forward loop
         # below loops over the B OBN groups as a per-shot batch
-        # (``solver(..., source_encoding=False)`` with wavelet shape
-        # ``(B_local, 1, nt)``) instead of collapsing them into a ±1
+        # (``(B_local, 3)`` sources, one shot per row, wavelet
+        # ``(B_local, nt)``) instead of collapsing them into a ±1
         # supershot. Under torchrun, each rank gets a contiguous slice of
         # the B batch — ``B_local = ceil(B / world_size)`` shots per rank
         # — and the vp gradient is all-reduce'd after backward.
@@ -1633,7 +1633,7 @@ class PlanStreamingFWIMixin:
             valid_mask_local = None  # set in the per-shot per-CRG branch below
             if encoding_on:
                 # ----- encoded supershot path (1 GPU, B=1) -----
-                # source-encoding (sweep IO contract geophyai 24e91c9): sources
+                # source-encoding (sweep IO contract geophyai 49ca6bf1): sources
                 # (1, nsrc, 3), receivers batch 1, wavelet (nsrc, nt) [per-source signed].
                 sources_super = sources_grid[None, :, :].astype(np.int64)
                 receivers_super = recv_grid[None, :, :].astype(np.int64)
@@ -1682,7 +1682,7 @@ class PlanStreamingFWIMixin:
                     dummy_slice = False
                 B_local = local_end - local_start
                 sources_local = sources_grid[local_start:local_end].astype(np.int64)
-                # sweep IO contract (geophyai 24e91c9): per-shot multi-shot uses
+                # sweep IO contract (geophyai 49ca6bf1): per-shot multi-shot uses
                 # 2-D sources (nshots, ndim) + 2-D per-shot wavelet (nshots, nt);
                 # 3-D (1, nsrc, ndim) is reserved for source-encoding mode.
                 sources_super = sources_local                                      # (B_local, 3)
@@ -1858,7 +1858,7 @@ class PlanStreamingFWIMixin:
                             _obs_j[..., :obs_prepad_samples] = 0.0
                     _syn_j = solver(
                         wavelet_super[_j:_j + 1], sources_super[_j:_j + 1],
-                        _recv_j, models=models, source_encoding=False,
+                        _recv_j, models=models,
                     )
                     _obs_4d = _obs_j.permute(0, 2, 1).unsqueeze(-1)
                     _w = _win_j(_j, _recv_j)
@@ -1922,9 +1922,13 @@ class PlanStreamingFWIMixin:
                         syn = _syn_j.detach()
                         obs_super = _obs_j
             else:
+                # No source_encoding= on any solver call: sweep reads the mode
+                # off the source shape built above, (1, nsrc, 3) encoded and
+                # (B_local, 3) per shot. The keyword left the API in geophyai
+                # 49ca6bf1; solvers up to 0.2 ignored it, 0.3.0 rejects it.
                 syn = solver(
                     wavelet_super, sources_super, receivers_super,
-                    models=models, source_encoding=encoding_on,
+                    models=models,
                 )
             _csync()
             t_fwd = time.perf_counter() - t

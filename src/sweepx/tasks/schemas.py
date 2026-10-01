@@ -1035,7 +1035,8 @@ class SourceEncodingSpec(_Forbid):
        wavelet times its sign), receivers shape ``(1, n_rec, 3)``, and
        obs is the signed sum ``Σ_i sign_i · obs_i`` of shape
        ``(1, n_rec, nt)``.
-    4. Calls the propagator once with ``source_encoding=True``.
+    4. Calls the propagator once; the ``(1, batchsize, 3)`` source array
+       is what puts sweep in source-encoding mode.
 
     One forward + adjoint per iter regardless of ``batchsize``: the OBN
     1-GPU production path. The signs are re-drawn every iter, which
