@@ -82,7 +82,7 @@ class BuildForwardParams(BaseModel):
     free_surface: bool = Field(False, description="Free-surface BC at z=0 (sea surface). False = no free surface.")
     source_type: list[str] | None = Field(None, description="Source field components, e.g. ['sxx','szz']. None = equation defaults (auto).")
     receiver_type: list[str] | None = Field(None, description="Receiver field components. None = equation defaults.")
-    pml_type: str | None = Field(None, description="PML kind. None = equation default (acoustic cpmlr, elastic/VTI-3D cpmls).")
+    pml_type: str | None = Field(None, description="PML kind. Leave None: each equation has one (acoustic cpmlr, elastic/VTI-3D cpmls) and sweep refuses any other.")
     topography: str | None = Field(
         None,
         description="1-D .npy of per-column surface rows (len nx) for irregular free surface; use with equation='AcousticCurvilinear'/'ElasticCurvilinear'. Different from free_surface (flat).",
@@ -108,7 +108,7 @@ class BuildForwardParams(BaseModel):
     # --- Escape hatch -----------------------------------------------------
     extra: dict[str, Any] | None = Field(
         None,
-        description="Deep-merged overrides for ForwardSpec fields not exposed here, e.g. {'physics':{'pml_type':'cpml'}}.",
+        description="Deep-merged overrides for ForwardSpec fields not exposed here, e.g. {'physics':{'abcn':40}}.",
     )
 
 
@@ -196,7 +196,9 @@ def _physics_source_fields(equation: str, source_type: Any, receiver_type: Any, 
     the equation's own defaults (Elastic→sxx/szz + cpmls, VTI3D→sH/sV + cpmls,
     acoustic→h1 + cpmlr). Returns a dict to merge into the physics block. These
     per-equation defaults are what makes elastic / 3-D anisotropic equations run
-    instead of crashing on the schema's plain acoustic defaults."""
+    instead of crashing on the schema's plain acoustic defaults. The PML is
+    filled in explicitly because sweep-tasks before its pml_type fix defaults to
+    'cpmlr' rather than to the equation's own."""
     src_t, rec_t = source_type, receiver_type
     if src_t is None or rec_t is None:
         try:
