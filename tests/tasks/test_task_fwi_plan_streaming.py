@@ -25,6 +25,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from sweep_tasks import TaskRunner, load_task
@@ -440,3 +441,37 @@ def test_plan_streaming_fwi_data_mask_runs_end_to_end(tmp_path):
     loss = np.load(result.task_dir / "output" / "loss.npy")
     assert loss.size == 2
     assert np.all(np.isfinite(loss))
+
+
+@pytest.mark.parametrize("path", ["encoded", "per_shot", "per_crg"])
+def test_plan_streaming_solver_mode_comes_from_source_shape(tmp_path, monkeypatch, path):
+    """sweep has no ``source_encoding=`` keyword since geophyai 24e91c9: the source
+    shape selects the mode. Solvers up to 0.2 ignored the keyword, sweep-solver
+    0.3.0 rejects it, which failed every plan-streaming run. The call is checked
+    directly so a stray keyword fails on any installed solver, and the shape that
+    now carries the mode is pinned for each of the three single-domain paths."""
+    from sweep.propagator.torch import PropTorch
+
+    calls = []
+    forward = PropTorch.forward
+
+    def spy(self, wavelet, sources, receivers, *args, **kwargs):
+        calls.append((np.shape(sources), sorted(kwargs)))
+        return forward(self, wavelet, sources, receivers, *args, **kwargs)
+
+    monkeypatch.setattr(PropTorch, "forward", spy)
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    if path != "encoded":
+        spec.pop("source_encoding")
+    if path == "per_crg":
+        spec["obs"]["plan"]["sampling"]["per_crg_independent"] = True
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / f"{path}.yaml")))
+    assert result.status.state == "success", result.status.error
+    assert calls
+    for shape, kwargs in calls:
+        assert "source_encoding" not in kwargs
+        if path == "encoded":
+            assert len(shape) == 3 and shape[0] == 1    # (1, nsrc, 3): one supershot
+        else:
+            assert len(shape) == 2                       # (nshots, 3): a shot per row

@@ -84,7 +84,7 @@ class PlanStreamingFWIMixin:
         every iteration draws a shared-shots batch from a
         ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`,
         encodes it as a ±1-signed supershot, runs one ``Acoustic3D``
-        forward + adjoint with ``source_encoding=True``, and steps the
+        forward + adjoint on that supershot, and steps the
         optimizer. Per-shot multi-GPU CRG mode (without encoding) is not
         yet wired and will raise a clear error.
 
@@ -151,8 +151,8 @@ class PlanStreamingFWIMixin:
         # B.2 (2026-05-22): per-shot multi-GPU CRG path. When
         # ``source_encoding.enabled=false`` (or absent), the forward loop
         # below loops over the B OBN groups as a per-shot batch
-        # (``solver(..., source_encoding=False)`` with wavelet shape
-        # ``(B_local, 1, nt)``) instead of collapsing them into a ±1
+        # (``(B_local, 3)`` sources, one shot per row, wavelet
+        # ``(B_local, nt)``) instead of collapsing them into a ±1
         # supershot. Under torchrun, each rank gets a contiguous slice of
         # the B batch — ``B_local = ceil(B / world_size)`` shots per rank
         # — and the vp gradient is all-reduce'd after backward.
@@ -1858,7 +1858,7 @@ class PlanStreamingFWIMixin:
                             _obs_j[..., :obs_prepad_samples] = 0.0
                     _syn_j = solver(
                         wavelet_super[_j:_j + 1], sources_super[_j:_j + 1],
-                        _recv_j, models=models, source_encoding=False,
+                        _recv_j, models=models,
                     )
                     _obs_4d = _obs_j.permute(0, 2, 1).unsqueeze(-1)
                     _w = _win_j(_j, _recv_j)
@@ -1922,9 +1922,13 @@ class PlanStreamingFWIMixin:
                         syn = _syn_j.detach()
                         obs_super = _obs_j
             else:
+                # No source_encoding= on any solver call: sweep reads the mode
+                # off the source shape built above, (1, nsrc, 3) encoded and
+                # (B_local, 3) per shot. The keyword left the API in geophyai
+                # 24e91c9; solvers up to 0.2 ignored it, 0.3.0 rejects it.
                 syn = solver(
                     wavelet_super, sources_super, receivers_super,
-                    models=models, source_encoding=encoding_on,
+                    models=models,
                 )
             _csync()
             t_fwd = time.perf_counter() - t
