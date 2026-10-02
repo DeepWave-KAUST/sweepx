@@ -45,16 +45,22 @@ hide:
 <p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
 <div class="sweep-new__grid">
 
+  <a class="sweep-new__card" href="solver/notebooks/30_wavefield_visco_elastic/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.3</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Attenuation, acoustic and elastic</div>
+    <div class="sweep-new__desc">Near-constant <em>Q</em> in 2-D with gradients for every model. New in 0.3.3: <code>ViscoElastic</code>, the generalized standard linear solid SPECFEM2D uses, with <code>Qp</code> and <code>Qs</code> on both backends. It joins the visco-acoustic form of Zhu &amp; Harris (2014).</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/getting-started/installation/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.2</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Install for your GPU and driver</div>
+    <div class="sweep-new__desc">Pick your GPU and driver, copy the matching torch + sweep command, and confirm it with a 15-line run. 0.3.2 also runs eager on any g++, and a wrong <code>pml_type</code> is now a clear error instead of a crash.</div>
+  </a>
+
   <a class="sweep-new__card" href="solver/getting-started/installation/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-09</span></div>
     <div class="sweep-new__name">Prebuilt CUDA core</div>
     <div class="sweep-new__desc">The wheel carries the compiled kernels, so <code>impl='c'</code> runs straight after <code>pip install</code> — no nvcc, no first-use build, one wheel for any PyTorch version.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/notebooks/29_wavefield_visco_acoustic/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-08</span></div>
-    <div class="sweep-new__name">Attenuation, with gradients</div>
-    <div class="sweep-new__desc">Near-constant <em>Q</em> in 2-D on the fractional-Laplacian form of Zhu &amp; Harris (2014), with a compiled backend and a per-edge free surface. <code>vp</code> <em>and</em> <code>Q</code> are both invertible.</div>
   </a>
 
   <a class="sweep-new__card" href="solver/user-guide/equations/">
@@ -64,15 +70,9 @@ hide:
   </a>
 
   <a class="sweep-new__card" href="solver/user-guide/parallel/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
-    <div class="sweep-new__name">Domain decomposition</div>
-    <div class="sweep-new__desc">A model too big for one GPU now splits across several — one tile per rank, a halo per step, and a gradient that is <em>bit-identical</em> to the single-GPU one.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/user-guide/propagators/#memory-saving-features">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.2.0</span><span class="sweep-new__date">2026-08</span></div>
-    <div class="sweep-new__name">Pick how the gradient is stored</div>
-    <div class="sweep-new__desc">Full, boundary or checkpoint — one three-way choice, same on both backends. Plus thinner CPML buffers and a truncated reverse pass for steady-state objectives.</div>
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-09</span></div>
+    <div class="sweep-new__name">Domain decomposition, faster</div>
+    <div class="sweep-new__desc">A model too big for one GPU splits across several — one tile per rank, a halo per step, and a gradient <em>bit-identical</em> to the single-GPU one. 0.3.0 made it faster: up to 3.99&times; on 2-D elastic and 1.56&times; on 3-D elastic.</div>
   </a>
 
   <a class="sweep-new__card" href="agent/">
