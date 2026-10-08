@@ -1082,10 +1082,10 @@ scripts and trying to map field names:
 
 - [`docs/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
   build-plan / run reference (covers all datasets).
-- [`examples/field/viking/*.yaml`](../../../examples/field/viking/) — every
+- [`examples/field/viking/*.yaml`](https://github.com/DeepWave-KAUST/sweep-tasks/tree/main/examples/field/viking) — every
   Viking task YAML, including the 6-stage and 8-stage FWI ladders
   and the legacy-matching RTM.
-- [`examples/sbatch/viking_*.sbatch`](../../../examples/sbatch/) —
+- [`examples/sbatch/viking_*.sbatch`](https://github.com/DeepWave-KAUST/sweep-tasks/tree/main/examples/sbatch) —
   matching ibex sbatch templates (cluster users only).
 - `fwi_workflow-dev/docs/datasets/viking/README.md` — legacy reference
   (number-for-number equivalent through Step 6).
