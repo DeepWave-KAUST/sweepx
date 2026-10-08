@@ -223,6 +223,11 @@
 [data-sweep-d] .md-header__button.md-logo { padding: 0.2rem 0.3rem 0.2rem 0; }
 [data-sweep-d] .md-header__button.md-logo img,
 [data-sweep-d] .md-header__button.md-logo svg { width: 32px; height: 32px; }
+/* Repo link: the per-section name can be "DeepWave-KAUST/sweep-agent", which
+   Material's fixed 11.7rem cuts to "…/sweep-a…". */
+@media screen and (min-width: 60em) {
+  [data-sweep-d] .md-header__source { width: 13.5rem; max-width: 13.5rem; }
+}
 
 /* Tabs row — also solid (no transparency) so it doesn't reveal page
    content underneath when the user scrolls. */

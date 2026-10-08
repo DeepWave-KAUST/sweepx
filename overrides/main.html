@@ -4,6 +4,7 @@
    · Inter Tight font load (Material's font: block doesn't ship this one)
    · A data-attribute on <html> so our CSS scopes cleanly
    · The optional top announcement bar
+   · Per-repo cache of the header repo stats (see partials/source.html)
    ───────────────────────────────────────────────────────────────── #}
 {% extends "base.html" %}
 
@@ -16,6 +17,25 @@
 
   <script>
     document.documentElement.setAttribute('data-sweep-d', 'true');
+  </script>
+
+  {#- Material caches the repo's stars/forks in sessionStorage under ONE key,
+      so with a per-section repo link (partials/source.html) Agent would show
+      Solver's numbers. Keep one cached entry per repo and swap it in before
+      the bundle reads the key. -#}
+  {%- set section = (page.url or "").split("/")[0] if page else "" -%}
+  {%- set repo = (config.extra.section_repos or {}).get(section) or config.repo_name -%}
+  <script>
+    (function (repo) {
+      try {
+        var s = sessionStorage, k = __md_scope.pathname + ".__source";
+        var was = s.getItem(k + ".repo"), facts = s.getItem(k);
+        if (was && facts) s.setItem(k + "@" + was, facts);
+        var mine = s.getItem(k + "@" + repo);
+        if (mine) s.setItem(k, mine); else s.removeItem(k);
+        s.setItem(k + ".repo", repo);
+      } catch (e) {}
+    })({{ repo | tojson }});
   </script>
 {% endblock %}
 
