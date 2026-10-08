@@ -180,7 +180,7 @@ def new_template(
     equation: str | None = None,
     *,
     backend: str = "eager",
-    memory: str = "full",
+    memory: str | None = None,
     storage: str = "gpu",
     compile: bool = False,
 ) -> dict[str, Any]:
@@ -194,7 +194,7 @@ def new_template(
 
     Optional kwargs scaffold the backend block:
       backend: 'eager' | 'c'                    (default: 'eager')
-      memory:  'full' | 'boundary' | 'ckpt'     (only valid when backend='c'; default: 'full')
+      memory:  'full' | 'boundary' | 'ckpt'     (only valid when backend='c'; default: 'boundary')
       storage: 'gpu' | 'cpu' | 'disk'           (relevant when memory in {boundary, ckpt}; default: 'gpu')
       compile: bool                             (only valid when backend='eager'; default: False)
 
@@ -206,6 +206,10 @@ def new_template(
         raise KeyError(
             f"Unknown task_type '{task_type}'. Known: {sorted(known)}"
         )
+    if memory is None:
+        # The backend's own default: boundary saving on 'c', and eager has no
+        # memory selector here at all.
+        memory = "boundary" if backend == "c" else "full"
     _validate_backend_kwargs(backend, memory, storage, compile)
 
     if task_type in _FILE_TEMPLATES:
@@ -261,6 +265,8 @@ def _build_backend_block(backend: str, memory: str, storage: str, compile: bool)
     # backend == "c"
     block = {"impl": "c", "cuda_options": {"memory": None}}
     if memory == "full":
+        # Spelled out: a missing memory block now means boundary saving.
+        block["cuda_options"]["memory"] = {"strategy": "full"}
         return block
     if memory == "boundary":
         boundary_block: dict[str, Any] = {"storage": storage}

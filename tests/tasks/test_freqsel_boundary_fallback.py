@@ -48,8 +48,20 @@ def test_everything_else_survives_the_copy():
     assert out.impl == "c"
 
 
-def test_no_boundary_config_is_a_clear_error():
-    """Silently doing nothing here would look like the fallback had worked."""
-    be = BackendSpec(impl="c")
+@pytest.mark.parametrize("be", [
+    BackendSpec(impl="c", use_ckpt=True),
+    BackendSpec(impl="c", cuda_options={"memory": {"strategy": "ckpt"}}),
+    BackendSpec(impl="c", cuda_options={"memory": {"strategy": "full"}}),
+])
+def test_no_boundary_config_is_a_clear_error(be):
+    """Silently doing nothing here would look like the fallback had worked.
+
+    A bare impl='c' backend is not such a case any more: it defaults to
+    boundary saving, so the fallback applies to it like to any other."""
     with pytest.raises(ValueError, match="cuda_options.memory.boundary"):
         backend_with_boundary_storage(be, "cpu")
+
+
+def test_default_backend_falls_back_too():
+    out = backend_with_boundary_storage(BackendSpec(impl="c"), "cpu")
+    assert out.cuda_options.memory.boundary.storage == "cpu"

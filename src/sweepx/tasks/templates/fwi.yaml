@@ -153,7 +153,7 @@ backend:
   # ckpt_chunks: 100
   cuda_options:                     # only read when impl == c
     memory:
-      # strategy: null(=store-all, fastest, biggest VRAM) | boundary | ckpt
+      # strategy: boundary (default) | full (store-all: fastest, biggest VRAM) | ckpt
       strategy: boundary            # store only PML boundary; recompute interior
       boundary:
         storage: gpu                # "gpu" | "cpu" | "disk"

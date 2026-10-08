@@ -227,7 +227,7 @@ def test_new_template_cuda_full(tmp_path):
     yaml_path.write_text(yaml.safe_dump(template, sort_keys=False))
     spec = load_task(yaml_path)
     assert spec.backend.impl == "c"
-    assert spec.backend.cuda_options.memory is None
+    assert spec.backend.cuda_options.memory.strategy == "full"
 
 
 def test_new_template_cuda_boundary_gpu(tmp_path):

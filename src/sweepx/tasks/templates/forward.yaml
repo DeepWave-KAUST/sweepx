@@ -92,7 +92,7 @@ backend:
   # impl: c
   # cuda_options:
   #   memory:
-  #     strategy: boundary            # null(store-all) | boundary | ckpt
+  #     strategy: boundary            # boundary (default) | full (store-all) | ckpt
   #     boundary: {storage: gpu, storage_dtype: fp32}  # storage gpu|cpu|disk;
   #                                                     # dtype fp32|fp16|bf16|int8
   #     # OR: memory: {strategy: ckpt, ckpt: {mode: chunk, chunks: 100}}  # mode: chunk|recursive

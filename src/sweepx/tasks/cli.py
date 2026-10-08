@@ -346,7 +346,7 @@ def _cmd_new(args) -> int:
                 text,
                 count=1,
             )
-        if (args.backend != "eager" or args.memory != "full"
+        if (args.backend != "eager" or args.memory is not None
                 or args.storage != "gpu" or args.compile):
             print(
                 "note: --backend/--memory/--storage/--compile are documented "
@@ -1370,8 +1370,8 @@ def main(argv: list[str] | None = None) -> int:
     new_parser.add_argument("--equation", default=None, help="Equation name override (e.g. Acoustic)")
     new_parser.add_argument("--backend", choices=["eager", "c"], default="eager",
                             help="Propagator backend (default: eager)")
-    new_parser.add_argument("--memory", choices=["full", "boundary", "ckpt"], default="full",
-                            help="CUDA memory strategy (only valid with --backend c; default: full)")
+    new_parser.add_argument("--memory", choices=["full", "boundary", "ckpt"], default=None,
+                            help="CUDA memory strategy (only valid with --backend c; default: boundary)")
     new_parser.add_argument("--storage", choices=["gpu", "cpu", "disk"], default="gpu",
                             help="Memory storage location for boundary / ckpt (default: gpu)")
     new_parser.add_argument("--compile", action="store_true",
