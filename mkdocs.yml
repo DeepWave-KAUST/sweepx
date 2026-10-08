@@ -59,6 +59,11 @@ theme:
 
 extra:
   generator: false
+  # Repo shown top-right, per top-level section (first URL segment). Anything
+  # not listed falls back to repo_url/repo_name above (the umbrella).
+  section_repos:
+    solver: DeepWave-KAUST/sweep
+    agent: DeepWave-KAUST/sweep-agent
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/DeepWave-KAUST
