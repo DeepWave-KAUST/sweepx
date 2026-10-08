@@ -35,8 +35,8 @@ dependencies, so you keep the same `pip install sweepx`.
 
 | Package | What it does |
 |---|---|
-| `sweep-tasks` | Production **FWI / LSRTM runner** — spec schemas, YAML configs, losses, optimizers, multi-GPU, IO. |
-| `sweep-loss` | Misfit / loss functions. |
+| [`sweep-tasks`](https://github.com/DeepWave-KAUST/sweep-tasks) | Production **FWI / LSRTM runner** — spec schemas, YAML configs, losses, optimizers, multi-GPU, IO. [Docs](https://sweepx.deepwave.group/tasks/) |
+| [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) | Misfit / loss functions for FWI — two dozen, from L2 to optimal transport. [Docs](https://sweepx.deepwave.group/loss/) |
 | `sweep-nn` | Neural reparameterizations (INR / hash / SIREN encoders). |
 | `sweep-tomo` | First-arrival **traveltime tomography** (eikonal + SIRT / FATT). |
 | *(planned)* | `sweep-io`, `sweep-viz`, `sweep-preproc`, `sweep-opt`. |

@@ -5,7 +5,7 @@ Copy this into a new `sweep-*` package so its docs match the ecosystem. The
 in the sweepx umbrella (`../mkdocs.yml`, `../overrides/`, `../docs/stylesheets/`)
 and is applied at build time. Packages carry **content only**.
 
-## Add a package to the docs in 5 steps
+## Add a package to the docs in 6 steps
 
 1. Copy `docs/` and `mkdocs.yml` from here into your package repo.
 2. Replace the placeholders everywhere:
@@ -17,8 +17,17 @@ and is applied at build time. Packages carry **content only**.
    ```yaml
    - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
    ```
-5. Make sure the docs build env can `pip install PACKAGE_NAME` — mkdocstrings
-   imports the package to render its API.
+5. In the same file, map the section to its repo under `extra.section_repos`, so
+   the top-right GitHub link on those pages names the package, not sweepx:
+   ```yaml
+   section_repos:
+     tasks: DeepWave-KAUST/sweep-tasks
+   ```
+6. Make sure the docs build env can import the package — mkdocstrings imports it
+   to render its API. `pip install PACKAGE_NAME` in `.github/workflows/docs.yml`
+   if it is on PyPI; if not, install it from git (`--no-deps` when its own
+   dependencies are not public, as sweep-tasks does) and add its API modules to
+   the import check there.
 
 That's it. Do NOT add a theme, plugins, or mkdocstrings options to the
 package's `mkdocs.yml`; keeping them out is what keeps every package identical.
