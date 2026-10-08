@@ -7,7 +7,7 @@ required runtime dependencies.  The importable Python name is `sweep_loss`
 ## From source (recommended while we are pre-release)
 
 ```bash
-git clone <repo-url> sweep-loss
+git clone https://github.com/DeepWave-KAUST/sweep-loss.git
 cd sweep-loss
 pip install -e .
 ```
