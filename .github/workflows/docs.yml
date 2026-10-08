@@ -72,12 +72,21 @@ jobs:
           # that is how v0.2.0 shipped with the umbrella still resolving 0.1.0,
           # and the only symptom was mkdocstrings failing to collect a class that
           # the API page documents. Say so here instead.
+          # sweep-tasks is not on PyPI and depends on companions that are not
+          # public yet (sweep-io, sweep-nn), so install it from git WITHOUT deps
+          # plus the few its API pages import. mkdocstrings only renders
+          # runner / yaml_io / schemas, which import none of the companions.
+          # sweep-loss has no API page, so it is not installed at all.
+          pip install pydantic PyYAML scipy matplotlib
+          pip install --no-deps "sweep-tasks @ git+https://github.com/DeepWave-KAUST/sweep-tasks@main"
           python - <<'PY'
           import importlib, sys
           from importlib.metadata import version
-          print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"))
+          print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"),
+                "| sweep-tasks", version("sweep-tasks"))
           print("sweep imported from", importlib.import_module("sweep").__file__)
-          for mod in ("sweep", "sweep.parallel", "sweep_agent"):
+          for mod in ("sweep", "sweep.parallel", "sweep_agent",
+                      "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas"):
               try:
                   importlib.import_module(mod)
               except Exception as exc:
@@ -85,12 +94,6 @@ jobs:
                            f"reference it, so a resolver downgrade would fail later "
                            f"with an unreadable mkdocstrings error")
           PY
-          # NOTE: sweep-tasks is still a PRIVATE repo, so neither pip nor
-          # multirepo can reach it from CI. Its Tasks tab is commented out in
-          # mkdocs.yml — re-enable both (here and there) once sweep-tasks is
-          # public or on PyPI. Until then:
-          #   pip install sweep-tasks          # when on PyPI, or
-          #   pip install "git+https://x-access-token:${GH_TOKEN}@github.com/DeepWave-KAUST/sweep-tasks@main"
 
       - name: Build site (multirepo pulls the package docs)
         run: mkdocs build
