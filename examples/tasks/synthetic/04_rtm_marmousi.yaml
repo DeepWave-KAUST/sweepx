@@ -4,7 +4,7 @@
 #           inverting one, plus the imaging knobs that decide what the picture
 #           looks like (illumination normalisation, Laplacian post-filter).
 # Needs:    nothing (models from `sweep.datasets`).
-# Produces: output/image.npy + a migrated-image PNG.
+# Produces: output/rtm_image.npy + migrated-image PNGs.
 #
 # Run:
 #   sweep-tasks run examples/synthetic/04_rtm_marmousi.yaml

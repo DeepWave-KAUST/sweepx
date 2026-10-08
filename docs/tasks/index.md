@@ -12,13 +12,18 @@ figures written per run.
 Installed with `pip install sweep-tasks` (also bundled by `pip install sweepx`)
 → `import sweep_tasks`.
 
+![Marmousi FWI](examples/figures/02_vp_final.png)
+
+*Marmousi-II, 200 epochs of FWI from a smoothed start — one YAML, one command
+([example 02](examples/fwi-single.md)).*
+
 <div class="grid cards" markdown>
 
 -   :material-rocket-launch-outline: __[Getting started](getting-started/installation.md)__
 
     ---
 
-    Install, then run a Marmousi FWI in two commands — nothing to download.
+    Install, then run a Marmousi FWI with one command — nothing to download.
 
 -   :material-book-open-variant-outline: __[User guide](user-guide/index.md)__
 
@@ -30,7 +35,7 @@ Installed with `pip install sweep-tasks` (also bundled by `pip install sweepx`)
 
     ---
 
-    Synthetic (no downloads) and field (SEG-Y) task configs.
+    One page per task — forward, FWI, iFWI, RTM/LSRTM, frequency selection, elastic — plus a field (SEG-Y) walkthrough.
 
 -   :material-api: __[API reference](api/index.md)__
 

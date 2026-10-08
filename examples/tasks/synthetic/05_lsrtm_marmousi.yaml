@@ -3,7 +3,8 @@
 # Teaches:  `task_type: lsrtm` — inverting for REFLECTIVITY at a fixed
 #           background velocity, and how it differs from both RTM and FWI.
 # Needs:    nothing (models from `sweep.datasets`).
-# Produces: output/reflectivity.npy, loss.npy, per-epoch QC.
+# Produces: output/reflectivity.npy, loss.npy + loss.png, and a reflectivity
+#           snapshot every `show_every` epochs under output/epochs/.
 #
 # Run:
 #   sweep-tasks run examples/synthetic/05_lsrtm_marmousi.yaml

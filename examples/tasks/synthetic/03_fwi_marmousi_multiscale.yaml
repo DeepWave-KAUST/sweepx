@@ -37,7 +37,7 @@
 #   low-wavenumber RMSE (both smoothed sigma=8 cells)  184.9, a 42.5%
 #                  improvement on the starting model
 #   left-half two-way traveltime error at 2 km: -160 ms (init) -> -13 ms
-# See docs/datasets/marmousi/README.md for the figures and for how to check
+# See docs/examples/fwi-multiscale.md for the figures and for how to check
 # your own run against these numbers.
 
 task_type: fwi

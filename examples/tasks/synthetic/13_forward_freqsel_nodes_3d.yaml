@@ -8,7 +8,7 @@
 #           download cached under ~/.cache/sweep-datasets (CC-BY-4.0). On a
 #           cluster whose compute nodes have no outbound network, run this once
 #           on a login node or pre-stage $SWEEP_DATASETS_CACHE.
-# Produces: output/record.npy (1.6 GB) + sources.npy + receivers.npy.
+# Produces: output/record.npy (1.84 GB) + sources.npy + receivers.npy.
 #
 # Run (in order, from the repo root — see 11 on why $RUNS is what it is):
 #   RUNS=examples/synthetic/sweep_runs

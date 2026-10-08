@@ -16,7 +16,7 @@
 # equation before a 3-hour job finds out for you.
 #
 # Why it exists at all: every other example here pins `equation: Acoustic` or
-# `Acoustic3D`, which is two of the 36 this build registers. The rest —
+# `Acoustic3D`, which is two of the 39 this build registers. The rest —
 # `Elastic`, the VTI/TTI family, `ViscoAcoustic`, the DAS equations — differ in
 # what they want in `models:` and what `receiver_type:` can ask for, and that
 # list is a property of the build, not of this repo. Reading it out of the
@@ -37,12 +37,12 @@
 #   sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
 #       --override action=describe_equation --override target=Elastic
 #
-# Reference (RTX 6000 Ada, cpu device): 5.6 s, 36 rows. Only THREE of those 36
-# take vp alone — `Acoustic`, `Acoustic3D`, `AcousticCurvilinear`. Everything
-# else is multi-parameter, and the model list is not guessable: `Elastic` wants
-# [vp, vs, rho], `AcousticVTI` wants [vp, epsilon, delta], `ViscoAcoustic` wants
-# [vp, Q, omega], `ElasticTTI` wants eight models. That is the point of asking
-# the solver rather than a README.
+# Reference (RTX 6000 Ada, cpu device): 5.6 s, 39 rows on sweep-solver 0.3.5.
+# Only THREE of those 39 take vp alone — `Acoustic`, `Acoustic3D`,
+# `AcousticCurvilinear`. Everything else is multi-parameter, and the model list
+# is not guessable: `Elastic` wants [vp, vs, rho], `AcousticVTI` wants [vp,
+# epsilon, delta], `ViscoAcoustic` wants [vp, Q, omega], `ElasticTTI` wants
+# eight models. That is the point of asking the solver rather than a README.
 
 task_type: introspect
 output_dir: ./sweep_runs

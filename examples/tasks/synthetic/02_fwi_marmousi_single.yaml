@@ -19,7 +19,7 @@
 #   misfit         1.592e-02 -> 1.564e-04 (min, epoch 115) -> 2.575e-04 (end)
 #   RMSE vs true   357.3 (init) -> 270.6
 #   perturbation correlation with the true update   r = 0.700
-# See docs/datasets/marmousi/README.md for the figures and for how to check
+# See docs/examples/fwi-single.md for the figures and for how to check
 # your own run against these numbers.
 
 task_type: fwi

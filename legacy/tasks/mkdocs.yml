@@ -24,7 +24,17 @@ nav:
       - CLI workflow: cli_workflow.md
   - Examples:
       - examples/index.md
-      - Marmousi: datasets/marmousi/README.md
-      - Viking: datasets/viking/README.md
+      - Forward modelling: examples/forward.md
+      - FWI, single-scale: examples/fwi-single.md
+      - FWI, multiscale: examples/fwi-multiscale.md
+      - iFWI: examples/ifwi.md
+      - RTM and LSRTM: examples/imaging.md
+      - Wavefield snapshots: examples/wavefield.md
+      - Backends and memory: examples/backends.md
+      - Frequency-selection FWI, 2-D: examples/freqsel-2d.md
+      - Frequency-selection FWI, 3-D: examples/freqsel-3d.md
+      - Anisotropic and elastic: examples/multiparameter.md
+      - Introspection: examples/introspect.md
+      - Viking (field data): datasets/viking/README.md
   - API reference:
       - api/index.md
