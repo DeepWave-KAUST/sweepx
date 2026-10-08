@@ -103,9 +103,39 @@ class CkptOptionsModel(_Forbid):
 
 
 class MemoryOptionsModel(_Forbid):
-    strategy: Literal["boundary", "ckpt"] | None = None
+    """Gradient-memory mode for ``impl='c'``: how the backward gets the forward
+    wavefield back.
+
+    ``boundary`` (default, as in sweep itself) saves only the PML slab and
+    reconstructs the interior exactly. ``full`` stores every time step —
+    fastest, and on 2-D Marmousi at nt=10000 about 276 GiB, so only for small
+    grids. ``ckpt`` re-runs the forward from checkpoints.
+    """
+
+    strategy: Literal["full", "boundary", "ckpt"] = "boundary"
     boundary: BoundaryOptionsModel | None = None
     ckpt: CkptOptionsModel | None = None
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def _null_is_default(cls, v):
+        # `strategy: null` asked sweep for its backend default, which on
+        # impl='c' is boundary saving; keep reading it that way.
+        return "boundary" if v is None else v
+
+    @model_validator(mode="after")
+    def _options_match_strategy(self):
+        if self.strategy == "boundary" and self.boundary is None:
+            self.boundary = BoundaryOptionsModel()
+        if self.strategy == "ckpt" and self.ckpt is None:
+            self.ckpt = CkptOptionsModel()
+        if self.strategy != "boundary" and self.boundary is not None:
+            raise ValueError(f"memory.boundary is only read with strategy='boundary', "
+                             f"not {self.strategy!r}.")
+        if self.strategy != "ckpt" and self.ckpt is not None:
+            raise ValueError(f"memory.ckpt is only read with strategy='ckpt', "
+                             f"not {self.strategy!r}.")
+        return self
 
     def to_dataclass(self) -> MemoryOptions:
         return MemoryOptions(
@@ -524,6 +554,16 @@ class BackendSpec(_Forbid):
             raise ValueError("cuda_options is only valid when impl='c'.")
         if self.impl == "c" and self.eager_options is not None:
             raise ValueError("eager_options is only valid when impl='eager'.")
+        # impl='c' with no memory block gets boundary saving, written into the
+        # spec so config_resolved.yaml records what ran. Leaving it to the
+        # solver ran store-all instead: the use_ckpt=False that solver_build
+        # passes in that case reads to sweep as "no memory trick at all".
+        # The legacy use_ckpt flag still selects checkpointing on its own.
+        if self.impl == "c" and not self.use_ckpt:
+            if self.cuda_options is None:
+                self.cuda_options = CUDAOptionsModel()
+            if self.cuda_options.memory is None:
+                self.cuda_options.memory = MemoryOptionsModel()
         return self
 
 

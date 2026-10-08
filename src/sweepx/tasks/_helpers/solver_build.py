@@ -102,9 +102,15 @@ def _build_solver(physics: PhysicsSpec, backend, shape: tuple[int, ...], dh: flo
     # memory options present. With none set, ``use_ckpt=False`` still has to
     # go in, or that same True default turns checkpointing on -- which is how
     # a wavefield task ended up refusing to return a wavefield.
+    #
+    # strategy='full' is spelled the same way, with no memory options at all:
+    # use_ckpt=False alone reads as store-all on both generations, where an
+    # older core has no 'full' in its MemoryOptions.
     import inspect
     _new_mem_api = "memory" in inspect.signature(PropTorch.__init__).parameters
-    _mem_set = getattr(getattr(backend, "cuda_options", None), "memory", None) is not None
+    _mem = getattr(getattr(backend, "cuda_options", None), "memory", None)
+    _full = _mem is not None and _mem.strategy == "full"
+    _mem_set = _mem is not None and not _full
     if backend.use_ckpt:
         prop_kwargs["use_ckpt"] = True
         prop_kwargs["ckpt_chunks"] = backend.ckpt_chunks
@@ -129,7 +135,7 @@ def _build_solver(physics: PhysicsSpec, backend, shape: tuple[int, ...], dh: flo
         )
 
     cuda = (backend.cuda_options.to_dataclass()
-            if backend.cuda_options is not None
+            if backend.cuda_options is not None and not _full
             else None)
     return PropTorch(
         equation,
