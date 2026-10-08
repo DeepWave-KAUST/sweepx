@@ -1,7 +1,7 @@
-{#- Material's repo link, but per section: pages under /solver/ point at the
-    solver repo, /agent/ at the agent repo (see extra.section_repos in
-    mkdocs.yml); everything else keeps the umbrella's repo_url. Used by both
-    the header and the mobile drawer. -#}
+{#- Material's repo link, but per section: pages under a section listed in
+    extra.section_repos (mkdocs.yml) point at that package's repo, e.g.
+    /solver/ at sweep; everything else keeps the umbrella's repo_url. Used by
+    both the header and the mobile drawer. -#}
 {%- set section = (page.url or "").split("/")[0] if page else "" -%}
 {%- set section_repo = (config.extra.section_repos or {}).get(section) -%}
 <a href="{{ 'https://github.com/' ~ section_repo if section_repo else config.repo_url }}" title="{{ lang.t('source') }}" class="md-source" data-md-component="source">
