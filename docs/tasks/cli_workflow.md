@@ -372,7 +372,8 @@ Two things that cost real runs to learn:
 
 A worked synthetic end-to-end — forward, three extractions, three-rung
 inversion, with measured numbers — is examples 11 + 12 (2-D) and 13 + 14 (3-D),
-walked through in [`docs/datasets/marmousi/README.md`](datasets/marmousi/README.md).
+walked through in [Frequency-selection FWI, 2-D](examples/freqsel-2d.md) and
+[3-D](examples/freqsel-3d.md).
 
 ## Post-processing — depth-tapered z-axis low-cut on RTM images
 

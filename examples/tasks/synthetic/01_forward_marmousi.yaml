@@ -3,7 +3,7 @@
 # Teaches:  the shape of a task YAML, and that models can come straight from
 #           `sweep.datasets` — nothing to download, no .npy to prepare.
 # Needs:    nothing. `marmousi:2d-demo` ships inside the sweep package.
-# Produces: output/record.npy + a shot-gather PNG.
+# Produces: output/record.npy + sources.npy + receivers.npy.
 #
 # Run:
 #   sweep-tasks run examples/synthetic/01_forward_marmousi.yaml

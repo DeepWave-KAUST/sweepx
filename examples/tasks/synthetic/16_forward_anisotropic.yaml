@@ -9,7 +9,7 @@
 # Run:
 #   sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml
 #
-# 01-15 all pin `Acoustic` or `Acoustic3D` — 2 of the 36 equations this build
+# 01-15 all pin `Acoustic` or `Acoustic3D` — 2 of the 39 equations this build
 # registers (see 15), and 2 of only 3 that take vp alone. Everything else is
 # multi-parameter, and this is the pattern for all of them:
 #
