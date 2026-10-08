@@ -63,6 +63,8 @@ extra:
   # not listed falls back to repo_url/repo_name above (the umbrella).
   section_repos:
     solver: DeepWave-KAUST/sweep
+    tasks: DeepWave-KAUST/sweep-tasks
+    loss: DeepWave-KAUST/sweep-loss
     agent: DeepWave-KAUST/sweep-agent
   social:
     - icon: fontawesome/brands/github
@@ -116,10 +118,8 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*'
-  # Tasks is ready (docs live in the sweep-tasks repo) but that repo is still
-  # PRIVATE, so CI can't clone it. Uncomment this line — and the sweep-tasks
-  # pip install in .github/workflows/docs.yml — once it is public / on PyPI.
-  # - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
+  - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
+  - Loss: '!import https://github.com/DeepWave-KAUST/sweep-loss?branch=master&docs_dir=docs/*'
   - Agent: '!import https://github.com/DeepWave-KAUST/sweep-agent?branch=main&docs_dir=docs/*'
 
 markdown_extensions:

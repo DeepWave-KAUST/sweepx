@@ -79,6 +79,18 @@ sweep-agent chat
     Equations, propagators, backends, boundary-saving — and 26 runnable
     notebooks under [Examples](../solver/examples/).
 
+-   :material-cog-play-outline: __[Tasks](tasks/index.md)__
+
+    ---
+
+    Production FWI / LSRTM from one YAML file: specs, CLI, multi-GPU, data IO.
+
+-   :material-chart-bell-curve: __[Loss](loss/index.md)__
+
+    ---
+
+    Misfit functions for inversion — L2 to envelope, phase and optimal transport.
+
 -   :material-message-processing-outline: __[Agent](agent/index.md)__
 
     ---
