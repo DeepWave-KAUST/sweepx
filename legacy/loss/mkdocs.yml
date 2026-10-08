@@ -1,65 +1,28 @@
-site_name: sweep_loss
-site_description: "A PyTorch library of misfit (loss) functions for Full Waveform Inversion."
-site_author: "Shaowen Wang"
-repo_url: "https://github.com/DeepWave-KAUST/sweep-loss"
-edit_uri: ""
-
-docs_dir: docs
-site_dir: site
-
+# ─────────────────────────────────────────────────────────────────────────
+# sweep-loss — documentation config  (from sweepx/docs-template)
+#
+# STYLE comes from the sweepx umbrella at build time: mkdocs-multirepo pulls
+# this docs/ into https://sweepx.deepwave.group/ and renders it with sweepx's
+# theme. This file only declares the package name + nav so the umbrella can
+# import it. Do NOT add the real theme / plugins / mkdocstrings options here —
+# the ecosystem look is defined ONCE, in the sweepx repo.
+#
+# Quick standalone check (plain Material, no sweepx skin): `mkdocs serve` here.
+# Real look: preview from the sweepx repo.
+# ─────────────────────────────────────────────────────────────────────────
+site_name: sweep-loss
 theme:
-  name: material
-  features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
-    - navigation.top
-    - toc.integrate
-    - content.code.copy
-    - search.highlight
-  palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
-  icon:
-    repo: fontawesome/brands/github
+  name: material                 # placeholder only — sweepx supplies the real theme
 
-markdown_extensions:
+markdown_extensions:             # what the pages need for a standalone check
   - admonition
   - attr_list
-  - footnotes
   - md_in_html
-  - toc:
-      permalink: true
   - pymdownx.arithmatex:
       generic: true
-  - pymdownx.highlight:
-      anchor_linenums: true
-      line_spans: __span
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
   - pymdownx.superfences
-  - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
-
-extra_javascript:
-  - https://polyfill.io/v3/polyfill.min.js?features=es6
-  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
-
-plugins:
-  - search
 
 nav:
   - Home: index.md
