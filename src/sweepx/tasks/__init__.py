@@ -4,6 +4,8 @@ Phase 1 only ships local synchronous execution; a future RemoteRunner can
 subclass TaskRunner without changing the `run(spec) -> TaskResult` contract.
 """
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from sweep_tasks.registry import TASK_TYPES
 from sweep_tasks.runner import TaskResult, TaskRunner, TaskStatus
 from sweep_tasks.schemas import (
@@ -30,6 +32,11 @@ from sweep_tasks.yaml_io import (
     new_template,
 )
 
+try:
+    __version__ = _pkg_version("sweep-tasks")
+except PackageNotFoundError:  # a source tree with nothing installed
+    __version__ = "unknown"
+
 __all__ = [
     "BaseTaskSpec",
     "DataPlanSpec",
@@ -50,6 +57,7 @@ __all__ = [
     "TaskSpec",
     "TaskStatus",
     "WavefieldSpec",
+    "__version__",
     "dump_task",
     "load_task",
     "load_task_from_dict",
