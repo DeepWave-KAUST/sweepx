@@ -30,9 +30,9 @@ hide:
     <div class="sweep-features-3__tag">COMPANIONS · GROWING</div>
     <h3 class="sweep-features-3__title">…and the family</h3>
     <p class="sweep-features-3__desc">
-      <code>sweep-tasks</code> (production FWI/LSRTM runner) and
-      <code>sweep-loss</code> are documented here; <code>sweep-nn</code>
-      and <code>sweep-tomo</code> follow — each an independent package.
+      <code>sweep-tasks</code> (production FWI/LSRTM runner),
+      <code>sweep-loss</code>, <code>sweep-io</code> and <code>sweep-nn</code>
+      ship with <code>sweepx</code>; <code>sweep-tomo</code> follows.
     </p>
     <span class="sweep-features-3__link">Browse the org <span aria-hidden="true">→</span></span>
   </a>
@@ -46,9 +46,9 @@ hide:
 <div class="sweep-new__grid">
 
   <a class="sweep-new__card" href="tasks/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">docs</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">Tasks and Loss, now open</div>
-    <div class="sweep-new__desc"><code>sweep-tasks</code>, the YAML-driven production FWI/LSRTM runner, and <code>sweep-loss</code>, two dozen FWI misfits from L2 to optimal transport, are public and documented on this site.</div>
+    <div class="sweep-new__hd"><span class="sweep-new__badge">tasks 0.1.0</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">The task runner, on PyPI</div>
+    <div class="sweep-new__desc"><code>pip install sweepx</code> now brings <code>sweep-tasks</code>: FWI, LSRTM and RTM from one YAML file and one command, on one GPU or many. With it come <code>sweep-loss</code>, <code>sweep-io</code> and <code>sweep-nn</code>.</div>
   </a>
 
   <a class="sweep-new__card" href="solver/notebooks/32_rwi_acoustic_vs_lsrtm_gradient/">
@@ -91,7 +91,7 @@ hide:
 <p class="sweep-onefile__lede"><code>sweepx</code> is the umbrella — it carries no code of its own, it just pulls in the engine and its published companions. Install <code>sweepx</code>, but <strong>import <code>sweep</code></strong> (same pattern as <code>scikit-learn</code> → <code>sklearn</code>).</p>
 
 ```python
-# one install — pulls the engine + the agent:
+# one install — the engine, the agent and the task runner:
 #     pip install sweepx
 
 import sweep                                       # ← sweep-solver, the engine
@@ -125,22 +125,22 @@ from sweep.equations import Acoustic, ElasticTTI   # nine equation families
     <div class="sweep-stack__desc">Natural-language control via a local LLM.</div>
   </div>
   <div class="sweep-stack__card">
-    <div class="sweep-stack__head"><span class="sweep-stack__dot sweep-stack__dot--sq" style="background:#ED8B2E"></span><span class="sweep-stack__role">COMPANION</span></div>
+    <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-tasks</div>
     <div class="sweep-stack__version">import sweep_tasks · <a href="tasks/">docs</a></div>
     <div class="sweep-stack__desc">Production FWI/LSRTM runner — specs, YAML, multi-GPU, IO.</div>
   </div>
   <div class="sweep-stack__card">
-    <div class="sweep-stack__head"><span class="sweep-stack__dot sweep-stack__dot--sq" style="background:#ED8B2E"></span><span class="sweep-stack__role">COMPANION</span></div>
+    <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-loss</div>
     <div class="sweep-stack__version">import sweep_loss · <a href="loss/">docs</a></div>
     <div class="sweep-stack__desc">Misfit / loss functions for inversion.</div>
   </div>
   <div class="sweep-stack__card">
-    <div class="sweep-stack__head"><span class="sweep-stack__dot sweep-stack__dot--sq" style="background:#ED8B2E"></span><span class="sweep-stack__role">COMPANION</span></div>
+    <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-nn</div>
-    <div class="sweep-stack__version">coming</div>
-    <div class="sweep-stack__desc">Neural reparameterizations — INR / hash / SIREN encoders.</div>
+    <div class="sweep-stack__version">import sweep_nn · <a href="nn/">docs</a></div>
+    <div class="sweep-stack__desc">Neural reparameterizations and priors — INR / hash / SIREN, TV, diffusion.</div>
   </div>
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot sweep-stack__dot--sq" style="background:#ED8B2E"></span><span class="sweep-stack__role">COMPANION</span></div>

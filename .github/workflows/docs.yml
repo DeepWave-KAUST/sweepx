@@ -57,8 +57,9 @@ jobs:
           # CPU torch — sweep's equation modules import torch at module top,
           # so mkdocstrings' force_inspection needs it present.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # Published packages (import as `sweep` / `sweep_agent`):
-          pip install sweep-solver sweep-agent
+          # Published packages (import as `sweep` / `sweep_agent` / `sweep_tasks`;
+          # sweep-tasks brings sweep-loss, sweep-io and sweep-nn):
+          pip install sweep-solver sweep-agent sweep-tasks
           # mkdocs.yml imports the Solver docs from sweep@dev, so an API page can
           # document a class that is not in the released wheel yet — ElasticTTI2nd
           # and ElasticTTISG3D did exactly that and aborted the build. Render the
@@ -72,13 +73,13 @@ jobs:
           # that is how v0.2.0 shipped with the umbrella still resolving 0.1.0,
           # and the only symptom was mkdocstrings failing to collect a class that
           # the API page documents. Say so here instead.
-          # sweep-tasks is not on PyPI and depends on companions that are not
-          # public yet (sweep-io, sweep-nn), so install it from git WITHOUT deps
-          # plus the few its API pages import. mkdocstrings only renders
-          # runner / yaml_io / schemas, which import none of the companions.
-          # sweep-loss has no API page, so it is not installed at all.
-          pip install pydantic PyYAML scipy matplotlib
-          pip install --no-deps "sweep-tasks @ git+https://github.com/DeepWave-KAUST/sweep-tasks@main"
+          # The Tasks tab imports its docs from sweep-tasks@main, so render its
+          # API from main too — same --force-reinstall --no-deps as the solver.
+          pip install --force-reinstall --no-deps \
+            "sweep-tasks @ git+https://github.com/DeepWave-KAUST/sweep-tasks@main"
+          # Same for the NN tab: its notebooks and API page come from sweep-nn@main.
+          pip install --force-reinstall --no-deps \
+            "sweep-nn @ git+https://github.com/DeepWave-KAUST/sweep-nn@main"
           python - <<'PY'
           import importlib, sys
           from importlib.metadata import version
@@ -86,7 +87,8 @@ jobs:
                 "| sweep-tasks", version("sweep-tasks"))
           print("sweep imported from", importlib.import_module("sweep").__file__)
           for mod in ("sweep", "sweep.parallel", "sweep_agent",
-                      "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas"):
+                      "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas",
+                      "sweep_nn", "sweep_nn.diffusion.prior"):
               try:
                   importlib.import_module(mod)
               except Exception as exc:
