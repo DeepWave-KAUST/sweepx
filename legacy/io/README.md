@@ -13,9 +13,15 @@ useful work to do.
 | Module | Purpose | Extra deps |
 |---|---|---|
 | `sweep_io.models` | Load/save velocity models (`.npy`, `.npz`, raw binary, `.h5`) | none / `h5py` |
-| `sweep_io.geometry` | Acquisition geometry dataclass (sources, receivers, `dt`, `dh`) | none |
+| `sweep_io.geometry` | Acquisition geometry dataclasses (sources, receivers, `dt`, `dh`) and the UTM ↔ model-frame rotation (`RotatedFrame`) | none |
 | `sweep_io.prefetch` | Background-thread prefetchers (`Prefetcher`, `ThreadPoolPrefetcher`, `TimingPrefetcher`) | stdlib only |
 | `sweep_io.segy` | SEG-Y byte-offset readers (`SEGYReader`, `MultiFileSEGYReader`) + IBM↔IEEE codecs; high-level `read_segy` / `write_segy` defer ``segyio`` import | numpy / `segyio` (lazy) |
+| `sweep_io.segy_index` | Header catalog built once over many SEG-Y files (`build_segy_index`, `SEGYIndex`) + a lazy shot-gather dataset | none |
+| `sweep_io.seismic_plan` | Shot- (CSG) or receiver-grouped (CRG) plans (`build_seismic_plan`, `SeismicPlan`), the lazy `PlanReader`, and the shared-shot / per-CRG samplers | none |
+| `sweep_io.plan` | `DataPlan` / `ModelPlan`: pick shots, receivers and the model window before FWI sees the data | none |
+| `sweep_io.crg_build`, `sweep_io.crg_plan` | Build and load the CRG plan cache (`crg_fwi_plan_v1`) | none / `mpi4py` for the parallel build |
+| `sweep_io.crg_dataset` | Dataset over a `CRGPlan`, padded collate, per-trace LRU cache | `torch` |
+| `sweep_io.wavelet` | Read a source wavelet from an `.npz` container | none |
 | `sweep_io.datasets` | `torch.utils.data.Dataset` for shot gathers, with `iter_prefetched(...)` | `torch` |
 | `sweep_io.cuda_prefetch` | CUDA-aware `CUDAPrefetcher` with pinned memory + side-stream H2D | `torch` |
 
@@ -31,7 +37,7 @@ pip install sweep-io[torch]           # + torch (Dataset + CUDAPrefetcher)
 pip install sweep-io[segy,hdf5,torch]
 ```
 
-Or via the ecosystem meta-package: `pip install sweep[full]`.
+Or with the rest of the sweep stack: `pip install sweepx`.
 
 ## Quick example — fast SEG-Y reads
 
