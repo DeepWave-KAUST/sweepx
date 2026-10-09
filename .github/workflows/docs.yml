@@ -80,6 +80,9 @@ jobs:
           # Same for the NN tab: its notebooks and API page come from sweep-nn@main.
           pip install --force-reinstall --no-deps \
             "sweep-nn @ git+https://github.com/DeepWave-KAUST/sweep-nn@main"
+          # …and the IO tab, from sweep-io@main.
+          pip install --force-reinstall --no-deps \
+            "sweep-io @ git+https://github.com/DeepWave-KAUST/sweep-io@main"
           python - <<'PY'
           import importlib, sys
           from importlib.metadata import version
@@ -88,7 +91,8 @@ jobs:
           print("sweep imported from", importlib.import_module("sweep").__file__)
           for mod in ("sweep", "sweep.parallel", "sweep_agent",
                       "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas",
-                      "sweep_nn", "sweep_nn.diffusion.prior"):
+                      "sweep_nn", "sweep_nn.diffusion.prior",
+                      "sweep_io.seismic_plan", "sweep_io.cuda_prefetch"):
               try:
                   importlib.import_module(mod)
               except Exception as exc:

@@ -26,10 +26,10 @@ ones; you can also `pip install` any single package on its own.
 | Package | `import` | What it does |
 |---|---|---|
 | [`sweep-solver`](https://github.com/DeepWave-KAUST/sweep) | `sweep` | Wave-equation **engine**: equations (acoustic / elastic / VTI / TTI / VRZ / SEM), propagators (torch / JAX / CUDA `impl='c'`), operators, boundary-saving, and FWI / LSRTM / RTM building blocks. |
-| [`sweep-tasks`](https://github.com/DeepWave-KAUST/sweep-tasks) | `sweep_tasks` | Production **FWI / LSRTM runner** — typed YAML task specs, a CLI, multi-GPU runs, field-data pipelines. [Docs](https://sweepx.deepwave.group/tasks/) |
+| [`sweep-tasks`](https://github.com/DeepWave-KAUST/sweep-tasks) | `sweep_tasks` | Production **FWI / LSRTM runner** — typed YAML task specs, a CLI, multi-GPU runs, field-data pipelines, with preprocessing (`sweep_tasks.preproc`) and plotting (`sweep_tasks.viz`) built in. [Docs](https://sweepx.deepwave.group/tasks/) |
 | [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) | `sweep_loss` | Misfit / loss functions for FWI — two dozen, from L2 to optimal transport. [Docs](https://sweepx.deepwave.group/loss/) |
-| [`sweep-io`](https://github.com/DeepWave-KAUST/sweep-io) | `sweep_io` | Seismic I/O — SEG-Y, acquisition geometry, data and model plans. |
-| [`sweep-nn`](https://github.com/DeepWave-KAUST/sweep-nn) | `sweep_nn` | Neural reparameterizations and priors — INR / hash / SIREN encoders, TV and diffusion priors. |
+| [`sweep-io`](https://github.com/DeepWave-KAUST/sweep-io) | `sweep_io` | Seismic I/O — SEG-Y, acquisition geometry, data and model plans. [Docs](https://sweepx.deepwave.group/io/) |
+| [`sweep-nn`](https://github.com/DeepWave-KAUST/sweep-nn) | `sweep_nn` | Neural reparameterizations and priors — INR / hash / SIREN encoders, TV and diffusion priors. [Docs](https://sweepx.deepwave.group/nn/) |
 | [`sweep-agent`](https://github.com/DeepWave-KAUST/sweep-agent) | `sweep_agent` | Natural-language **control layer** — chat + files → `sweep`, through a local LLM (Ollama / vLLM). Runs forward modelling (acoustic **and** elastic), loads benchmark models, plots — all on the base install. `pip install "sweep-agent[ui]"` adds a web UI. |
 
 ### Companions — not on PyPI yet
@@ -40,7 +40,10 @@ dependencies, so you keep the same `pip install sweepx`.
 | Package | What it does |
 |---|---|
 | `sweep-tomo` | First-arrival **traveltime tomography** (eikonal + SIRT / FATT). |
-| *(planned)* | `sweep-viz`, `sweep-preproc`, `sweep-opt`. |
+| *(planned)* | `sweep-opt`. |
+
+`sweep-viz` and `sweep-preproc` are no longer separate packages: they are part of
+`sweep-tasks`, as `sweep_tasks.viz` and `sweep_tasks.preproc`.
 
 ## Quick start
 
