@@ -71,7 +71,7 @@ of the velocity grid size.
 pip install sweep-nn
 ```
 
-Or via the ecosystem meta-package: `pip install sweep[full]`.
+It also comes with `pip install sweepx`, through sweep-tasks.
 
 ## Quick example
 
