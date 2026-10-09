@@ -23,10 +23,10 @@ directly. **`sweep-tasks` is for when you want to describe a job in YAML
 ## Install
 
 ```bash
-pip install sweep-tasks    # also pulls sweep (the solver) and pydantic+torch+yaml
+pip install sweep-tasks    # also pulls sweep-solver, sweep-loss, sweep-io, sweep-nn
 ```
 
-Or via the ecosystem meta-package: `pip install sweep[full]`.
+Or the whole ecosystem: `pip install sweepx`.
 
 ## Quick example — Marmousi synthetic (2 commands, nothing to download)
 
@@ -34,8 +34,8 @@ The models come from `sweep.datasets`, so the YAMLs are self-contained —
 no `.npy` to prepare, no env vars, no SEG-Y:
 
 ```bash
-sweep-tasks run examples/synthetic/01_forward_marmousi.yaml   # synthesise obs
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml  # invert (100 epochs)
+sweep-tasks run examples/synthetic/01_forward_marmousi.yaml     # a shot record
+sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml  # FWI, 200 epochs
 ```
 
 ### Models without a file
