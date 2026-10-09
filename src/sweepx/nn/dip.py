@@ -70,8 +70,10 @@ class DIPReparam(Reparameterizer):
         ``(nz, nx)``.
     latent_channels
         Number of channels in the fixed input noise.
-    base_ch, depth
-        U-Net width and depth.
+    base_ch
+        U-Net width: channels of the first level.
+    depth
+        U-Net depth: number of levels.
     """
 
     def __init__(

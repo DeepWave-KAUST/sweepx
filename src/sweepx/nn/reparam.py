@@ -24,9 +24,11 @@ class Reparameterizer(nn.Module):
     ----------
     out_shape
         Spatial shape of the velocity model, e.g. ``(nz, nx)`` for 2-D.
-    vp_min, vp_max
-        Physical-unit clamp. The raw output is rescaled and (by default,
-        when ``squash="tanh"``) tanh-squashed to live in this range.
+    vp_min
+        Lower end of the physical-unit range.
+    vp_max
+        Upper end. The raw output is rescaled and (by default, when
+        ``squash="tanh"``) tanh-squashed to live in ``[vp_min, vp_max]``.
     squash
         How the raw output is mapped to ``[vp_min, vp_max]``:
         - ``"tanh"``  — `vp_min + (vp_max-vp_min) * 0.5*(tanh(raw)+1)`

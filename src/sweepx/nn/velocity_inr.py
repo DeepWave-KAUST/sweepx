@@ -95,34 +95,54 @@ class VelocityINR(nn.Module):
         Tensor ``(nz, nx)`` (2-D) or ``(nz, ny, nx)`` (3-D). Treated as a
         non-trainable buffer — the network learns the perturbation on top
         (delta mode) or replaces it entirely (``direct_velocity=True``).
-    vp_mean, vp_std
-        Output scaling: ``velocity = base + (mlp_out * vp_std + vp_mean)``.
-        ``vp_std`` controls the typical perturbation magnitude in m/s; the
-        network's natural output range is ~[-1, 1] so ``vp_std=50`` gives
-        ±50 m/s typical updates. The legacy default in fwi_workflow-dev
-        was 50 for vp.
+    vp_mean
+        Added to the scaled network output:
+        ``velocity = base + (mlp_out * vp_std + vp_mean)``.
+    vp_std
+        Scales the network output, so it sets the typical perturbation in
+        m/s: the network's natural output range is ~[-1, 1], so
+        ``vp_std=50`` gives ±50 m/s typical updates.
     use_hash_encoding
         Wrap coordinates with :class:`MultiResHashGrid` before the SIREN
         head. Required for high-frequency velocity detail; without it the
         SIREN must do all the spatial-frequency work alone (slower, less
         expressive).
-    hash_levels, hash_features_per_level, hash_log2_size,
-    hash_base_resolution, hash_finest_resolution
-        Hash encoder hyperparameters. See :class:`MultiResHashGrid`.
-        Defaults match the fwi_workflow-dev production config.
-    hash_c2f, hash_c2f_base_levels, hash_c2f_ramp
-        If ``hash_c2f=True`` build a :class:`CoarseToFineHashGrid` instead:
-        only the ``hash_c2f_base_levels`` coarsest levels are open at init
-        and the training loop drives the unfreeze schedule via
+    hash_levels
+        Number of hash-grid levels. See :class:`MultiResHashGrid`.
+    hash_features_per_level
+        Features stored per level.
+    hash_log2_size
+        log2 of the hash-table size of each level.
+    hash_base_resolution
+        Grid resolution of the coarsest level (one int, or one per axis).
+    hash_finest_resolution
+        Grid resolution of the finest level (one int, or one per axis).
+    hash_c2f
+        If True, build a :class:`CoarseToFineHashGrid` instead: only the
+        ``hash_c2f_base_levels`` coarsest levels are open at init, and the
+        training loop drives the unfreeze schedule via
         ``self.encoder.set_progress(...)``. Same hash hyperparameters.
-    hidden_features, hidden_layers, first_omega0, hidden_omega0
-        SIREN MLP hyperparameters. See :class:`SirenMLP`.
+    hash_c2f_base_levels
+        Levels open at init when ``hash_c2f=True``.
+    hash_c2f_ramp
+        Shape of the unfreeze ramp when ``hash_c2f=True``.
+    hidden_features
+        SIREN width. See :class:`SirenMLP`.
+    hidden_layers
+        Number of hidden sine layers after the first one.
+    first_omega0
+        Sine frequency of the first layer.
+    hidden_omega0
+        Sine frequency of the hidden layers.
     direct_velocity
         If True, ignore the base and return ``mlp_out * vp_std + vp_mean``.
         Useful for from-scratch reconstruction.
-    coord_min, coord_max
-        Normalization range for the spatial coords (default ``[0, 1)``).
-        Must match the convention expected by the hash encoder.
+    coord_min
+        Lower end of the coordinate range. Coordinates span
+        ``[coord_min, coord_max)``, which must match the convention the hash
+        encoder expects.
+    coord_max
+        Upper end of the coordinate range (exclusive).
     bounds
         Optional ``(vp_min, vp_max)`` clamp applied at render time. Set
         to ``None`` (default) to let the caller clamp.

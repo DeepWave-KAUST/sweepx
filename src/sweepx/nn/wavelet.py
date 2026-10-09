@@ -28,8 +28,14 @@ class SirenWavelet(nn.Module):
     ----------
     nt
         Number of time samples in the output wavelet.
-    hidden_features, hidden_layers, first_omega0, hidden_omega0
-        SIREN MLP hyperparameters. See :class:`SirenMLP`.
+    hidden_features
+        SIREN width. See :class:`SirenMLP`.
+    hidden_layers
+        Number of hidden sine layers after the first one.
+    first_omega0
+        Sine frequency of the first layer.
+    hidden_omega0
+        Sine frequency of the hidden layers.
     bias
         Per the docstring: keep this True. ``False`` is exposed only for
         completeness (e.g. fitting an explicitly odd wavelet).

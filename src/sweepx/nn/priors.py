@@ -101,9 +101,8 @@ class TVPrior(nn.Module):
     so the weight stays interpretable across surveys with different vp
     magnitudes (m/s).
 
-    Conventions match the legacy ``fwi_workflow-dev`` helper
-    ``_velocity_smoothness_loss``: in 2-D the model is ``(nz, nx)``; in
-    3-D it is ``(nz, ny, nx)``. The depth axis is always axis 0.
+    In 2-D the model is ``(nz, nx)``; in 3-D it is ``(nz, ny, nx)``. The
+    depth axis is always axis 0.
 
     Parameters
     ----------
@@ -111,8 +110,12 @@ class TVPrior(nn.Module):
         ``"first"`` (default) — sum of squared first differences.
         ``"second"`` — sum of squared second differences (curvature).
         ``"both"`` / ``"mixed"`` — both first and second.
-    x_weight, z_weight, y_weight
-        Per-axis multipliers; ``y_weight`` is ignored on 2-D inputs.
+    x_weight
+        Multiplier for the lateral (x) differences.
+    z_weight
+        Multiplier for the depth (z) differences.
+    y_weight
+        Multiplier for the y differences; ignored on 2-D inputs.
     velocity_scale_m_s
         Normalization for vp before differentiation (m/s). Default
         ``1000.0``.

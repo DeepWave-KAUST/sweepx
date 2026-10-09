@@ -28,7 +28,8 @@ This package provides reusable `Net` candidates and helpers around them.
 | `sweep_nn.velocity_inr` | `VelocityINR` — hash → SIREN → ``base + delta`` velocity field. The recommended FWI reparameterization. Supports ``update_base_velocity()`` for multi-stage transitions without resetting learned params |
 | `sweep_nn.wavelet` | `SirenWavelet` — 1-D SIREN for learning a source wavelet from time |
 | `sweep_nn.dip` | Deep Image Prior — small U-Net fed by a fixed latent |
-| `sweep_nn.priors` | Learned prior wrappers (feature extractor for perceptual losses) |
+| `sweep_nn.priors` | Learned prior wrappers (feature extractor for perceptual losses), `TVPrior`, `SeabedFreezeMask` |
+| `sweep_nn.diffusion` | A DDPM/DDIM velocity prior — `UNet2D`/`UNet3D`, `GaussianDiffusion`, and `DiffusionVelocityPrior`, which turns a trained checkpoint into a plug-and-play (RED) regularizer for FWI |
 
 ## Hash-encoded SIREN for FWI
 
@@ -72,6 +73,13 @@ pip install sweep-nn
 ```
 
 It also comes with `pip install sweepx`, through sweep-tasks.
+
+## Examples
+
+[`docs/examples/`](https://github.com/DeepWave-KAUST/sweep-nn/tree/main/docs/examples) has two notebooks that run implicit FWI with `VelocityINR` on
+the sweep wave solver and reproduce the synthetic examples of *Accelerating High
+Resolution Implicit Full Waveform Inversion* (*Geophysics*): Overthrust with the
+pseudo-Hessian preconditioner, and Marmousi with hash encoding.
 
 ## Quick example
 

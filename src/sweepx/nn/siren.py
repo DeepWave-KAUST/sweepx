@@ -110,8 +110,10 @@ class SIREN(Reparameterizer):
     ----------
     out_shape
         ``(nz, nx)`` 2-D or ``(nz, ny, nx)`` 3-D output grid.
-    hidden_features, hidden_layers
-        Width and depth of the MLP.
+    hidden_features
+        Width of the MLP.
+    hidden_layers
+        Depth of the MLP.
     w0
         Initial-layer frequency. The paper recommends 30 for image-scale tasks;
         higher values fit higher spatial frequencies at the cost of slower

@@ -45,19 +45,24 @@ class MultiParamINR(nn.Module):
         (``(nz, nx)`` or ``(nz, ny, nx)``). ``base_models[0]`` is the primary
         parameter (vp). Each is kept as a (non-persistent) buffer; the channel
         renders ``base_i + delta_i``.
-    means, stds
-        Per-channel affine ``delta_i = raw_i * stds[i] + means[i]``. Length
-        ``n_params``. ``stds[i]`` is the per-parameter "scale" (its effective
-        learning rate is ``lr * stds[i]``); pick it per parameter's magnitude
-        (vp ~ 500, impedance z ~ 2).
+    means
+        Per-channel offset in ``delta_i = raw_i * stds[i] + means[i]``.
+        Length ``n_params``.
+    stds
+        Per-channel scale in the same affine, length ``n_params``. It is the
+        per-parameter "scale" (its effective learning rate is
+        ``lr * stds[i]``); pick it per parameter's magnitude (vp ~ 500,
+        impedance z ~ 2).
     bounds
         Per-channel ``(min, max)`` clamp, or ``None`` to leave a channel
         unbounded. Length ``n_params``.
-    water_mask, water_values
+    water_mask
         Optional shared boolean water mask (shape = model shape). Masked voxels
         of channel ``i`` are pinned to ``water_values[i]`` (gradient there is 0,
-        so the SIREN never spends capacity on the water column). ``water_values``
-        length ``n_params`` (e.g. ``[1500.0, 1.5]`` for vp, Gardner-water z).
+        so the SIREN never spends capacity on the water column).
+    water_values
+        Per-channel value at the masked voxels, length ``n_params`` (e.g.
+        ``[1500.0, 1.5]`` for vp and Gardner-water impedance z).
     The remaining arguments mirror :class:`VelocityINR` (shared SIREN + hash
     encoder hyperparameters).
     """
