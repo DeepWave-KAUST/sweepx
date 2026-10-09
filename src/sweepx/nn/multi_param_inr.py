@@ -63,6 +63,9 @@ class MultiParamINR(nn.Module):
     water_values
         Per-channel value at the masked voxels, length ``n_params`` (e.g.
         ``[1500.0, 1.5]`` for vp and Gardner-water impedance z).
+
+    Notes
+    -----
     The remaining arguments mirror :class:`VelocityINR` (shared SIREN + hash
     encoder hyperparameters).
     """
