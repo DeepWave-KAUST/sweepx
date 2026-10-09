@@ -65,10 +65,10 @@ The site is configured in `mkdocs.yml`; pages live under `docs/`.
 ## Installation
 
 ```bash
-pip install -e .
-# or, with dev/test extras
-pip install -e .[test]
+pip install sweep-loss
 ```
+
+From a clone, with the test extras: `pip install -e ".[test]"`.
 
 ## Running the tests
 
