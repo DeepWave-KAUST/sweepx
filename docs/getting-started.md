@@ -9,8 +9,9 @@ want to work — Python, or plain language.
 pip install sweepx
 ```
 
-That pulls the engine ([sweep-solver](solver/index.md)) and the natural-language layer
-([sweep-agent](agent/index.md)). **Import as `sweep`**, not `sweepx` — same pattern as
+That pulls the engine ([sweep-solver](solver/index.md)), the natural-language layer
+([sweep-agent](agent/index.md)) and the YAML task runner ([sweep-tasks](tasks/index.md),
+with [sweep-loss](loss/index.md)). **Import as `sweep`**, not `sweepx` — same pattern as
 `scikit-learn` → `sklearn`:
 
 ```python
@@ -90,6 +91,12 @@ sweep-agent chat
     ---
 
     Misfit functions for inversion — L2 to envelope, phase and optimal transport.
+
+-   :material-vector-polyline: __[NN](nn/index.md)__
+
+    ---
+
+    Implicit FWI: the model as a network — SIREN, hash encoding, priors.
 
 -   :material-message-processing-outline: __[Agent](agent/index.md)__
 

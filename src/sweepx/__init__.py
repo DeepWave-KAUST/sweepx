@@ -1,9 +1,9 @@
 """sweepx — install handle for the sweep engine.
 
 `sweepx` itself has no code: ``pip install sweepx`` pulls in ``sweep-solver``
-(the solver engine, with prebuilt CUDA cores) and ``sweep-agent`` (the
-natural-language control layer). Other companions (``sweep-io``, ``sweep-nn``,
-…) are not published yet.
+(the solver engine, with prebuilt CUDA cores), ``sweep-agent`` (the
+natural-language control layer) and ``sweep-tasks`` (the YAML task runner,
+which brings ``sweep-loss``, ``sweep-io`` and ``sweep-nn``).
 
 **Use ``import sweep``, not ``import sweepx``.**
 

@@ -65,6 +65,7 @@ extra:
     solver: DeepWave-KAUST/sweep
     tasks: DeepWave-KAUST/sweep-tasks
     loss: DeepWave-KAUST/sweep-loss
+    nn: DeepWave-KAUST/sweep-nn
     agent: DeepWave-KAUST/sweep-agent
   social:
     - icon: fontawesome/brands/github
@@ -81,6 +82,10 @@ plugins:
   # Render sub-repos' Jupyter notebooks (Solver's examples). Config mirrors
   # sweep's own mkdocs.yml.
   - mkdocs-jupyter:
+      # Notebooks only. The default also turns every .py under docs/ into a page:
+      # sweep-nn's examples/ifwi_models.py (embedded velocity models) became a
+      # 2.5 MB orphan page that way. The .py files are still copied as files.
+      include: ["*.ipynb"]
       include_source: true
       execute: false
       ignore_h1_titles: true
@@ -120,6 +125,7 @@ nav:
   - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*'
   - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
   - Loss: '!import https://github.com/DeepWave-KAUST/sweep-loss?branch=master&docs_dir=docs/*'
+  - NN: '!import https://github.com/DeepWave-KAUST/sweep-nn?branch=main&docs_dir=docs/*'
   - Agent: '!import https://github.com/DeepWave-KAUST/sweep-agent?branch=main&docs_dir=docs/*'
 
 markdown_extensions:
