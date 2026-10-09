@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sweep-io"
-version = "0.1.0"
+version = "0.1.1"
 description = "File and dataset I/O for seismic full-waveform inversion: velocity models, SEG-Y, acquisition geometry, shot-gather datasets."
 readme = "README.md"
 requires-python = ">=3.10"
