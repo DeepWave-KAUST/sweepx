@@ -208,6 +208,7 @@ scheduler:
 
 # ═══ Loss / misfit ════════════════════════════════════════════════════════════
 # kind: mse | l1 | huber | trace_cosine
+#       steady_gcn — frequency_selection only, and the only kind it takes
 
 loss:
   kind: trace_cosine                # per-trace normalized cosine (field-data robust)
@@ -310,6 +311,8 @@ reparam:
 #     k_hi: 96
 #     steady_samples: 2500
 #     n_pools: 14
+# (this mode fixes the misfit: set loss: {kind: steady_gcn} or drop the
+#  loss block — any other loss setting is rejected)
 
 # ═══ Illumination preconditioning (diagonal pseudo-Hessian) ═══════════════════
 # illumination_precondition:

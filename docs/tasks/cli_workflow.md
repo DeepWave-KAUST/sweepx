@@ -340,6 +340,8 @@ task_type: fwi
 # no `wavelet:`, no `geometry:`, no `obs:` — the schema makes all three
 # optional in this mode. Obs is the shard, the geometry rides inside it, and
 # the source spectrum cancels in the misfit.
+# No `loss:` either: the misfit is the steady-state GCN, recorded as
+# `loss.kind: steady_gcn`; any other loss setting is rejected.
 source_encoding:
   enabled: true
   mode: frequency_selection

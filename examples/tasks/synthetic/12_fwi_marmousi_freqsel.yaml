@@ -122,7 +122,7 @@ optimizer:
   lr: 25.0
 
 loss:
-  kind: mse                 # IGNORED — the GCN coherence misfit is built in
+  kind: steady_gcn          # this mode's only misfit (GCN coherence)
 
 # Why the ladder starts at 1 Hz: 03 measured this 1-D start at -160 ms of
 # two-way traveltime error at 2 km, and a stage cycle-skips once that exceeds

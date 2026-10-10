@@ -88,7 +88,7 @@ source_encoding:
       random_batch: 96            # fresh random 96 nodes per iteration
 
 optimizer: { kind: adam, lr: 1.0e-4 }
-loss: { kind: mse }           # IGNORED — the GCN coherence misfit is built in
+loss: { kind: steady_gcn }    # this mode's only misfit (GCN coherence)
 
 epochs: 240                   # schema requirement; ignored when `stages:` is set
 batchsize: 1                  # ignored: the pool IS the batch

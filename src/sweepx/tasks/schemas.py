@@ -572,8 +572,12 @@ class BackendSpec(_Forbid):
 class LossSpec(_Forbid):
     """Misfit between synthetic and observed seismograms."""
 
+    # steady_gcn: the complex-cosine GCN on steady-window DFT coefficients, the
+    # one misfit of source_encoding.mode="frequency_selection" and one no other
+    # path can evaluate. FWISpec resolves an unset kind to it in that mode and
+    # rejects it everywhere else.
     kind: Literal["mse", "l1", "huber", "trace_cosine", "envelope", "ot",
-                  "cc_traveltime"] = "mse"
+                  "cc_traveltime", "steady_gcn"] = "mse"
     huber_delta: float = 1.0  # only used when kind="huber"
     # cc_traveltime (Luo & Schuster 1991): per-trace cross-correlation traveltime
     # misfit 0.5*dt^2, where dt is the syn->obs time shift measured by a
@@ -635,6 +639,14 @@ class LossSpec(_Forbid):
     diving_taper_s: float = 0.16
     diving_water_vel: float = 1500.0
     diving_obs_delay_s: float = 0.0
+
+
+def _steady_gcn_needs_freqsel(loss: LossSpec, task: str) -> None:
+    if loss.kind == "steady_gcn":
+        raise ValueError(
+            f"{task}: loss.kind='steady_gcn' is the misfit of fwi with "
+            "source_encoding.mode='frequency_selection'; no other path can "
+            "evaluate it")
 
 
 class DataPlanSpec(_Forbid):
@@ -1880,6 +1892,42 @@ class FWISpec(BaseTaskSpec):
                 "velocity (1500 m/s, or reparam.water_vp_m_s) — set the water "
                 "column to that value in init_model instead.")
         return self
+
+    @model_validator(mode="after")
+    def _freqsel_loss(self):
+        # The freqsel path builds its GCN misfit without reading ``loss``, so
+        # left at the schema default the resolved config would record
+        # ``kind: mse`` for a run that never evaluated it. Record the misfit
+        # that runs, and reject every loss setting that path would drop.
+        freq_on = (self.source_encoding is not None
+                   and self.source_encoding.enabled
+                   and self.source_encoding.mode == "frequency_selection")
+        if not freq_on:
+            _steady_gcn_needs_freqsel(self.loss, "fwi")
+            return self
+        # kind is checked as WRITTEN, the options by VALUE: a resolved config
+        # spells out every option at its default and has to load again.
+        ignored = []
+        if ("kind" in self.loss.model_fields_set
+                and self.loss.kind != "steady_gcn"):
+            ignored.append(f"loss.kind={self.loss.kind!r}")
+        ignored += [
+            f"loss.{n}={getattr(self.loss, n)!r}"
+            for n, f in LossSpec.model_fields.items()
+            if n != "kind"
+            and getattr(self.loss, n) != f.get_default(call_default_factory=True)]
+        if ignored:
+            raise ValueError(
+                "fwi: source_encoding.mode='frequency_selection' only supports "
+                "the steady-state GCN misfit (loss.kind: steady_gcn), which "
+                f"takes no loss options, so {', '.join(ignored)} would be "
+                "ignored. Drop the loss block or write loss: {kind: "
+                "steady_gcn}; a config_resolved.yaml from an older run "
+                "records the schema default kind: mse.")
+        # A copy, so a LossSpec the caller passed in is not edited under them.
+        self.loss = self.loss.model_copy(update={"kind": "steady_gcn"})
+        return self
+
     epochs: int = Field(ge=1)
     batchsize: int = Field(ge=1, default=1)
     train_shot_batchsize: int | None = None  # default = batchsize (no accumulation)
@@ -2131,6 +2179,11 @@ class RTMSpec(BaseTaskSpec):
             return None
         return v
 
+    @model_validator(mode="after")
+    def _no_steady_gcn(self):
+        _steady_gcn_needs_freqsel(self.loss, "rtm")
+        return self
+
 
 class LSRTMSpec(BaseTaskSpec):
     """LSRTM uses two solvers: AcousticLSRTM (foreground) and Acoustic (background).
@@ -2172,6 +2225,11 @@ class LSRTMSpec(BaseTaskSpec):
     def _validate_stages(self):
         if self.stages is not None and len(self.stages) == 0:
             raise ValueError("LSRTMSpec.stages must be non-empty when set.")
+        return self
+
+    @model_validator(mode="after")
+    def _no_steady_gcn(self):
+        _steady_gcn_needs_freqsel(self.loss, "lsrtm")
         return self
 
 
