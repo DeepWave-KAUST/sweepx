@@ -98,6 +98,12 @@ sweep-agent chat
 
     Implicit FWI: the model as a network — SIREN, hash encoding, priors.
 
+-   :material-database-arrow-right-outline: __[IO](io/index.md)__
+
+    ---
+
+    SEG-Y to gathers: header index, data plans, prefetched reads, models, geometry.
+
 -   :material-message-processing-outline: __[Agent](agent/index.md)__
 
     ---

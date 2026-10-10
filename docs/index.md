@@ -143,6 +143,12 @@ from sweep.equations import Acoustic, ElasticTTI   # nine equation families
     <div class="sweep-stack__desc">Neural reparameterizations and priors — INR / hash / SIREN, TV, diffusion.</div>
   </div>
   <div class="sweep-stack__card">
+    <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
+    <div class="sweep-stack__name">sweep-io</div>
+    <div class="sweep-stack__version">import sweep_io · <a href="io/">docs</a></div>
+    <div class="sweep-stack__desc">Seismic I/O — SEG-Y index, data plans, prefetched reads, geometry.</div>
+  </div>
+  <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot sweep-stack__dot--sq" style="background:#ED8B2E"></span><span class="sweep-stack__role">COMPANION</span></div>
     <div class="sweep-stack__name">sweep-tomo</div>
     <div class="sweep-stack__version">coming</div>
