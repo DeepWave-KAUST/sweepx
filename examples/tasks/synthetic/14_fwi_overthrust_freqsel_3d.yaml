@@ -125,7 +125,7 @@ optimizer:
   lr: 25.0
 
 loss:
-  kind: mse                 # IGNORED — the GCN coherence misfit is built in
+  kind: steady_gcn          # this mode's only misfit (GCN coherence)
 
 stages:
   - epochs: 60              # 1-2 Hz

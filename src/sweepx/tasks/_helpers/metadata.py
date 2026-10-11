@@ -163,6 +163,19 @@ def _prune_setwise_overrides(spec, cfg):
     return cfg
 
 
+def _effective_loss_kind(spec) -> str | None:
+    """The misfit the task evaluates, or ``None`` for a task without one.
+
+    RTM's ``imaging.loss_kind`` overrides ``loss.kind`` (tasks/rtm.py). Every
+    other task runs the validated ``loss.kind``, which the schema resolves to
+    ``steady_gcn`` under ``source_encoding.mode='frequency_selection'``.
+    """
+    imaging_kind = getattr(getattr(spec, "imaging", None), "loss_kind", None)
+    if imaging_kind is not None:
+        return imaging_kind
+    return getattr(getattr(spec, "loss", None), "kind", None)
+
+
 def _dump_run_metadata(
     spec,
     task_dir,
@@ -180,7 +193,8 @@ def _dump_run_metadata(
       written so the file re-runs as itself. Diffing this against any
       hand-written YAML shows what fields the pipeline saw; for an override
       block, read it together with the global block it overrides.
-    * ``run_meta.json`` — host, time, CUDA device, conda env path, key
+    * ``run_meta.json`` — the misfit the task evaluates (``loss_kind``),
+      host, time, CUDA device, conda env path, key
       package versions (sweep-tasks, sweep-nn, sweep-io, sweep,
       sweep-loss, sweep-preproc, torch, numpy), git SHA / dirty-flag
       for each editable package (best-effort), plus any caller-supplied
@@ -293,6 +307,7 @@ def _dump_run_metadata(
     meta = {
         "task_id": getattr(spec, "task_id", None),
         "task_type": getattr(spec, "task_type", None),
+        "loss_kind": _effective_loss_kind(spec),
         "started_at": datetime.now(timezone.utc).isoformat(),
         "host": socket.gethostname(),
         "user": os.environ.get("USER"),

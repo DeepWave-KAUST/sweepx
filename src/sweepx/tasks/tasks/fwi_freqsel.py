@@ -1157,6 +1157,7 @@ class FreqselRunnerMixin:
                 "nt": int(times and 0 or 0),
                 "steady_check": float(chk_first)
                 if chk_first is not None else 0.0,
+                "loss_kind": "steady_gcn",  # loss_* below are mean(1-GCN)
                 "loss_first": losses[0] if losses else None,
                 "loss_last": losses[-1] if losses else None,
                 "mean_iter_s": float(np.mean(times[1:])) if len(times) > 1
