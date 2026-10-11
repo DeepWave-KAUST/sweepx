@@ -186,11 +186,10 @@ def new_template(
 ) -> dict[str, Any]:
     """Return a YAML-ready dict template for the given task type.
 
-    forward / fwi / rtm / lsrtm are parsed from the bundled annotated
+    Every task type is parsed from the bundled annotated
     ``templates/<task_type>.yaml`` reference (the same file ``sweep-tasks init``
     ships), so this dict never drifts from it. Comments are dropped by the dict
-    path — ``sweep-tasks new`` serves the raw annotated text instead. introspect
-    and wavefield have no bundled file and come from the built-in ``_TEMPLATES``.
+    path — ``sweep-tasks new`` serves the raw annotated text instead.
 
     Optional kwargs scaffold the backend block:
       backend: 'eager' | 'c'                    (default: 'eager')
@@ -199,12 +198,18 @@ def new_template(
       compile: bool                             (only valid when backend='eager'; default: False)
 
     The introspect template has no backend block, so backend kwargs are ignored there.
+    The wavefield template refuses backend='c': snapshot capture is eager-only.
     """
 
     known = set(_TEMPLATES) | set(_FILE_TEMPLATES)
     if task_type not in known:
         raise KeyError(
             f"Unknown task_type '{task_type}'. Known: {sorted(known)}"
+        )
+    if task_type == "wavefield" and backend == "c":
+        raise ValueError(
+            "--backend c is not available for a wavefield task: snapshot "
+            "capture is eager-only; use --backend eager (the default)."
         )
     if memory is None:
         # The backend's own default: boundary saving on 'c', and eager has no

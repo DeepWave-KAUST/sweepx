@@ -64,7 +64,10 @@ geometry:
   plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
   dedupe: true                      # snap to grid + drop same-cell duplicates
   dedup_method: nearest             # "nearest" | "first"
-  # 3-D OBN plan extras (UTM→model-grid rotation, spacing, origin):
+  # 3-D OBN plan extras (UTM→model-grid rotation, spacing, origin).
+  # dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells are per-axis and
+  # ordered (z, y, x) like the model array, NOT (x, y, z) as the names
+  # suggest. The z pad is not applied: z = 0 stays at the surface.
   # rotation_metadata: ${SURVEY_HOME}/metadata/rotation_metadata.json
   # dh_xyz_m: [18.75, 18.75, 18.75]
   # grid_origin_xyz_m: [0.0, 0.0, 0.0]
@@ -76,8 +79,9 @@ geometry:
 #   receivers: {start: 0, stop: 2305, step: 1,  depth: 1}
 # geometry:
 #   kind: explicit                  # hard-coded coordinate lists (tiny cases)
-#   sources:   [[1, 100], [1, 500]]         # [z, x] per source
-#   receivers: [[1, 0], [1, 1], [1, 2]]     # shared across shots
+#   sources:   [[100, 1], [500, 1]]         # [x, z] grid indices per source
+#                                           # ([x, y, z] in 3-D)
+#   receivers: [[0, 1], [1, 1], [2, 1]]     # shared across shots
 # geometry:
 #   kind: from_file                 # sources_file / receivers_file .npy
 #   sources_file: /path/src.npy

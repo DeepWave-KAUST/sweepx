@@ -53,3 +53,76 @@ def _is_cuda_dev(dev) -> bool:
     if isinstance(dev, str):
         return dev.startswith("cuda")
     return False
+
+
+_BLOWUP_HINT = (
+    "The simulation blew up: check the CFL condition (`time.dt` against "
+    "`grid.dh` and the fastest velocity) and the models for NaN / Inf / zero "
+    "values."
+)
+
+
+def _nonfinite_summary(arr: "np.ndarray", name: str, saved_to=None, *,
+                       axis_names: tuple[str, ...] = ("shot",),
+                       labels: dict | None = None,
+                       chunk_elems: int = 1 << 22) -> str | None:
+    """One sentence on the NaN / Inf in ``arr``, or ``None`` when it is finite.
+
+    The scan walks ``arr`` one axis-0 slice at a time and in ``chunk_elems``
+    pieces inside it, so the temporary boolean mask is at most ``chunk_elems``
+    bytes however large a 3-D record is — never a full-size copy.
+
+    ``axis_names`` names the leading axes for the message (the location of the
+    first bad value is reported along each of them). ``labels`` maps an axis
+    name to a sequence that turns an index into something readable — e.g. the
+    snapshot time step at each snapshot index.
+    """
+    arr = np.asarray(arr)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.size == 0 or not (np.issubdtype(arr.dtype, np.floating)
+                             or np.issubdtype(arr.dtype, np.complexfloating)):
+        return None
+    n_bad = n_nan = 0
+    first = None
+    for i in range(arr.shape[0]):
+        # A view when the slice is contiguous (the usual case for a tensor
+        # brought to the host with .cpu().numpy()); one slice copied otherwise.
+        flat = np.ascontiguousarray(arr[i]).reshape(-1)
+        for lo in range(0, flat.size, chunk_elems):
+            block = flat[lo:lo + chunk_elems]
+            bad = ~np.isfinite(block)
+            nb = int(np.count_nonzero(bad))
+            if nb == 0:
+                continue
+            n_bad += nb
+            n_nan += int(np.count_nonzero(np.isnan(block)))
+            if first is None:
+                first = (i,) + tuple(int(v) for v in np.unravel_index(
+                    lo + int(np.argmax(bad)), arr.shape[1:]))
+    if n_bad == 0:
+        return None
+    where = []
+    for ax, idx in zip(axis_names, first):
+        lab = (labels or {}).get(ax)
+        named = lab is not None and idx < len(lab)
+        where.append(f"{ax} {idx}" + (f" ({lab[idx]})" if named else ""))
+    saved = f" Saved to {saved_to} for inspection." if saved_to else ""
+    return (
+        f"{name} contains {n_bad} non-finite value(s) out of {arr.size} "
+        f"({n_nan} NaN, {n_bad - n_nan} Inf); the first is at "
+        f"{', '.join(where)} (index {first} of shape {tuple(arr.shape)})."
+        f"{saved}"
+    )
+
+
+def _raise_if_nonfinite(*summaries: str | None) -> None:
+    """Raise ``ValueError`` naming every array :func:`_nonfinite_summary` flagged.
+
+    Called on the host copies AFTER they were written to disk, so a blown-up
+    run still leaves the arrays behind for inspection while the task ends
+    ``failed`` instead of reporting success on garbage.
+    """
+    found = [s for s in summaries if s]
+    if found:
+        raise ValueError(" ".join(found) + " " + _BLOWUP_HINT)

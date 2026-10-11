@@ -307,7 +307,10 @@ Wavelet = Annotated[
 # ----- geometry ----------------------------------------------------------
 
 class LineSet(_Forbid):
-    """A 2D line of source/receiver points: x = arange(start, stop, step), z = depth."""
+    """A 2D line of source/receiver points: x = arange(start, stop, step), z = depth.
+
+    Points come out in sweep's (x, z) grid-index order.
+    """
 
     step: int = Field(ge=1)
     depth: int = Field(ge=0)
@@ -337,7 +340,8 @@ class AxisSpan(_Forbid):
 
 class GridSet(_Forbid):
     """A 3-D rectangular patch of points: the ``x`` × ``y`` outer product at a
-    single depth. Points come out in (x, y, z) order, x fastest-varying."""
+    single depth. Each point is (x, y, z); the points are enumerated x-major,
+    y fastest-varying."""
 
     x: AxisSpan
     y: AxisSpan
@@ -365,6 +369,11 @@ class ExplicitGeometry(_Forbid):
     `sources` is `(nshots, ndim)`. `receivers` is either `(nrec, ndim)` (shared
     across all shots) or `(nshots, nrec, ndim)` (per-shot). The runner
     promotes the shared form to per-shot at use time.
+
+    Each point is a list of GRID INDICES in sweep's order: ``[x, z]`` on a
+    2-D grid, ``[x, y, z]`` on a 3-D one — the order ``kind: line`` / ``grid``
+    produce. They reach the solver as given, unreordered. (The MODEL arrays are
+    the other way round, ``(nz, nx)`` / ``(nz, ny, nx)``.)
     """
 
     kind: Literal["explicit"] = "explicit"
@@ -402,6 +411,9 @@ class FromFileGeometry(_Forbid):
     Expected shapes:
       sources_file   -> (nshots, ndim)            int64
       receivers_file -> (nrec, ndim) shared   OR  (nshots, nrec, ndim) per-shot
+
+    The last axis is grid indices in sweep's order, (x, z) in 2-D and
+    (x, y, z) in 3-D, the same as :class:`ExplicitGeometry`.
     """
 
     kind: Literal["from_file"] = "from_file"
@@ -485,10 +497,14 @@ class FromPlanGeometry(_Forbid):
     # Optional per-axis grid spacing in metres. When None (default) the
     # runner uses ``spec.grid.dh`` for every axis. Set on anisotropic
     # grids (e.g. ``(dz=25, dy=75, dx=75)``).
+    # NOTE: these three per-axis tuples (dh_xyz_m, grid_origin_xyz_m,
+    # auto_origin_pad_cells) follow the MODEL axis order (z, y, x), despite
+    # the ``_xyz_`` in two of the names. Source / receiver POINTS are (x, y, z).
     dh_xyz_m: tuple[float, float, float] | None = None
-    # The UTM coordinate that maps to grid index 0 on each axis. When
-    # None (default), the runner picks the bounding box of the rotated
-    # source + receiver positions with optional padding.
+    # The coordinate (metres, in the rotated model frame) that maps to grid
+    # index 0 on each axis, ordered (z, y, x). When None (default), the runner
+    # picks the bounding box of the rotated source + receiver positions with
+    # optional padding.
     grid_origin_xyz_m: tuple[float, float, float] | None = None
     # Padding around the snap origin in cells (z, y, x). Used only when
     # ``grid_origin_xyz_m`` is None.
@@ -1993,6 +2009,49 @@ class WavefieldSpec(BaseTaskSpec):
     models: list[ModelRef]
     snapshot_times: list[int] = Field(min_length=1)
     plot: bool = True
+
+    @model_validator(mode="after")
+    def _validate_wavefield(self):
+        # Snapshot capture (return_wavefield + snapshot_times) exists on the
+        # eager backend only. The C propagator takes no `snapshot_times` and
+        # failed with an unexpected-keyword TypeError after the models were
+        # already built — say what to change here instead.
+        if self.backend.impl == "c":
+            raise ValueError(
+                "wavefield task: backend.impl='c' cannot capture snapshots — "
+                "snapshot capture is eager-only; set backend: {impl: eager}. "
+                "(forward / fwi / rtm / lsrtm tasks can keep impl: c.)"
+            )
+        # Eager chunk checkpointing keeps only the chunk boundaries and
+        # recomputes the rest, so it has no interior field to hand back; sweep
+        # refuses return_wavefield with it, again after the models are built.
+        if self.backend.use_ckpt:
+            raise ValueError(
+                "wavefield task: backend.use_ckpt=true cannot return snapshots "
+                "(checkpointing discards the interior field); set "
+                "backend.use_ckpt: false."
+            )
+        nt = self.time.nt
+        out_of_range = [t for t in self.snapshot_times if not 0 <= t < nt]
+        if out_of_range:
+            raise ValueError(
+                f"wavefield task: snapshot_times {out_of_range} are outside "
+                f"[0, {nt - 1}] (time.nt={nt}). They are time-step INDICES, "
+                f"not seconds; use values below nt or raise time.nt."
+            )
+        # The solver returns snapshots sorted and de-duplicated, so an
+        # unsorted or repeated list put snapshots.npy[i] and the figure title
+        # "t-step snapshot_times[i]" on different time steps.
+        times = list(self.snapshot_times)
+        if any(b <= a for a, b in zip(times, times[1:])):
+            raise ValueError(
+                f"wavefield task: snapshot_times {times} must be strictly "
+                f"increasing with no repeats (e.g. {sorted(set(times))}): the "
+                f"solver returns snapshots in increasing time order, so "
+                f"snapshots.npy and the plot titles would not line up with "
+                f"the list as written."
+            )
+        return self
 
 
 class FWISpec(BaseTaskSpec):

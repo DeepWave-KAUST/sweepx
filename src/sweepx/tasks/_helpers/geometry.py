@@ -32,7 +32,7 @@ def _grid_array(gset, fallback_nx: int, fallback_ny: int) -> "np.ndarray":
             )
         out.append(np.arange(axis.start, stop, axis.step, dtype=np.int64))
     xs, ys = out
-    gx, gy = np.meshgrid(xs, ys, indexing="ij")     # x fastest-varying
+    gx, gy = np.meshgrid(xs, ys, indexing="ij")     # x-major, y fastest-varying
     return np.stack([gx.ravel(), gy.ravel(),
                      np.full(gx.size, gset.depth, dtype=np.int64)], axis=1)
 

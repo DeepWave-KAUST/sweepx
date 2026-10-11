@@ -333,6 +333,12 @@ def _cmd_new(args) -> int:
     from sweep_tasks import new_template
     from sweep_tasks.yaml_io import _FILE_TEMPLATES, _read_bundled_template
 
+    if args.task_type == "wavefield" and args.backend == "c":
+        print("error: --backend c is not available for a wavefield task: "
+              "snapshot capture is eager-only; use --backend eager (the "
+              "default).")
+        return 2
+
     if args.task_type in _FILE_TEMPLATES:
         # Emit the annotated reference verbatim — the SAME file `sweep-tasks
         # init` ships — so every field mode and how to switch it stays visible

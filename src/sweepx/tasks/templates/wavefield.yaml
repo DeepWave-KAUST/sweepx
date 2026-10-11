@@ -22,7 +22,9 @@ grid:
 
 # ---- time -------------------------------------------------------------------
 time:
-  dt: 0.001                       # seconds. Must satisfy CFL — the runner checks.
+  dt: 0.001                       # seconds. Must satisfy CFL. Not pre-checked
+                                  # here: a run that blows up ends `failed`
+                                  # with a non-finite (NaN/Inf) error.
   nt: 3000                        # number of steps; total record = dt * nt
 
 # ---- source wavelet ---------------------------------------------------------
@@ -61,9 +63,16 @@ physics:
 
 # ---- backend ----------------------------------------------------------------
 backend:
-  impl: c                         # c = fused CUDA kernels; eager = pure torch
-                                  # (CPU-capable, ~30x slower)
-  use_ckpt: false
+  impl: eager                     # eager ONLY: snapshot capture (the interior
+                                  # field at `snapshot_times`) exists on the
+                                  # eager backend alone. The fused CUDA path
+                                  # (`c`) keeps just the receiver traces, so a
+                                  # wavefield task with `impl: c` is rejected
+                                  # when the file loads. forward / fwi / rtm /
+                                  # lsrtm tasks can still use `c`.
+  use_ckpt: false                 # must stay false: checkpointing keeps no
+                                  # interior field, so `true` is rejected
+                                  # when the file loads too.
 
 # ---- models -----------------------------------------------------------------
 # Three interchangeable sources — pick exactly one per entry:
@@ -80,5 +89,6 @@ models:
     # smooth_sigma_cells: 8       # gaussian smooth after loading (any source)
 
 # ---- snapshots --------------------------------------------------------------
-snapshot_times: [400, 900, 1500, 2400]   # time-step INDICES (t = index * dt)
+snapshot_times: [400, 900, 1500, 2400]   # time-step INDICES (t = index * dt),
+                                         # strictly increasing, each < nt
 plot: true                               # also write a PNG per snapshot

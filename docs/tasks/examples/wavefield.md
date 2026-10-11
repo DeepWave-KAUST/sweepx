@@ -8,7 +8,13 @@ sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml
 (`snapshot_times:`) instead of only recording at receivers — the fastest way to
 see a physics flag rather than reason about it. It writes `output/record.npy`,
 `output/snapshots.npy` and `output/snapshots.png`. It runs on `impl: eager`,
-because snapshot capture needs the wavefield returned to Python.
+because snapshot capture needs the wavefield returned to Python; a wavefield
+task with `impl: c` or `use_ckpt: true` (checkpointing keeps no interior
+field) is rejected when the file loads. `snapshot_times` are time-step
+indices, strictly increasing and below `time.nt`. If the run blows up (NaN /
+Inf in the record or the snapshots, typically a CFL violation), the arrays
+are still written and the task ends `failed`, naming the first bad shot,
+field and time step.
 
 **Reference: 18 s**, snapshots at steps 400 / 900 / 1500 / 2400.
 

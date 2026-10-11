@@ -20,7 +20,12 @@ from sweep_tasks._helpers.model import (
 )
 from sweep_tasks._helpers.plotting import _plot_wavefield_snapshots
 from sweep_tasks._helpers.solver_build import _build_solver, _solver_models_in_order
-from sweep_tasks._helpers.util import _apply_seed, _resolve_device
+from sweep_tasks._helpers.util import (
+    _apply_seed,
+    _nonfinite_summary,
+    _raise_if_nonfinite,
+    _resolve_device,
+)
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
 
@@ -117,6 +122,11 @@ class ForwardRunnerMixin:
         np.save(record_path, record_np)
         np.save(sources_path, sources)
         np.save(receivers_path, receivers)
+        # After the save, so a blown-up run still leaves record.npy to look at,
+        # but ends failed instead of reporting success on NaN / Inf.
+        _raise_if_nonfinite(_nonfinite_summary(
+            record_np, "record.npy", record_path,
+            axis_names=("shot", "time step", "receiver")))
 
         summary = {
             "elapsed_ms": elapsed,
@@ -133,6 +143,27 @@ class ForwardRunnerMixin:
     def _run_wavefield(self, spec: WavefieldSpec, task_dir: Path):
 
         _apply_seed(spec.seed)
+        # Backstop for WavefieldSpec's load-time check (a spec built with
+        # model_construct, or edited after validation): on impl='c' the call
+        # below dies inside the C propagator with an unexpected-keyword
+        # TypeError, and with use_ckpt=True sweep refuses return_wavefield
+        # only after the models are built, so refuse both up front.
+        no_snapshots = (
+            "Snapshot capture is implemented on the eager backend: set "
+            "`backend: {impl: eager}` for a wavefield task. (forward / "
+            "fwi / rtm tasks are unaffected and keep the compiled path.)"
+        )
+        if spec.backend.impl != "eager":
+            raise NotImplementedError(
+                f"backend.impl={spec.backend.impl!r} cannot capture wavefield "
+                f"snapshots. {no_snapshots}"
+            )
+        if spec.backend.use_ckpt:
+            raise NotImplementedError(
+                "backend.use_ckpt=true cannot return wavefield snapshots "
+                "(checkpointing discards the interior field): set "
+                "`backend.use_ckpt: false` for a wavefield task."
+            )
         dev = _resolve_device(spec.device)
         equation_cls = _get_equation_class(spec.physics.equation)
         shape = _infer_shape(spec.models, spec.grid.shape)
@@ -158,10 +189,7 @@ class ForwardRunnerMixin:
         if not (isinstance(result, tuple) and len(result) == 2):
             raise NotImplementedError(
                 f"backend.impl={spec.backend.impl!r} returned no wavefield "
-                "snapshots — it ignored return_wavefield=True. Snapshot "
-                "capture is implemented on the eager backend: set "
-                "`backend: {impl: eager}` for a wavefield task. (forward / "
-                "fwi / rtm tasks are unaffected and keep the compiled path.)"
+                f"snapshots — it ignored return_wavefield=True. {no_snapshots}"
             )
         record, snapshots = result
         elapsed = (time.perf_counter() - t0) * 1000.0
@@ -173,6 +201,23 @@ class ForwardRunnerMixin:
         snapshots_path = out_dir / "snapshots.npy"
         np.save(record_path, record_np)
         np.save(snapshots_path, snapshots_np)
+        # After both saves (see _run_forward). The snapshots are taken inside
+        # the grid, PML included, so they also name the field and the time
+        # step where the blow-up shows, which the record alone cannot.
+        # snapshots.npy is (n_snapshots, n_fields, n_shots, 1, *padded grid).
+        field_names = getattr(solver, "wavefield_names", None)
+        if field_names is not None and len(field_names) != snapshots_np.shape[1]:
+            field_names = None
+        _raise_if_nonfinite(
+            _nonfinite_summary(
+                record_np, "record.npy", record_path,
+                axis_names=("shot", "time step", "receiver")),
+            _nonfinite_summary(
+                snapshots_np, "snapshots.npy", snapshots_path,
+                axis_names=("snapshot", "field", "shot"),
+                labels={"snapshot": [f"t-step {t}" for t in spec.snapshot_times],
+                        "field": field_names}),
+        )
 
         artifacts: list[Path] = [record_path, snapshots_path]
         if spec.plot:
