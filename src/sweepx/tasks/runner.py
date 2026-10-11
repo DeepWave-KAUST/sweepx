@@ -41,6 +41,7 @@ from sweep_tasks.tasks.fwi import FWIRunnerMixin
 from sweep_tasks.tasks.fwi_plan_streaming import PlanStreamingFWIMixin
 from sweep_tasks._helpers.logtee import tee_run_logs
 from sweep_tasks._helpers.metadata import _dump_run_metadata, _write_manifest
+from sweep_tasks.progress import ProgressLog
 
 
 # ---------- result + status containers -----------------------------------
@@ -130,6 +131,9 @@ class TaskRunner(
             (task_dir / "output").mkdir(exist_ok=True)
             (task_dir / "logs").mkdir(exist_ok=True)
         _dist.barrier(dist_info)
+        # metrics.jsonl: rank 0 only, like status.json. Tasks reach it via
+        # sweep_tasks.progress.progress_for(self).
+        self._progress = ProgressLog(task_dir, enabled=dist_info.is_root)
         # the run's stdout / stderr also go to <run>/logs/ (see _helpers/logtee.py);
         # the manifest is taken last, once those are closed
         try:
@@ -176,6 +180,7 @@ class TaskRunner(
             status.state = "failed"
             status.error = f"Unknown task_type '{spec.task_type}'."
             status.finished_at = _now_iso()
+            self._progress.event("end", state=status.state, error=status.error)
             if dist_info.is_root:
                 status.write(task_dir / "status.json")
             _dist.cleanup_distributed(dist_info)
@@ -198,8 +203,23 @@ class TaskRunner(
             # up masking the original exception in the stderr.
             print(f"[runner] task failed: {status.error}")
             _tb.print_exc()
+        except BaseException as e:
+            # KeyboardInterrupt (second ctrl-c) / SystemExit still propagate;
+            # record them so status.json and metrics.jsonl do not stay
+            # "running" for a process that is gone. SystemExit(0) / SystemExit()
+            # is a task stopping cleanly on purpose (a debug exit), not a failure.
+            if isinstance(e, SystemExit) and e.code in (0, None):
+                status.state = "success"
+                status.summary = {"exited_early": f"SystemExit({e.code})"}
+            else:
+                status.state = "failed"
+                status.error = f"{type(e).__name__}: {e}"
+            raise
         finally:
             status.finished_at = _now_iso()
+            # end goes before status.json: a reader that sees the final state
+            # there can rely on metrics.jsonl being complete.
+            self._progress.event("end", state=status.state, error=status.error)
             if dist_info.is_root:
                 try:
                     task_dir.mkdir(parents=True, exist_ok=True)

@@ -49,6 +49,7 @@ from sweep_tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
 )
+from sweep_tasks.progress import optimizer_lr, progress_for
 
 
 def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None):
@@ -560,6 +561,14 @@ class FreqselRunnerMixin:
                   f"{sched.selection}, comb {comb.freqs[0]:.4f}-"
                   f"{comb.freqs[-1]:.4f} Hz, nt={nt}, dh={dh}, dt={dt}",
                   flush=True)
+        progress = progress_for(self)
+        progress.event("stage", stage=si, epochs=int(stage.epochs),
+                       first_epoch=epoch_offset,
+                       band={"lo_hz": comb.freqs[0], "hi_hz": comb.freqs[-1],
+                             "k_lo": int(fspec.k_lo), "k_hi": int(fspec.k_hi),
+                             "n_bins": comb.n_bins},
+                       n_pools=int(fspec.n_pools), dh=float(dh), dt=float(dt),
+                       nt=nt, shape=list(gshape))
 
         # ---- optional seabed-based water pin (geologically-correct) --------
         # The seabed_depth npz is a 2-D (ny, nx) bathymetry (meters from z=0)
@@ -1065,6 +1074,8 @@ class FreqselRunnerMixin:
             times.append(_time.perf_counter() - ti)
             peaks.append(torch.cuda.max_memory_allocated() / 2 ** 30
                          if use_cuda else 0.0)
+            progress.event("iter", stage=si, epoch=gi, loss=losses[-1],
+                           lr=optimizer_lr(optimizer))
             if rank == 0 and (it < 30 or it % max(1, stage_epochs // 40) == 0
                               or it == stage_epochs - 1):
                 print(f"[freqsel] s{si} it {it:4d} "
@@ -1082,9 +1093,11 @@ class FreqselRunnerMixin:
                 with torch.no_grad():
                     m = (net.render(chunk_rows=chunk_rows).detach()
                          if use_reparam else vp.detach())
-                np.save(task_dir / f"vp_iter{gi + 1:04d}.npy",
+                snap_path = task_dir / f"vp_iter{gi + 1:04d}.npy"
+                np.save(snap_path,
                         (m[:, :nx_] if is2d
                          else m[:, :ny_, :nx_]).cpu().numpy())
+                progress.snapshot(gi, snap_path, name="vp")
                 if use_reparam and (spec.reparam.save_net
                                     or os.environ.get("SWEEP_SAVE_REPARAM_NET") == "1"):
                     torch.save(net.state_dict(),
@@ -1204,6 +1217,10 @@ class FreqselRunnerMixin:
         losses, times, peaks = [], [], []
         chk_first = None
         ny_ = nx_ = None
+        progress_for(self).event(
+            "start", task_type="fwi", mode="frequency_selection",
+            total_epochs=total_epochs, n_stages=len(stages),
+            reparam=use_reparam)
         for si, stage in enumerate(stages):
             fspec = getattr(stage, "frequency", None) or fspec_global
             if fspec is None:

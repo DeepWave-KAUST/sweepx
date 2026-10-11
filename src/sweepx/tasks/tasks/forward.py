@@ -27,6 +27,7 @@ from sweep_tasks._helpers.util import (
     _resolve_device,
 )
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweep_tasks.progress import progress_for
 
 
 class ForwardRunnerMixin:
@@ -108,11 +109,17 @@ class ForwardRunnerMixin:
         print(f"[forward] equation={spec.physics.equation} shape={shape} "
               f"nshots={sources.shape[0]} nreceivers={receivers.shape[1]} "
               f"nt={spec.time.nt} backend={spec.backend.impl}")
+        # All shots go through one solver call, so progress is all-or-nothing.
+        progress = progress_for(self)
+        nshots = int(sources.shape[0])
+        progress.event("start", task_type="forward", total_epochs=None,
+                       n_stages=None, nshots=nshots)
 
         t0 = time.perf_counter()
         with torch.no_grad():
             record = solver(wavelet, sources, receivers, models=models)
         elapsed = (time.perf_counter() - t0) * 1000.0
+        progress.event("progress", done=nshots, total=nshots, unit="shot")
         record_np = record.detach().cpu().numpy()
 
         out_dir = task_dir / "output"
@@ -177,6 +184,10 @@ class ForwardRunnerMixin:
 
         print(f"[wavefield] equation={spec.physics.equation} shape={shape} "
               f"snapshots={spec.snapshot_times}")
+        progress = progress_for(self)
+        nshots = int(sources.shape[0])
+        progress.event("start", task_type="wavefield", total_epochs=None,
+                       n_stages=None, nshots=nshots)
 
         t0 = time.perf_counter()
         result = solver(
@@ -193,6 +204,7 @@ class ForwardRunnerMixin:
             )
         record, snapshots = result
         elapsed = (time.perf_counter() - t0) * 1000.0
+        progress.event("progress", done=nshots, total=nshots, unit="shot")
         record_np = record.detach().cpu().numpy()
         snapshots_np = snapshots.detach().cpu().numpy()
 

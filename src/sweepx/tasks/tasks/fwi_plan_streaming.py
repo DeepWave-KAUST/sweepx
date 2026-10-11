@@ -81,6 +81,7 @@ from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
+from sweep_tasks.progress import band_desc, optimizer_lr, progress_for
 
 
 def _dd_skipped_features(spec) -> list[tuple[str, str]]:
@@ -1592,6 +1593,11 @@ class PlanStreamingFWIMixin:
         except Exception as meta_err:  # noqa: BLE001
             print(f"[run-meta] dump skipped: {meta_err}")
 
+        progress = progress_for(self)
+        progress.event("start", task_type="fwi", mode="plan_streaming",
+                       total_epochs=total_epochs, n_stages=len(stage_list),
+                       reparam=reparam_net is not None)
+
         # Prime the prefetcher with iter 0's load so the first iter's
         # ``wait_io`` is also overlapped (with setup work above, ideally).
         next_future = prefetch_pool.submit(_load_iter_payload, _iter_seed(0), _bs_for_epoch(0))
@@ -1687,6 +1693,11 @@ class PlanStreamingFWIMixin:
                     next_future = prefetch_pool.submit(
                         _load_iter_payload, _iter_seed(epoch),
                         _bs_for_epoch(epoch))
+                progress.event("stage", stage=_si, epochs=int(_st.epochs),
+                               first_epoch=epoch, band=band_desc(bandpass_spec),
+                               dh=_cur_dh, dt=effective_dt, nt=effective_nt,
+                               shape=list(shape),
+                               batchsize=_bs_for_epoch(epoch))
             # Coarse-to-fine hash: advance the encoder level mask by whole-run
             # progress each epoch (base_levels -> final_levels over [warmup,
             # ramp_end], epoch fraction). The plan-streaming path NEVER drove this, so
@@ -2542,6 +2553,8 @@ class PlanStreamingFWIMixin:
                   f"fwd={t_fwd:.2f} bwd={t_bwd:.2f} smoothreg={t_smoothreg:.2f} "
                   f"drain={t_drain:.2f} reparam_bwd={t_reparam_bwd:.2f} "
                   f"opt={t_opt:.2f}]{cache_str}{pf_str}{ms_str}", flush=True)
+            progress.event("iter", stage=_si, epoch=epoch, loss=losses[-1],
+                           lr=optimizer_lr(optimizer))
 
             # --- Snapshots + QC.
             # Also snapshot the LAST iter of each stage (epoch+1 crosses a stage
@@ -2553,10 +2566,9 @@ class PlanStreamingFWIMixin:
                             or (epoch + 1) in stage_starts)
             if snapshot_now and dist_info.is_root:   # DD: only rank 0 holds the rendered vp
                 vp_now = inv_by_name["vp"]
-                np.save(
-                    snapshots_dir / f"vp_epoch_{epoch:04d}.npy",
-                    vp_now.detach().cpu().numpy(),
-                )
+                snap_path = snapshots_dir / f"vp_epoch_{epoch:04d}.npy"
+                np.save(snap_path, vp_now.detach().cpu().numpy())
+                progress.snapshot(epoch, snap_path, name="vp")
             if qc_enabled and (epoch % spec.qc.every_n_epochs == 0
                                or epoch == total_epochs - 1):
                 # The rendered vp is on the CURRENT stage grid: label its axes

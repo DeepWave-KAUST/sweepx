@@ -19,15 +19,41 @@ from sweep_tasks.schemas import TaskSpec
 
 _task_adapter: TypeAdapter[TaskSpec] = TypeAdapter(TaskSpec)
 
+# Keys whose string value is resolved against the YAML's directory, at any
+# depth. Matched by KEY NAME, not by schema field: every other path-like field
+# (``loss.data_mask_path``, ``physics.topography``, ``geometry.plan_path``, ...)
+# is read relative to the working directory of the process that runs the task.
+RESOLVED_PATH_KEYS: frozenset[str] = frozenset({
+    "path", "npy_path", "disk_dir", "output_dir",
+    "sources_file", "receivers_file", "coeff_shards",
+})
+
+
+def resolve_paths(raw: dict, base_dir: str | Path) -> dict:
+    """Return a copy of a raw task dict with its path keys made absolute.
+
+    The exact rule :func:`load_task` / :func:`load_task_from_dict` apply before
+    validation: for every key in :data:`RESOLVED_PATH_KEYS`, a string value has
+    ``$VAR`` / ``${VAR}`` expanded and, if still relative, is joined to
+    ``base_dir`` and resolved. Nothing else is touched; ``raw`` is not
+    modified.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Task spec must be a mapping at the top level, got "
+            f"{type(raw).__name__}."
+        )
+    return _resolve_paths(raw, Path(base_dir).resolve())
+
 
 def _resolve_paths(value: Any, base: Path) -> Any:
     """Recursively resolve any string that looks like a path key to absolute.
 
     We can't know which strings are paths without inspecting the schema, so
-    instead we walk the raw dict before validation and treat any key named
-    `path` or `npy_path` whose value is a non-absolute string as relative to
-    `base`. ``$VAR`` / ``${VAR}`` is expanded against the environment
-    before relative-to-absolute resolution.
+    instead we walk the raw dict before validation and treat any key in
+    :data:`RESOLVED_PATH_KEYS` whose value is a non-absolute string as
+    relative to `base`. ``$VAR`` / ``${VAR}`` is expanded against the
+    environment before relative-to-absolute resolution.
 
     ``coeff_shards`` is a glob rather than a single path, but it belongs in the
     same set: it is resolved by ``glob.glob`` deep inside the runner, so
@@ -40,8 +66,7 @@ def _resolve_paths(value: Any, base: Path) -> Any:
         return {
             k: (
                 _resolve_one(v, base)
-                if k in {"path", "npy_path", "disk_dir", "output_dir",
-                         "sources_file", "receivers_file", "coeff_shards"}
+                if k in RESOLVED_PATH_KEYS
                 else _resolve_paths(v, base)
             )
             for k, v in value.items()

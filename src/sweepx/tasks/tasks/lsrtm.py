@@ -38,6 +38,7 @@ from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import _apply_seed
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweep_tasks.progress import optimizer_lr, progress_for
 
 
 class LSRTMRunnerMixin:
@@ -163,6 +164,10 @@ class LSRTMRunnerMixin:
             bounds_by_name["reflectivity"] = spec.reflectivity_bounds
 
         stages = _normalise_stage_list(spec)
+        progress = progress_for(self)
+        progress.event("start", task_type="lsrtm", total_epochs=total_epochs,
+                       n_stages=len(stages), start_epoch=start_epoch,
+                       resumed_from=resume_src)
         out_dir = task_dir / "output"
         snapshots_dir = out_dir / "epochs"
         if dist_info.is_root:
@@ -193,6 +198,9 @@ class LSRTMRunnerMixin:
             if dist_info.is_root:
                 print(f"[lsrtm] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")
+            progress.event("stage", stage=stage_idx, epochs=stage.epochs,
+                           remaining=remaining, first_epoch=epoch_global,
+                           lr_scale=stage.lr_scale)
             for _ in range(remaining):
                 loss_value = self._lsrtm_train_step(
                     spec, lsrtm_solver, stage_wavelet, sources, receivers,
@@ -200,17 +208,22 @@ class LSRTMRunnerMixin:
                     dist_info=dist_info,
                 )
                 losses.append(loss_value)
+                # the lr this step used, read before the scheduler moves it
+                step_lr = optimizer_lr(optimizer)
                 if scheduler is not None:
                     scheduler.step()
                 _apply_bounds(inv_by_name, bounds_by_name)
                 if dist_info.is_root:
                     print(f"[lsrtm] stage {stage_idx} epoch {epoch_global:04d} loss={loss_value:.6e}")
+                progress.event("iter", stage=stage_idx, epoch=epoch_global,
+                               loss=loss_value, lr=step_lr)
 
                 snapshot_now = (epoch_global % spec.show_every == 0
                                 or epoch_global == total_epochs - 1)
                 if snapshot_now and dist_info.is_root:
-                    np.save(snapshots_dir / f"reflectivity_epoch_{epoch_global:04d}.npy",
-                            ref.detach().cpu().numpy())
+                    snap_path = snapshots_dir / f"reflectivity_epoch_{epoch_global:04d}.npy"
+                    np.save(snap_path, ref.detach().cpu().numpy())
+                    progress.snapshot(epoch_global, snap_path, name="reflectivity")
                     if spec.save_illumination:
                         _save_illumination(lsrtm_solver, snapshots_dir, epoch_global)
 

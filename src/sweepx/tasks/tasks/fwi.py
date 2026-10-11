@@ -95,6 +95,7 @@ from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
+from sweep_tasks.progress import band_desc, optimizer_lr, progress_for
 
 
 def _build_grad_smoother(spec, dev):
@@ -609,6 +610,11 @@ class FWIRunnerMixin:
 
         # 8) Multi-stage training loop.
         stages = _normalise_stage_list(spec)
+        progress = progress_for(self)
+        progress.event("start", task_type="fwi", mode="conventional",
+                       total_epochs=total_epochs, n_stages=len(stages),
+                       start_epoch=start_epoch, resumed_from=resume_src,
+                       reparam=reparam_net is not None)
         out_dir = task_dir / "output"
         snapshots_dir = out_dir / "epochs"
         if dist_info.is_root:
@@ -832,6 +838,13 @@ class FWIRunnerMixin:
             if dist_info.is_root:
                 print(f"[fwi] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")
+            progress.event("stage", stage=stage_idx, epochs=stage.epochs,
+                           remaining=remaining, first_epoch=epoch_global,
+                           band=band_desc(stage.bandpass), dh=state["dh"],
+                           dt=state["dt"], nt=state["nt"],
+                           shape=list(state["shape"]),
+                           batchsize=state["batchsize"],
+                           lr_scale=stage.lr_scale)
             # Build the per-batch local-window context once per stage and
             # pass it through; the chunk dispatcher inside _fwi_train_step
             # uses it to compute fresh windows + cached solvers per chunk.
@@ -915,6 +928,8 @@ class FWIRunnerMixin:
                     freeze_top_rows=state.get("freeze_top_rows"),
                 )
                 losses.append(loss_value)
+                # the lr this step used, read before the scheduler moves it
+                step_lr = optimizer_lr(state["optimizer"])
                 if scheduler is not None:
                     scheduler.step()
                 # In reparam mode the network's render-time clamp already
@@ -933,13 +948,16 @@ class FWIRunnerMixin:
                     ]
                 if dist_info.is_root:
                     print(f"[fwi] stage {stage_idx} epoch {epoch_global:04d} loss={loss_value:.6e}")
+                progress.event("iter", stage=stage_idx, epoch=epoch_global,
+                               loss=loss_value, lr=step_lr)
 
                 snapshot_now = (epoch_global % spec.show_every == 0
                                 or epoch_global == total_epochs - 1)
                 if snapshot_now and dist_info.is_root:
                     for name, t in state["inv_by_name"].items():
-                        np.save(snapshots_dir / f"{name}_epoch_{epoch_global:04d}.npy",
-                                t.detach().cpu().numpy())
+                        snap_path = snapshots_dir / f"{name}_epoch_{epoch_global:04d}.npy"
+                        np.save(snap_path, t.detach().cpu().numpy())
+                        progress.snapshot(epoch_global, snap_path, name=name)
                     if spec.save_illumination:
                         _save_illumination(state["solver"], snapshots_dir, epoch_global)
 
