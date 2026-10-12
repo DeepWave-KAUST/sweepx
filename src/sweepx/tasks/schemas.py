@@ -1008,8 +1008,10 @@ class FreqSelectionSpec(_Forbid):
     coeff_shards: str | None = None
     synthesize_from_true: bool = False
     # synthetic-test layout (used only with synthesize_from_true): path of
-    # the true model npy (target grid), number of nodes on the surface line
-    # grid, receiver stride in cells, and node depth in cells.
+    # the true model npy (on the native grid, like the init), number of nodes
+    # on the surface line, receiver stride in cells, and node depth in cells.
+    # Cells are NATIVE (grid.dh) cells: a stage with its own dh_m places the
+    # same physical nodes and receivers on its grid at round(x / dh_m).
     true_model_path: str | None = None
     synth_n_nodes: int = Field(gt=0, default=16)
     synth_rec_stride: int = Field(gt=0, default=2)
@@ -1472,7 +1474,14 @@ class StageSpec(_Forbid):
       sweep to high-freq inversion) and the old momentum is misleading.
       Defaults to ``False``; the runner already auto-resets the optimizer
       when ``dh_m`` changes (because Adam state is shape-bound).
-    - ``dh_m``: rebuild solver + resample vp to this grid spacing
+    - ``dh_m``: rebuild solver + resample vp to this grid spacing. The stage
+      grid samples the native model (``grid.dh``) at ``i * dh_m`` from the
+      native origin -- the positions geometry snaps to, ``round(x / dh_m)`` --
+      and spans the whole native extent: ``ceil((n - 1) * grid.dh / dh_m) + 1``
+      points per axis, the last one taking the native edge value when the
+      extent is not a whole number of cells. Masks, seabed maps,
+      ``freeze_top_n_rows`` (same depth, not same row count) and the reparam
+      network's coordinates follow the same grid.
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
     - ``bandpass``: filter obs before this stage runs (uses sweep-preproc)
@@ -1935,6 +1944,8 @@ class FWISpec(BaseTaskSpec):
 
     # Phase-1 patch fields:
     model_bounds: dict[str, ModelBounds] = Field(default_factory=dict)
+    # Rows of the native grid (grid.dh). A stage with its own dh_m freezes the
+    # same depth, 0 .. (n - 1) * grid.dh, in its own rows.
     freeze_top_n_rows: int = Field(ge=0, default=0)
     stages: list[StageSpec] | None = None
     resume_from: str | None = None  # task_id under output_dir to resume from

@@ -12,6 +12,13 @@ from sweep_tasks._helpers.optimizer import (
     _remember_initial_lrs,
 )
 from sweep_tasks._helpers.solver_build import _build_solver
+from sweep_tasks._helpers.stage_grid import (
+    _resample_to_grid,
+    _set_physical_inr_frame,
+    _snap_covered,
+    _stage_grid_shape,
+    _stage_rows_covering,
+)
 from sweep_tasks._helpers.util import _is_cuda_dev
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
 
@@ -38,7 +45,9 @@ def _prepare_stage(
     Detects which of ``(dh, dt, nt, batch_size, lr_scale)`` changed against the
     previous stage state. Triggers any combination of:
 
-    - vp resample (bilinear) + fresh leaf tensors
+    - vp resample onto the stage grid (``_helpers.stage_grid``: same physical
+      samples as the geometry, ``i * dh`` from the native origin) + fresh
+      leaf tensors
     - solver rebuild at the new ``(shape, dh, dt, nt)``
     - geometry re-snap from the cached pristine PhysicalGeometry
     - optimizer re-init (Adam state is shape-bound) + initial_lrs cache
@@ -67,6 +76,14 @@ def _prepare_stage(
         print(f"[stage {stage_idx}] dh: {state['dh']} -> {new_dh}")
     if time_changed and dist_info.is_root:
         print(f"[stage {stage_idx}] dt: {state['dt']} -> {new_dt}, nt: {state['nt']} -> {new_nt}")
+
+    # The stage grid samples the native model at i * new_dh from the native
+    # origin and spans the whole native extent, so geometry snapped with
+    # round(x / new_dh) and the resampled model agree (``_helpers.stage_grid``).
+    native_shape = tuple(state.get("pristine_shape", state["shape"]))
+    native_dh = float(state["pristine_dh"])
+    stage_shape = _stage_grid_shape(native_shape, native_dh, new_dh)
+    on_native_grid = stage_shape == native_shape and abs(new_dh - native_dh) <= 1e-12
 
     # ---- Geometry re-snap from pristine physical positions -----------------
     # We re-snap whenever:
@@ -98,6 +115,20 @@ def _prepare_stage(
             dedupe=dedupe_flag,
             dedup_method=dedup_method,
         )
+        if not on_native_grid:
+            # A finer stage can round a position the native grid holds (within
+            # half a native cell of its edge) one cell past the stage edge,
+            # where the solver would record the absorbing layer. Put those on
+            # the edge node: no further than the native snap already moved them.
+            gg_n, _ = pg.to_grid(dh=(native_dh,) * pg.ndim, dedupe=False)
+            gg.sources, n_src_mv = _snap_covered(
+                gg.sources, gg_n.sources, stage_shape, native_shape)
+            gg.receivers, n_rec_mv = _snap_covered(
+                gg.receivers, gg_n.receivers, stage_shape, native_shape)
+            if (n_src_mv or n_rec_mv) and dist_info.is_root:
+                print(f"[stage {stage_idx}] moved {n_src_mv} source(s) and "
+                      f"{n_rec_mv} receiver(s) within half a native cell of the "
+                      f"model edge onto the stage grid's edge node")
         uniform = bool(np.all(mask == mask[0:1]))
         if not dedupe_flag or uniform:
             # Fast path: keep all (dedupe=false) or uniform mask across shots.
@@ -153,34 +184,38 @@ def _prepare_stage(
         # check above doesn't re-run on every stage entry.
         state["_geom_applied_at_dh"] = float(new_dh)
 
-    # ---- Pick a new model shape (preserves physical extent) ----------------
+    # ---- Stage grid shape (spans the native extent at new_dh) --------------
+    old_dh = float(state["dh"])
     if grid_changed or "shape" not in state:
-        new_shape = _shape_for_dh(state.get("pristine_shape", state["shape"]),
-                                  state["pristine_dh"], new_dh)
         if dist_info.is_root and grid_changed:
-            print(f"[stage {stage_idx}] vp shape: {state['shape']} -> {new_shape}")
-        state["shape"] = new_shape
+            print(f"[stage {stage_idx}] vp shape: {state['shape']} -> {stage_shape} "
+                  f"(native {native_shape} at {native_dh} m)")
+        state["shape"] = stage_shape
+    # ``freeze_top_n_rows`` names native rows; freeze the same depth here.
+    state["freeze_top_rows"] = _stage_rows_covering(
+        int(getattr(spec, "freeze_top_n_rows", 0) or 0), native_dh, new_dh)
 
     # ---- vp resample ----------------------------------------------------
-    # Two paths:
-    #  - Reparam off: bilinear-resample each leaf tensor to the new shape
-    #    and make a fresh `requires_grad=True` leaf (Adam state is shape-
-    #    bound, so we rebuild the optimizer below).
+    # Two paths, both sampling at the stage grid's physical positions:
+    #  - Reparam off: resample each CURRENT leaf tensor from the previous
+    #    stage's grid (old_dh) and make a fresh `requires_grad=True` leaf
+    #    (Adam state is shape-bound, so we rebuild the optimizer below).
     #  - Reparam on: keep the same VelocityINR. Update its `base_velocity`
-    #    buffer from the pristine init, resampled to the new shape — and
-    #    DO NOT rebuild the optimizer (its state on the network's params
-    #    is independent of grid shape and is the entire point of the
-    #    network-as-vp parameterization).
+    #    buffer from the pristine init, resampled to the new grid, and put its
+    #    coordinates in the native frame — and DO NOT rebuild the optimizer
+    #    (its state on the network's params is independent of grid shape and
+    #    is the entire point of the network-as-vp parameterization).
     if grid_changed:
         reparam_net = state.get("reparam_net")
         if reparam_net is not None:
             pristine_base = state["pristine_base_vp"]
-            new_base = _resample_vp_tensor(pristine_base, state["shape"]).detach()
+            new_base = _resample_to_grid(pristine_base, native_dh,
+                                         state["shape"], new_dh)
             # Rebuild the water-layer mask at the NEW grid and pass it in.
             # Otherwise update_base_velocity drops the stale (old-shape) mask
             # on the shape change and the water column is inverted freely from
             # stage 1 on. The pristine base has water == water_vp_m_s exactly
-            # and bilinear resample preserves that in the water interior, so
+            # and the linear resample preserves that in the water interior, so
             # `new_base == water_vp` reproduces the initial mask at the new shape.
             water_mask = None
             rspec = getattr(spec, "reparam", None)
@@ -192,6 +227,10 @@ def _prepare_stage(
                 water_vp_val = float(getattr(rspec, "water_vp_m_s", 1500.0))
                 water_mask = (new_base == water_vp_val)
             reparam_net.update_base_velocity(new_base, water_mask=water_mask)
+            # update_base_velocity rebuilt the coordinates as i/n of the new
+            # shape; without this the learned field would stretch with the grid.
+            _set_physical_inr_frame(reparam_net, shape=state["shape"], dh=new_dh,
+                                    frame_shape=native_shape, frame_dh=native_dh)
             with torch.no_grad():
                 rendered = reparam_net().detach()
             state["inv_by_name"]["vp"] = rendered
@@ -204,7 +243,8 @@ def _prepare_stage(
             new_by_name: dict = {}
             for name in required_names:
                 old_t = state["inv_by_name"][name]
-                new_t = _resample_vp_tensor(old_t, state["shape"])
+                new_t = _resample_to_grid(old_t, old_dh, state["shape"],
+                                          new_dh).requires_grad_(True)
                 new_inv.append(new_t)
                 new_by_name[name] = new_t
             state["inv_in_order"] = new_inv
@@ -233,7 +273,8 @@ def _prepare_stage(
             if _built is not None and tuple(_built.shape) == tuple(_net.base_velocity.shape):
                 _wr = _built.clone()
             else:
-                _pri = _resample_vp_tensor(state["pristine_base_vp"], state["shape"])
+                _pri = _resample_to_grid(state["pristine_base_vp"], native_dh,
+                                         state["shape"], new_dh)
                 _wr = (_pri == _water_vp)
             state["water_region_mask"] = _wr
         _net.water_mask = None  # free within the stage: drop the render-time pin
@@ -559,46 +600,6 @@ def _prepare_stage(
 
 
 # ---------- the TaskRunner ------------------------------------------------
-
-
-def _shape_for_dh(orig_shape: tuple[int, ...], orig_dh: float, new_dh: float) -> tuple[int, ...]:
-    """Pick a new grid shape that preserves physical extent (within rounding)."""
-    if abs(orig_dh - new_dh) < 1e-12:
-        return tuple(orig_shape)
-    ratio = orig_dh / new_dh
-    return tuple(max(1, int(round(s * ratio))) for s in orig_shape)
-
-
-def _resample_vp_tensor(vp: "torch.Tensor", new_shape: tuple[int, ...]) -> "torch.Tensor":
-    """Resample a vp tensor between grid resolutions (bilinear for 2-D,
-    trilinear for 3-D).
-
-    Returns a fresh leaf tensor (requires_grad=True) — caller is responsible
-    for re-initialising the optimizer because Adam state is shape-bound.
-    """
-    import torch.nn.functional as F
-
-    if tuple(vp.shape) == tuple(new_shape):
-        return vp.detach().clone().requires_grad_(True)
-    if vp.ndim == 2:
-        if len(new_shape) != 2:
-            raise ValueError(
-                f"_resample_vp_tensor: vp is 2-D but new_shape={new_shape} is not."
-            )
-        mode = "bilinear"
-    elif vp.ndim == 3:
-        if len(new_shape) != 3:
-            raise ValueError(
-                f"_resample_vp_tensor: vp is 3-D but new_shape={new_shape} is not."
-            )
-        mode = "trilinear"
-    else:
-        raise ValueError(
-            f"_resample_vp_tensor: unsupported vp.ndim {vp.ndim} (expected 2 or 3)."
-        )
-    src = vp.detach().unsqueeze(0).unsqueeze(0)
-    dst = F.interpolate(src, size=tuple(new_shape), mode=mode, align_corners=True)
-    return dst.squeeze(0).squeeze(0).contiguous().clone().requires_grad_(True)
 
 
 def _resample_obs_time(obs_np: "np.ndarray", dt_old: float, dt_new: float,

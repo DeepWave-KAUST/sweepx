@@ -37,11 +37,13 @@ from sweep_tasks._helpers.reparam import (
     _has_hash_schedule,
 )
 from sweep_tasks._helpers.solver_build import _build_solver
-from sweep_tasks._helpers.stages import (
-    _normalise_stage_list,
-    _resample_vp_tensor,
-    _shape_for_dh,
+from sweep_tasks._helpers.stage_grid import (
+    _resample_to_grid,
+    _seabed_to_grid,
+    _set_physical_inr_frame,
+    _stage_grid_shape,
 )
+from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.model import _model_array
 from sweep_tasks._helpers.util import (
     _apply_seed,
@@ -331,12 +333,15 @@ class FreqselRunnerMixin:
                  + fspec.probe_samples)
 
         # ---- init model on THIS stage's grid (resample pristine to dh) ----
-        if abs(float(dh) - float(native_dh)) < 1e-9:
+        # The stage grid samples the native model at i * dh from the native
+        # origin and spans its whole extent -- the same frame the band's
+        # shards are extracted on (round(x / dh)); see _helpers.stage_grid.
+        native_grid = abs(float(dh) - float(native_dh)) < 1e-9
+        if native_grid:
             vp0 = vp0_native
         else:
-            new_shape = _shape_for_dh(vp0_native.shape, native_dh, float(dh))
-            vp0 = _resample_vp_tensor(
-                torch.tensor(vp0_native), new_shape).detach().cpu().numpy()
+            new_shape = _stage_grid_shape(vp0_native.shape, native_dh, float(dh))
+            vp0 = _resample_to_grid(vp0_native, native_dh, new_shape, float(dh))
         gshape = vp0.shape
         is2d = len(gshape) == 2
         if is2d:
@@ -352,6 +357,15 @@ class FreqselRunnerMixin:
             nxp = -(-nx_ // dd_px) * dd_px if dd_on else nx_
             _pad = ((0, 0), (0, nyp - ny_), (0, nxp - nx_))
             _solver_shape = (nz, nyp, nxp)
+        # The grid the reparam network's coordinate frame is defined on: the
+        # native grid as this runner pads it. Stage grids reuse that frame.
+        if is2d:
+            _frame_shape = tuple(vp0_native.shape)
+        else:
+            _nz0, _ny0, _nx0 = vp0_native.shape
+            _frame_shape = (_nz0,
+                            -(-_ny0 // dd_py) * dd_py if dd_on else _ny0,
+                            -(-_nx0 // dd_px) * dd_px if dd_on else _nx0)
         vp0p = np.pad(vp0, _pad, mode="edge")
         frozen = vp0p == float(getattr(spec.reparam, "water_vp_m_s", 1500.0)
                                if spec.reparam else 1500.0)
@@ -370,12 +384,16 @@ class FreqselRunnerMixin:
         param_bases = None
         if free_multi:
             def _prep_base(native_arr):
-                if abs(float(dh) - float(native_dh)) < 1e-9:
+                if tuple(native_arr.shape) != tuple(vp0_native.shape):
+                    raise ValueError(
+                        f"reparam.free_params init model shape "
+                        f"{tuple(native_arr.shape)} != vp init "
+                        f"{tuple(vp0_native.shape)}: every channel must be on "
+                        "the native grid (grid.dh)")
+                if native_grid:
                     a0 = native_arr
                 else:
-                    _ns = _shape_for_dh(native_arr.shape, native_dh, float(dh))
-                    a0 = _resample_vp_tensor(torch.tensor(native_arr), _ns
-                                             ).detach().cpu().numpy()
+                    a0 = _resample_to_grid(native_arr, native_dh, gshape, float(dh))
                 a0p = np.pad(a0, _pad, mode="edge")
                 return torch.tensor(a0p, device=dev)
 
@@ -450,23 +468,37 @@ class FreqselRunnerMixin:
                 raise NotImplementedError(
                     "synthesize_from_true is a single-device test path")
             vpt = np.load(fspec.true_model_path).astype(np.float32)
-            if vpt.shape != gshape:
-                # Resample the true model to this stage's grid (mirrors the init
-                # resample) so synthesize_from_true supports multi-stage ladders.
-                vpt = _resample_vp_tensor(
-                    torch.tensor(vpt), gshape).detach().cpu().numpy().astype(np.float32)
+            if vpt.shape != tuple(vp0_native.shape):
+                raise ValueError(
+                    f"source_encoding.frequency.true_model_path: shape "
+                    f"{vpt.shape} != init model {tuple(vp0_native.shape)}; the "
+                    "true model must be on the native grid (grid.dh) so every "
+                    "band samples the same physical model")
+            if not native_grid:
+                # Sample the true model on this stage's grid, exactly like the
+                # init, so a multi-stage ladder synthesizes each band's obs on
+                # the grid it inverts on.
+                vpt = _resample_to_grid(vpt, native_dh, gshape, float(dh))
+            # The synthetic acquisition is laid out in NATIVE cells and placed
+            # on this stage's grid at round(x / dh), so every band records the
+            # same physical nodes and receivers (on the native grid this is
+            # the layout itself).
             n_nodes = int(fspec.synth_n_nodes)
-            sx = np.linspace(8, nx_ - 9, n_nodes).astype(np.int64)
-            rx = np.arange(4, nx_ - 4, int(fspec.synth_rec_stride))
+            _nx0 = int(vp0_native.shape[-1])
+            _r = float(native_dh) / float(dh)
+            sx = np.rint(np.linspace(8, _nx0 - 9, n_nodes).astype(np.int64)
+                         * _r).astype(np.int64)
+            rx = np.unique(np.rint(np.arange(4, _nx0 - 4, int(fspec.synth_rec_stride))
+                                   * _r).astype(np.int64))
+            node_z = int(np.rint(int(fspec.synth_node_z) * _r))
             if is2d:
-                nodes = np.stack([sx, np.full(n_nodes, fspec.synth_node_z,
-                                              np.int64)], -1)
+                nodes = np.stack([sx, np.full(n_nodes, node_z, np.int64)], -1)
                 recs = np.stack([rx, np.zeros(len(rx), np.int64)], -1)
             else:
-                nodes = np.stack([sx, np.full(n_nodes, ny_ // 2, np.int64),
-                                  np.full(n_nodes, fspec.synth_node_z,
-                                          np.int64)], -1)
-                recs = np.stack([rx, np.full(len(rx), ny_ // 2, np.int64),
+                _ym = int(np.rint((int(vp0_native.shape[1]) // 2) * _r))
+                nodes = np.stack([sx, np.full(n_nodes, _ym, np.int64),
+                                  np.full(n_nodes, node_z, np.int64)], -1)
+                recs = np.stack([rx, np.full(len(rx), _ym, np.int64),
                                  np.zeros(len(rx), np.int64)], -1)
             shard = str(task_dir / f"freqsel_synth_obs_s{si}.npz")
             t = np.arange(nt, dtype=np.float64) * comb.dt
@@ -491,7 +523,9 @@ class FreqselRunnerMixin:
         # the water cell just above (per-node min), from the init vp's seabed.
         _lift = getattr(fspec, "lift_source_to_water_vp", None)
         if _lift is not None and spec.init_model is not None:
-            _iv = _model_array(spec.init_model)                      # (nz, ny, nx)
+            # This stage's init model (the native one on the native grid): the
+            # shard's node indices are on this grid, so the seabed must be too.
+            _iv = vp0                                                # (nz, ny, nx)
             _nw = np.abs(_iv - float(_lift)) > 1.0
             _sb = np.where(_nw.any(0), _nw.argmax(0), _iv.shape[0])    # (ny, nx)
             _ng = targets.node_grid
@@ -547,10 +581,8 @@ class FreqselRunnerMixin:
                     f"aspect ratio {_ar_model:.3f} (native "
                     f"{vp0_native.shape[1]}x{vp0_native.shape[2]}); wrong-frame "
                     "bathymetry? regenerate on the model's lateral window.")
-            _sd_r = torch.nn.functional.interpolate(
-                torch.tensor(_sd, dtype=torch.float32)[None, None],
-                size=(int(ny_), int(nx_)), mode="bilinear",
-                align_corners=True)[0, 0].numpy()
+            _sd_r = _seabed_to_grid(_sd, vp0_native.shape[1:], native_dh,
+                                    (int(ny_), int(nx_)), float(dh))
             _mask_np = water_mask_from_seabed_depth(
                 _sd_r, nz=int(nz), dh_z_m=float(dh))
             if (nyp, nxp) != (ny_, nx_):
@@ -573,6 +605,9 @@ class FreqselRunnerMixin:
                                          water_mask_override=_seabed_override,
                                          param_bases=param_bases)
                 net = net.to(dev)
+                _set_physical_inr_frame(net, shape=_solver_shape, dh=float(dh),
+                                        frame_shape=_frame_shape,
+                                        frame_dh=native_dh)
                 if dd_on:
                     import torch.distributed as dist
                     for p in net.parameters():
@@ -608,6 +643,12 @@ class FreqselRunnerMixin:
                     net.update_base_models(param_bases, water_mask=_wm)
                 else:
                     net.update_base_velocity(base_t, water_mask=_wm)
+                # The update rebuilt the coordinates as i/n of this grid; put
+                # them back in the native frame so the carried field does not
+                # stretch with the band grid.
+                _set_physical_inr_frame(net, shape=_solver_shape, dh=float(dh),
+                                        frame_shape=_frame_shape,
+                                        frame_dh=native_dh)
                 if bool(getattr(stage, "optimizer_reset", False)):
                     optimizer = torch.optim.Adam(net.parameters(),
                                                  lr=float(spec.reparam.lr))
@@ -624,14 +665,18 @@ class FreqselRunnerMixin:
                     vp = base_t.clone().requires_grad_(True)
                 else:
                     prev = prev.detach()
-                    if tuple(prev.shape) != tuple(base_t.shape):
-                        # dh changed with the stage: resample onto the new grid.
-                        # ``_resample_vp_tensor`` hands back a requires_grad
-                        # leaf, so detach again — cloning a requires_grad tensor
-                        # would make ``vp`` a NON-leaf and Adam would then never
-                        # see a .grad to step on.
-                        prev = _resample_vp_tensor(
-                            prev, tuple(base_t.shape)).detach()
+                    prev_dh = float(self._freqsel_last_dh)
+                    if abs(prev_dh - float(dh)) >= 1e-9:
+                        # dh changed with the stage: crop the previous result
+                        # to its physical grid (drop the DD tile pad), sample it
+                        # at this grid's positions, pad like the base. The
+                        # resample returns a plain tensor, so the clone below is
+                        # a LEAF Adam can step.
+                        _ps = self._freqsel_last_shape
+                        prev = prev[tuple(slice(0, int(n)) for n in _ps)]
+                        prev = _resample_to_grid(prev, prev_dh, gshape, float(dh))
+                        prev = torch.from_numpy(np.pad(
+                            prev.cpu().numpy(), _pad, mode="edge"))
                     vp = prev.to(dev).clone().requires_grad_(True)
                 optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
         # per-stage lr scale on the carried optimizer (INR: inr_lr_scale)
@@ -748,6 +793,31 @@ class FreqselRunnerMixin:
                   f"final_levels={getattr(_c2f, 'final_levels', None)}",
                   flush=True)
 
+        # ---- optional water-column gradient freeze, on THIS stage's grid --
+        # Zero the vp gradient above the seabed so the inversion never updates
+        # the (known) water velocity. Grid-mode path (reparam masks the water
+        # itself). Rebuilt every stage: a mask cached across stages (or across
+        # tasks on one runner) does not fit another grid.
+        _fwl = getattr(spec, "freeze_water_layer", None)
+        _freeze_mask_t = None
+        if (_fwl is not None and getattr(_fwl, "enabled", False)
+                and _fwl.seabed_depth_path is not None):
+            from sweep_tasks.bathymetry import (
+                load_seabed_depth_npz, water_mask_from_seabed_depth)
+            _sd = load_seabed_depth_npz(_fwl.seabed_depth_path)
+            _sdr = _seabed_to_grid(_sd, vp0_native.shape[1:], native_dh,
+                                   gshape[1:], float(dh))
+            _wm = water_mask_from_seabed_depth(
+                _sdr, nz=int(nz), dh_z_m=float(dh),
+                buffer_cells=int(_fwl.buffer_cells))
+            if not is2d and (nyp, nxp) != (ny_, nx_):
+                _wm = np.pad(_wm, ((0, 0), (0, nyp - ny_),
+                                   (0, nxp - nx_)), mode="edge")
+            _freeze_mask_t = torch.from_numpy(_wm).to(dev).bool()
+            if rank == 0:
+                print("[freqsel] freeze_water_layer: %d voxels zeroed"
+                      % int(_freeze_mask_t.sum()), flush=True)
+
         stage_epochs = int(stage.epochs)
         snap_every = int(os.environ.get("SWEEP_SNAP_EVERY",
                                         str(max(1, stage_epochs // 10))))
@@ -857,33 +927,10 @@ class FreqselRunnerMixin:
                           "to host memory after a CUDA OOM (all ranks)",
                           flush=True)
             g = leaf.grad
-            # Optional water-column gradient freeze: zero the vp gradient above
-            # the seabed so the inversion never updates the (known) water
-            # velocity. Grid-mode path (reparam masks the water itself). Built
-            # once from the seabed-depth map. See :class:`FreezeWaterLayerSpec`.
-            _fwl = getattr(spec, "freeze_water_layer", None)
-            if (_fwl is not None and getattr(_fwl, "enabled", False)
-                    and _fwl.seabed_depth_path is not None and g is not None):
-                if not hasattr(self, "_freeze_water_mask"):
-                    from sweep_tasks.bathymetry import (
-                        load_seabed_depth_npz, water_mask_from_seabed_depth)
-                    _sd = load_seabed_depth_npz(_fwl.seabed_depth_path)
-                    _sdr = torch.nn.functional.interpolate(
-                        torch.tensor(_sd, dtype=torch.float32)[None, None],
-                        size=(int(ny_), int(nx_)), mode="bilinear",
-                        align_corners=True)[0, 0].numpy()
-                    _wm = water_mask_from_seabed_depth(
-                        _sdr, nz=int(nz), dh_z_m=float(dh),
-                        buffer_cells=int(_fwl.buffer_cells))
-                    if (nyp, nxp) != (ny_, nx_):
-                        _wm = np.pad(_wm, ((0, 0), (0, nyp - ny_),
-                                           (0, nxp - nx_)), mode="edge")
-                    self._freeze_water_mask = torch.from_numpy(
-                        _wm).to(g.device).bool()
-                    if rank == 0:
-                        print("[freqsel] freeze_water_layer: %d voxels zeroed"
-                              % int(self._freeze_water_mask.sum()), flush=True)
-                g[self._freeze_water_mask] = 0.0
+            # Optional water-column gradient freeze (mask built for THIS
+            # stage's grid above the loop). See :class:`FreezeWaterLayerSpec`.
+            if _freeze_mask_t is not None and g is not None:
+                g[_freeze_mask_t] = 0.0
             # Debug: dump the raw velocity gradient of selected iters for
             # DD-vs-single parity checks (SWEEP_FREQSEL_DUMP_GRAD=<dir>).
             # DD dumps this rank's TILE grad + its global bounds; single dumps
@@ -1009,8 +1056,11 @@ class FreqselRunnerMixin:
                          losses=np.array(losses), iter_s=np.array(times),
                          peak_gb=np.array(peaks))
 
-        # keep a handle to the final grid-vp so the caller can render output
+        # keep a handle to the final grid-vp so the caller can render output,
+        # and the grid it lives on so the next stage can carry it over
         self._freqsel_last_vp = vp
+        self._freqsel_last_dh = float(dh)
+        self._freqsel_last_shape = tuple(int(n) for n in gshape)
         self._freqsel_last_chunk_rows = chunk_rows
         return net, optimizer, ny_, nx_, chk
 

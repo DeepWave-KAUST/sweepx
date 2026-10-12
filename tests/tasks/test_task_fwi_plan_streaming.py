@@ -475,3 +475,36 @@ def test_plan_streaming_solver_mode_comes_from_source_shape(tmp_path, monkeypatc
             assert len(shape) == 3 and shape[0] == 1    # (1, nsrc, 3): one supershot
         else:
             assert len(shape) == 2                       # (nshots, 3): a shot per row
+
+
+@pytest.mark.parametrize("reparam", [False, True])
+def test_plan_streaming_stage_grid_spans_the_base_extent(tmp_path, capsys, reparam):
+    """A ``dh_m`` stage runs on a grid spanning the whole base extent.
+
+    Base (16, 16, 24) at 50 m spans (750, 750, 1150) m; the 100 m stage needs
+    (9, 9, 13) points for that -- the old round(n / 2) gave (8, 8, 12), 50 m
+    short on every axis, with the rows near the far edge left to the kernel's
+    out-of-bounds guard. The seabed freeze is rebuilt for the stage grid
+    (it used to fail on the shape change), and with a reparam network the
+    stage coordinates stay in the base frame.
+    """
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    sb_path = tmp_path / "seabed_depth.npy"
+    np.save(sb_path, np.full((16, 24), 100.0, dtype=np.float64))
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
+        "stages": [{"epochs": 1, "dh_m": 100.0}, {"epochs": 1, "dh_m": 50.0}],
+        "freeze_water_layer": {"enabled": True, "seabed_depth_path": str(sb_path),
+                               "buffer_cells": 0},
+    })
+    spec["backend"]["eager_options"] = {"use_compile": False}
+    if reparam:
+        spec["reparam"] = {"kind": "velocity_inr", "hidden_features": 8,
+                           "hidden_layers": 1, "hash": {"enabled": False},
+                           "lr": 1.0e-4}
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "mr.yaml")))
+    assert result.status.state == "success", result.status.error
+    out = capsys.readouterr().out
+    assert "STAGE 1 grid -> dh=100.0 m shape=(9, 9, 13)" in out, out[-3000:]
+    assert "STAGE 2 grid -> dh=50.0 m shape=(16, 16, 24)" in out
+    inv = np.load(result.task_dir / "output" / "inverted_vp.npy")
+    assert inv.shape == (16, 16, 24)

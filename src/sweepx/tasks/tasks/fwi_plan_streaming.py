@@ -62,10 +62,13 @@ from sweep_tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
 )
-from sweep_tasks._helpers.stages import (
-    _normalise_stage_list,
-    _resample_vp_tensor,
+from sweep_tasks._helpers.stage_grid import (
+    _resample_to_grid,
+    _seabed_to_grid,
+    _set_physical_inr_frame,
+    _stage_grid_shape,
 )
+from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
@@ -726,11 +729,14 @@ class PlanStreamingFWIMixin:
         # low-frequency compute by ~(dh_base/dh_stage)^3 cells. dt/nt stay fixed
         # (a dt valid at the finest grid is conservatively valid coarser), so the
         # obs/wavelet time axis never re-samples. Geometry re-projects from the
-        # model-frame metres (dh-independent); the C kernel's OOB guard absorbs
-        # the handful of edge rows that round just out of a coarser grid.
+        # model-frame metres (dh-independent) with round(x / dh); the stage grid
+        # samples the base model at those same positions, i * dh from the origin,
+        # and spans the whole base extent (``_helpers.stage_grid``), so every row
+        # the in-window filter kept stays on every stage grid.
         _mr_origin = (float(origin_x), float(origin_y), float(origin_z))
         _mr_base_shape = tuple(int(v) for v in shape)
         _mr_base_dh = float(dx_m)
+        _mr_base_dh_zyx = (float(dz_m), float(dy_m), float(dx_m))
         _mr_pristine_vp = torch.from_numpy(np.ascontiguousarray(init_vp_np)).to(dev)
         _mr_plan_model_xy = plan_model_xy
         _mr_src_model_xy = src_model_xy
@@ -759,11 +765,7 @@ class PlanStreamingFWIMixin:
 
         def _grid_for_dh(dh):
             ox, oy, oz = _mr_origin
-            nz_b, ny_b, nx_b = _mr_base_shape
-            r = _mr_base_dh / float(dh)
-            sh = (max(1, int(round(nz_b * r))),
-                  max(1, int(round(ny_b * r))),
-                  max(1, int(round(nx_b * r))))
+            sh = _stage_grid_shape(_mr_base_shape, _mr_base_dh_zyx, float(dh))
             pg = np.stack([
                 np.rint((_mr_plan_model_xy[:, 0] - ox) / dh).astype(np.int64),
                 np.rint((_mr_plan_model_xy[:, 1] - oy) / dh).astype(np.int64),
@@ -787,6 +789,20 @@ class PlanStreamingFWIMixin:
                 _sb_m = _lift_seabed_m[_bz, _bx]                       # seabed depth (m)
                 _zmax = np.ceil((_sb_m - oz) / dh).astype(np.int64) - 1
                 sg[:, 2] = np.maximum(np.minimum(sg[:, 2], _zmax), 0)
+            # Every row/node is on the base grid (in-window filter), and the
+            # stage grid spans the base extent, so a coarser stage holds them
+            # all. A FINER stage can round a position within half a base cell
+            # of the edge one cell past it -- where the kernel would silently
+            # zero the trace. Put it on the edge node instead: no further than
+            # the base grid's own snap already moved it.
+            _hi = np.asarray(sh[::-1], dtype=np.int64) - 1              # (x, y, z)
+            for _a in (pg, sg):
+                _over = np.maximum(np.maximum(-_a, _a - _hi), 0)
+                if int(_over.max(initial=0)) > 1:
+                    raise AssertionError(
+                        f"stage dh={dh}: a base-grid position falls "
+                        f"{int(_over.max())} cells outside the stage grid {sh}")
+                np.clip(_a, 0, _hi, out=_a)
             return sh, pg, sg
 
         def _apply_stage_dh(dh, si):
@@ -795,16 +811,16 @@ class PlanStreamingFWIMixin:
             sh, pg, sg = _grid_for_dh(dh)
             plan_grid_xyz, src_grid_xyz = pg, sg
             nz_s, ny_s, nx_s = sh
-            new_base = _resample_vp_tensor(_mr_pristine_vp, sh).detach().to(dev)
+            new_base = _resample_to_grid(_mr_pristine_vp, _mr_base_dh_zyx, sh,
+                                         float(dh)).to(dev)
             new_mask = None
             if _mr_cropped_sd is not None:
-                import torch.nn.functional as _F
                 from sweep_tasks.bathymetry import water_mask_from_seabed_depth
-                sd_t = torch.from_numpy(
-                    np.ascontiguousarray(_mr_cropped_sd))[None, None].float()
-                sd_s = _F.interpolate(
-                    sd_t, size=(ny_s, nx_s), mode="bilinear",
-                    align_corners=False)[0, 0].numpy()
+                # The cropped seabed sits on the base model's columns (before
+                # any DD tile pad), at the base spacing.
+                sd_s = _seabed_to_grid(
+                    np.ascontiguousarray(_mr_cropped_sd), _mr_cropped_sd.shape,
+                    _mr_base_dh_zyx[1:], (ny_s, nx_s), float(dh))
                 new_mask = torch.from_numpy(
                     water_mask_from_seabed_depth(sd_s, nz=nz_s, dh_z_m=float(dh))
                 ).to(dev)
@@ -834,8 +850,13 @@ class PlanStreamingFWIMixin:
             if reparam_net is not None:
                 # update_base_velocity resamples coords + (optionally) the water
                 # mask to the new shape; per-iter ``reparam_net()`` then renders
-                # at the new grid, so no inv_by_name swap is needed here.
+                # at the new grid, so no inv_by_name swap is needed here. The
+                # coords it builds are i/n of the new shape: put them back in the
+                # base grid's frame so the learned field does not stretch.
                 reparam_net.update_base_velocity(new_base, water_mask=new_mask)
+                _set_physical_inr_frame(reparam_net, shape=sh, dh=float(dh),
+                                        frame_shape=_mr_base_shape,
+                                        frame_dh=_mr_base_dh_zyx)
             else:
                 vp_leaf = new_base.requires_grad_(True)
                 inv_by_name["vp"] = vp_leaf
@@ -1257,6 +1278,7 @@ class PlanStreamingFWIMixin:
                 velocity_scale_m_s=float(smooth_spec.velocity_scale_m_s),
             )
         seabed_mask = None
+        _freeze_sb = None
         freeze_spec = getattr(spec, "freeze_water_layer", None)
         if freeze_spec is not None and freeze_spec.enabled:
             from sweep_nn import SeabedFreezeMask
@@ -1264,10 +1286,12 @@ class PlanStreamingFWIMixin:
             sb = np.load(freeze_spec.seabed_depth_path)
             if isinstance(sb, np.lib.npyio.NpzFile):
                 sb = sb["seabed_depth"]
+            _freeze_sb = np.asarray(sb)
             seabed_mask = SeabedFreezeMask(
-                np.asarray(sb), dz_m=dz_m,
+                _freeze_sb, dz_m=dz_m,
                 buffer_cells=int(freeze_spec.buffer_cells),
             )
+        _seabed_mask_base = seabed_mask
 
         # --- 8) Outputs / QC dirs (rank-0 / single-rank).
         out_dir = task_dir / "output"
@@ -1485,6 +1509,19 @@ class PlanStreamingFWIMixin:
                 if _dh_changed or _time_changed:
                     _apply_stage_dh(
                         float(_stage_dh) if _stage_dh is not None else _cur_dh, _si)
+                    if _freeze_sb is not None:
+                        # The freeze is a (ny, nx) seabed quantised at dz: give
+                        # a stage grid its own, sampled at its columns.
+                        if abs(_cur_dh - float(dx_m)) < 1e-9:
+                            seabed_mask = _seabed_mask_base
+                        else:
+                            from sweep_nn import SeabedFreezeMask
+                            seabed_mask = SeabedFreezeMask(
+                                _seabed_to_grid(_freeze_sb, _freeze_sb.shape,
+                                                (float(dy_m), float(dx_m)),
+                                                tuple(shape[1:]), _cur_dh),
+                                dz_m=_cur_dh,
+                                buffer_cells=int(freeze_spec.buffer_cells))
                 if _time_changed and epoch > 0:
                     # the in-flight prefetch for THIS iter was loaded at the OLD
                     # dt/nt; redo it at the new time axis (same seed → same shots).
@@ -2310,12 +2347,17 @@ class PlanStreamingFWIMixin:
                 )
             if qc_enabled and (epoch % spec.qc.every_n_epochs == 0
                                or epoch == total_epochs - 1):
+                # The rendered vp is on the CURRENT stage grid: label its axes
+                # with that grid's spacing, not the base one.
+                _qc_base = abs(float(_cur_dh) - float(dx_m)) < 1e-9
                 state_for_qc = {
                     "inv_by_name": inv_by_name,
-                    "dh": float(dx_m),
-                    "dh_xyz": (float(dz_m), float(dy_m), float(dx_m)),
+                    "dh": float(_cur_dh),
+                    "dh_xyz": ((float(dz_m), float(dy_m), float(dx_m)) if _qc_base
+                               else (float(_cur_dh),) * 3),
                     "dt": float(effective_dt),
                     "qc_initial_vp": torch.from_numpy(init_vp_np),
+                    "pristine_dh": float(dx_m),
                 }
                 self._run_epoch_qc_safe(
                     spec=spec, state=state_for_qc, qc_dir=qc_dir,

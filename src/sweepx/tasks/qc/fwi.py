@@ -74,18 +74,24 @@ def save_vp_diff_png(
     out_path: Path,
     epoch: int | None = None,
     perc: float = 99.0,
+    dh_initial: float | None = None,
 ) -> Path:
-    """Save Δvp = current − initial (initial resampled to current shape if needed)."""
+    """Save Δvp = current − initial.
+
+    ``vp_initial`` lives on its own grid (spacing ``dh_initial``, default
+    ``dh``); when that is not the current grid it is sampled at the current
+    grid's physical positions (the stage-grid mapping the runner uses), so
+    Δvp compares the same points.
+    """
+    from sweep_tasks._helpers.stage_grid import _resample_to_grid
     from sweep_tasks.viz.model import plot_vp_diff
 
     vp_np = _to_np(vp)
     init_np = _to_np(vp_initial)
-    if init_np.shape != vp_np.shape:
-        # Bilinear resample initial to the current shape.
-        from scipy.ndimage import zoom
-        zfac = vp_np.shape[0] / init_np.shape[0]
-        xfac = vp_np.shape[1] / init_np.shape[1]
-        init_np = zoom(init_np.astype(np.float32), (zfac, xfac), order=1)
+    dh0 = float(dh) if dh_initial is None else float(dh_initial)
+    if init_np.shape != vp_np.shape or abs(dh0 - float(dh)) > 1e-9 * float(dh):
+        init_np = _resample_to_grid(init_np.astype(np.float32), dh0,
+                                    vp_np.shape, float(dh))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(10, 4), constrained_layout=True)
@@ -1166,6 +1172,7 @@ def run_epoch_qc(
         written.append(save_vp_diff_png(
             vp, init_for_plot,
             dh=dh, out_path=qc_dir / "vp_diff" / iter_tag, epoch=epoch,
+            dh_initial=float(state.get("pristine_dh", dh)),
         ))
 
     grad_for_plot = getattr(vp, "grad", None)

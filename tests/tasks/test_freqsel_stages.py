@@ -40,14 +40,14 @@ def test_freqsel_clears_carried_model_between_runs():
 
 
 def test_carried_model_stays_a_leaf_across_a_grid_change():
-    """Adam only steps a LEAF. Resampling then cloning loses that silently.
+    """Adam only steps a LEAF. Resampling then cloning must keep it one.
 
     Only a ladder that changes ``dh_m`` between stages walks this path, which
     is exactly why it is worth pinning: the shipped examples keep dh fixed.
     """
     import torch
 
-    from sweep_tasks._helpers.stages import _resample_vp_tensor
+    from sweep_tasks._helpers.stage_grid import _resample_to_grid, _stage_grid_shape
 
     prev = torch.full((8, 10), 1500.0, requires_grad=True)      # stage N-1 result
 
@@ -56,13 +56,14 @@ def test_carried_model_stays_a_leaf_across_a_grid_change():
     vp_same = a.clone().requires_grad_(True)
     assert vp_same.is_leaf
 
-    # grid change: _resample_vp_tensor returns a requires_grad LEAF, so it has
-    # to be detached again before the clone
-    b = _resample_vp_tensor(prev.detach(), (16, 20))
-    assert b.requires_grad and b.is_leaf                        # what it hands back
-    vp_resampled = b.detach().to(prev.device).clone().requires_grad_(True)
+    # grid change (20 m -> 10 m): the resample hands back a plain tensor, so
+    # the clone is a leaf Adam can step
+    shape = _stage_grid_shape((8, 10), 20.0, 10.0)
+    b = _resample_to_grid(prev, 20.0, shape, 10.0)
+    assert not b.requires_grad
+    vp_resampled = b.to(prev.device).clone().requires_grad_(True)
     assert vp_resampled.is_leaf, "carried model is not a leaf; Adam cannot step it"
-    assert vp_resampled.shape == (16, 20)
+    assert vp_resampled.shape == (15, 19)
 
-    # and the un-detached form is exactly the trap
-    assert not b.clone().is_leaf
+    # and the trap the old helper set: a requires_grad result cloned is NOT a leaf
+    assert not prev.clone().is_leaf

@@ -891,6 +891,7 @@ class FWIRunnerMixin:
                     grad_smoother=_gsmooth,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
+                    freeze_top_rows=state.get("freeze_top_rows"),
                 )
                 losses.append(loss_value)
                 if scheduler is not None:
@@ -1423,7 +1424,8 @@ class FWIRunnerMixin:
                         diff_weight_mode: str = "relative",
                         diff_kind: str = "red", diff_apply: bool = False,
                         diff_sds_t=(0.02, 0.5), diff_seed: int = 0,
-                        grad_smoother=None, grad_smooth_every: int = 1) -> float:
+                        grad_smoother=None, grad_smooth_every: int = 1,
+                        freeze_top_rows: int | None = None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1438,11 +1440,18 @@ class FWIRunnerMixin:
         ``stage_batchsize`` (if given) overrides ``spec.batchsize`` — used
         by the multi-stage loop so each stage can pick its own shot count
         (Gap 4).
+
+        ``freeze_top_rows`` (if given) is ``spec.freeze_top_n_rows`` carried
+        onto the stage grid (the same depth in that grid's rows); the stage
+        loop passes it, so a ``dh_m`` stage freezes the layer the spec names.
         """
 
         import torch
 
         from sweep_tasks.runtime import distributed as _dist
+
+        _freeze_rows = (int(spec.freeze_top_n_rows) if freeze_top_rows is None
+                        else int(freeze_top_rows))
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
@@ -1592,7 +1601,7 @@ class FWIRunnerMixin:
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 if reparam_net is None:
-                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                    _zero_top_rows(inv_in_order, _freeze_rows)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
             result = optimizer.step(_closure)
             return float(result) if result is not None else 0.0
@@ -1692,7 +1701,7 @@ class FWIRunnerMixin:
                     )
                 if _TPROF: _sync(); _t_snap = _t.perf_counter()
             if reparam_net is None:
-                _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                _zero_top_rows(inv_in_order, _freeze_rows)
                 _dist.all_reduce_grad_sum(inv_in_order, dist_info)
                 if illum_on:
                     # Match the gradient's all-reduce so multi-rank accumulation
@@ -1755,7 +1764,7 @@ class FWIRunnerMixin:
                     # z-conv smears gradient from unfrozen rows back into the
                     # frozen top rows, which optimizer.step would then update
                     # (silently defeating freeze_top_n_rows). Cheap re-zero.
-                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                    _zero_top_rows(inv_in_order, _freeze_rows)
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:

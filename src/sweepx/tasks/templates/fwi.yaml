@@ -372,6 +372,8 @@ show_every: 10                     # console-log cadence
 # ═══ Multiscale stages (low → high frequency) ════════════════════════════════
 # Each stage runs `epochs` iters on its own (dh_m, dt_s, nt) grid with
 # bandpass-filtered obs. Low-freq / coarse-grid first fights cycle-skip.
+# A dh_m grid samples the native model at i*dh_m (where geometry snaps) and
+# spans its whole extent: ceil((n-1)*grid.dh/dh_m)+1 points per axis.
 # Per-stage keys: epochs, batch_size, dh_m, dt_s, nt, lr_scale, inr_lr_scale,
 # optimizer_reset, wavelet, bandpass, frequency (freqsel).
 
