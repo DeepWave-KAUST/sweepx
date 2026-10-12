@@ -93,6 +93,8 @@ def materialize_plan_dataset(
       ``obs``            (nshots, nt, nrec, 1) float32 numpy (canonical layout)
       ``shape``          (nz, ny, nx) of the cropped model; (nz, nx) when 2-D
       ``cropped_models`` {name: cropped float32 array}  (model_plan applied)
+      ``crop_box``       ``(starts, stops)`` cell window of that crop on the
+                         starting model's grid, model axes (``(z, x)`` in 2-D)
       ``native_dt``      float — the dt the obs tensor is sampled at
     """
     from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
@@ -121,6 +123,11 @@ def materialize_plan_dataset(
                 "shape": tuple(meta["shape"]),
                 "cropped_models": {k: np.load(cache_dir / f"model_{k}.npy")
                                    for k in meta["model_names"]},
+                # A cache written before the window was recorded only knows
+                # it when there was no crop; otherwise rebuild (KeyError).
+                "crop_box": (tuple(tuple(int(v) for v in b) for b in meta["crop_box"])
+                             if "crop_box" in meta or spec.model_plan is not None
+                             else ((0,) * len(meta["shape"]), tuple(meta["shape"]))),
                 "native_dt": float(meta["native_dt"]),
                 "nshots": int(meta["nshots"]), "nrec": int(meta["nrec"]),
             }
@@ -415,8 +422,11 @@ def materialize_plan_dataset(
         cropped_models = {k: np.ascontiguousarray(v[:, 0, :])
                           for k, v in cropped_models.items()}
         shape_out = (int(nz), int(nx))
+        crop_box = ((int(z_lo), int(x_lo)), (int(z_hi), int(x_hi)))
     else:
         shape_out = (int(nz), int(ny), int(nx))
+        crop_box = ((int(z_lo), int(y_lo), int(x_lo)),
+                    (int(z_hi), int(y_hi), int(x_hi)))
 
     # ---- 9) atomic cache write (tmp dir + rename) --------------------------
     try:
@@ -431,6 +441,7 @@ def materialize_plan_dataset(
             "nshots": int(nshots), "nrec": int(nrec), "shape": list(shape_out),
             "native_dt": float(effective_dt),
             "model_names": list(cropped_models.keys()),
+            "crop_box": [list(b) for b in crop_box],
         }))
         cache_dir.parent.mkdir(parents=True, exist_ok=True)
         if not cache_dir.exists():
@@ -450,6 +461,7 @@ def materialize_plan_dataset(
         "obs": obs_canon,
         "shape": shape_out,
         "cropped_models": cropped_models,
+        "crop_box": crop_box,
         "native_dt": float(effective_dt),  # already resampled to solver dt
         "nshots": nshots,
         "nrec": int(nrec),

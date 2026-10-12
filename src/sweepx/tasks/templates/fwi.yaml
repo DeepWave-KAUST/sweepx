@@ -245,13 +245,18 @@ model_bounds:
     min: 1450.0
     max: 5500.0
 
-# ═══ Water-layer / shallow handling ═══════════════════════════════════════════
+# ═══ Water layer ═════════════════════════════════════════════════════════════
+# ONE block for every inversion path (conventional, frequency selection, plan
+# streaming, reparam). Exactly one of seabed / mask; never read off velocities.
 
-freeze_top_n_rows: 0               # zero the gradient in the top N rows
-# freeze_water_layer:              # mask gradient above a per-trace seabed
-#   enabled: true
-#   seabed_depth_path: /path/seabed_depth_cells.npy
-#   buffer_cells: 0
+# water:
+#   seabed: /path/seabed.npz        # npz key "seabed_depth": metres below z=0,
+#                                   # (nx,) or (ny, nx); or a number = flat seabed
+#   # mask: /path/water.npy         # bool on the starting model's grid, True = water
+#   velocity: 1500.0                # what the water holds
+#   buffer_cells: 0                 # native cells below the seabed held too (depth)
+#   mode: pin                       # pin: held all run | reset_each_stage: reset
+#                                   # at every stage entry, free within the stage
 
 # ═══ Neural reparameterization (SIREN + hash INR) — optional, recommended ═════
 # Reparameterizes vp(x,z) as an INR (SIREN MLP + multi-res hash). Shrinks the
@@ -273,13 +278,11 @@ reparam:
   lr: 1.0e-4
   # backward_mode: two_pass_full | two_pass_chunked | single_step
   # (plan-streaming: single_step has no velocity gradient, so it refuses
-  #  illumination_precondition / smooth_regularization / freeze_water_layer;
+  #  illumination_precondition / smooth_regularization;
   #  under DD neither key is read, its tile backward slabs by
   #  SWEEP_DD_RENDER_CHUNK, and a non-default value is refused)
   backward_mode: two_pass_full
   # backward_chunk_rows: 64         # rows/chunk for two_pass_chunked (VRAM knob)
-  # mask_water_layer: false         # hold water column at water_vp_m_s
-  # water_vp_m_s: 1500.0
   # lateral_downsample: 1           # coarsen the render laterally (int or [y,x])
   # compile_render: false           # torch.compile the INR render (default off)
   hash:                             # multi-resolution hash encoder (Instant-NGP)

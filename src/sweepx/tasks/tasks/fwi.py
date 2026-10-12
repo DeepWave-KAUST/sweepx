@@ -7,7 +7,11 @@ from sweep_tasks._helpers.bounds import (
     _apply_bounds,
     _effective_bound,
 )
-from sweep_tasks._helpers.bounds import _zero_top_rows
+from sweep_tasks._helpers.water import (
+    WaterRegion,
+    stamp_water_,
+    zero_water_grad_,
+)
 from sweep_tasks.runtime.checkpoint import (
     load_run_checkpoint as _load_checkpoint,
     save_run_checkpoint as _save_checkpoint,
@@ -66,6 +70,7 @@ from sweep_tasks._helpers.plan_apply import (
     _apply_data_plan_to_fwi,
     _apply_model_plan_to_fwi,
     _build_inv_tensors,
+    _model_plan_crop_box,
     _normalize_fwi_init_models,
 )
 from sweep_tasks._helpers.plotting import (
@@ -267,6 +272,10 @@ class FWIRunnerMixin:
             shape = tuple(int(v) for v in init_models[0].shape)
         else:
             shape = tuple(_model_array(init_models[0], mmap=True).shape)
+        # The grid `water:` is defined on (the starting model's), before any
+        # model_plan crop; ``crop_box`` records the window cut out of it.
+        native_shape = tuple(shape)
+        crop_box = None
 
         # 3) Build solver, wavelet, geometry.
         #    Gap 1: when data_plan.dt_target_s is set, the obs gets resampled
@@ -333,6 +342,7 @@ class FWIRunnerMixin:
             obs = torch.from_numpy(_mat["obs"])
             shape = tuple(_mat["shape"])
             model_plan_cropped = _mat["cropped_models"] or None
+            crop_box = _mat.get("crop_box")
             nshots = int(_mat["nshots"])
             # Rebuild solver at the materialised (cropped) grid.
             solver = _build_solver(
@@ -367,6 +377,7 @@ class FWIRunnerMixin:
                 model_plan_cropped, sources, receivers, model_plan_keep = _apply_model_plan_to_fwi(
                     spec, loaded_originals, sources, receivers, spec.grid.dh,
                 )
+                crop_box = _model_plan_crop_box(spec, native_shape, spec.grid.dh)
                 new_shape = next(iter(model_plan_cropped.values())).shape
                 if dist_info.is_root:
                     print(f"[model_plan] vp shape {shape} -> {new_shape}, "
@@ -389,6 +400,23 @@ class FWIRunnerMixin:
             print(f"[fwi] shape={shape} nshots={nshots} inverted_models={required_names} "
                   f"world_size={dist_info.world_size}")
 
+        # 4a) The water layer (`water:`), on the inversion's own frame: the
+        # starting model's grid, cropped like the models were.
+        water = WaterRegion.from_task(spec, native_shape, float(spec.grid.dh))
+        if water is not None:
+            if crop_box is not None:
+                water = water.cropped(*crop_box)
+            if tuple(water.frame_shape) != tuple(shape):
+                raise ValueError(
+                    f"water: the model grid is {tuple(shape)} but the water "
+                    f"frame is {tuple(water.frame_shape)}")
+            if "vp" not in inv_by_name:
+                raise ValueError(
+                    f"water: holds `vp` at water.velocity, but this equation "
+                    f"inverts {required_names}")
+            if dist_info.is_root:
+                print(f"[fwi] water: {water.describe()}")
+
         # 4b) Optional NN reparameterization of vp (sweep-nn).
         # When active, vp is rendered each forward by a hash-encoded SIREN
         # whose parameters become the optimization variables. The vp leaf
@@ -398,8 +426,15 @@ class FWIRunnerMixin:
         reparam_net = None
         pristine_base_vp = None
         if spec.reparam is not None and "vp" in inv_by_name:
+            # The network renders water.velocity in the water from its first
+            # render on; in reset_each_stage mode each stage entry drops that
+            # pin again and re-bakes the base (_prepare_stage).
+            _wm0 = (torch.from_numpy(water.mask_on_grid(shape, float(spec.grid.dh)))
+                    if water is not None else None)
             reparam_net = _build_reparam_net(
                 spec.reparam, inv_by_name["vp"], _effective_bound(spec.model_bounds, "vp"),
+                water_mask=_wm0,
+                water_vp=(water.velocity if water is not None else 1500.0),
             )
             # Keep the pristine base around for stage transitions — at each
             # new stage we bilinear-resample THIS to the new shape and feed
@@ -743,6 +778,9 @@ class FWIRunnerMixin:
             # transitions. Both None when reparam is not configured.
             "reparam_net": reparam_net,
             "pristine_base_vp": pristine_base_vp,
+            # `water:` on the inversion frame; _prepare_stage puts it on each
+            # stage grid as state["water_mask"].
+            "water": water,
             "obs": obs, "batchsize": int(spec.batchsize),
             # pristine sources for re-derivation
             "pristine_obs_np": pristine_obs_np,
@@ -869,6 +907,11 @@ class FWIRunnerMixin:
             if stage_bandpass is not None \
                     and getattr(stage_bandpass, "target", "syn") == "wavelet":
                 stage_bandpass = None  # already applied to wavelet
+            # water: pin on a grid model -> zero its gradient and re-stamp it
+            # every step (a reparam network pins at render time instead).
+            _pin_mask = (state.get("water_mask")
+                         if (water is not None and water.pin
+                             and state.get("reparam_net") is None) else None)
             for _ in range(remaining):
                 # coarse-to-fine: advance the encoder level mask by whole-run
                 # progress before rendering/backprop this epoch (no-op unless
@@ -925,7 +968,7 @@ class FWIRunnerMixin:
                     grad_smoother=_gsmooth,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
-                    freeze_top_rows=state.get("freeze_top_rows"),
+                    water_mask=_pin_mask,
                 )
                 losses.append(loss_value)
                 # the lr this step used, read before the scheduler moves it
@@ -936,6 +979,12 @@ class FWIRunnerMixin:
                 # enforces vp bounds; only clamp the non-reparam tensors.
                 reparam_skip = {"vp"} if state.get("reparam_net") is not None else set()
                 _apply_bounds(state["inv_by_name"], spec.model_bounds, skip_names=reparam_skip)
+                # water: pin holds water.velocity through every step (the
+                # zeroed gradient already keeps Adam off it; this also undoes
+                # a bounds clamp or any other optimizer drift).
+                if _pin_mask is not None:
+                    stamp_water_(state["inv_by_name"]["vp"], _pin_mask,
+                                 water.velocity)
                 # Refresh inv_by_name["vp"] from the network so snapshots /
                 # checkpoints save the actual current rendered velocity.
                 if state.get("reparam_net") is not None:
@@ -1465,7 +1514,7 @@ class FWIRunnerMixin:
                         diff_kind: str = "red", diff_apply: bool = False,
                         diff_sds_t=(0.02, 0.5), diff_seed: int = 0,
                         grad_smoother=None, grad_smooth_every: int = 1,
-                        freeze_top_rows: int | None = None) -> float:
+                        water_mask=None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1481,17 +1530,15 @@ class FWIRunnerMixin:
         by the multi-stage loop so each stage can pick its own shot count
         (Gap 4).
 
-        ``freeze_top_rows`` (if given) is ``spec.freeze_top_n_rows`` carried
-        onto the stage grid (the same depth in that grid's rows); the stage
-        loop passes it, so a ``dh_m`` stage freezes the layer the spec names.
+        ``water_mask`` (torch bool, the stage grid's shape) is the ``water:``
+        layer on this stage's grid when it is pinned on a grid model: every
+        inverted model's gradient is zeroed there before the optimizer sees
+        it. ``None`` = nothing frozen.
         """
 
         import torch
 
         from sweep_tasks.runtime import distributed as _dist
-
-        _freeze_rows = (int(spec.freeze_top_n_rows) if freeze_top_rows is None
-                        else int(freeze_top_rows))
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
@@ -1641,7 +1688,7 @@ class FWIRunnerMixin:
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 if reparam_net is None:
-                    _zero_top_rows(inv_in_order, _freeze_rows)
+                    zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
             result = optimizer.step(_closure)
             return float(result) if result is not None else 0.0
@@ -1741,7 +1788,7 @@ class FWIRunnerMixin:
                     )
                 if _TPROF: _sync(); _t_snap = _t.perf_counter()
             if reparam_net is None:
-                _zero_top_rows(inv_in_order, _freeze_rows)
+                zero_water_grad_(inv_in_order, water_mask)
                 _dist.all_reduce_grad_sum(inv_in_order, dist_info)
                 if illum_on:
                     # Match the gradient's all-reduce so multi-rank accumulation
@@ -1800,11 +1847,11 @@ class FWIRunnerMixin:
                 if _vp is not None and _vp.grad is not None:
                     with torch.no_grad():
                         _vp.grad.copy_(grad_smoother(_vp.grad))
-                    # Re-apply the top-row freeze AFTER smoothing: a Gaussian
-                    # z-conv smears gradient from unfrozen rows back into the
-                    # frozen top rows, which optimizer.step would then update
-                    # (silently defeating freeze_top_n_rows). Cheap re-zero.
-                    _zero_top_rows(inv_in_order, _freeze_rows)
+                    # Re-apply the water freeze AFTER smoothing: a Gaussian
+                    # z-conv smears gradient from the free cells back into the
+                    # water, which optimizer.step would then update. Cheap
+                    # re-zero.
+                    zero_water_grad_(inv_in_order, water_mask)
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:

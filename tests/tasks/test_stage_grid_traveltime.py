@@ -100,7 +100,6 @@ def _run_conventional(tmp_path: Path, monkeypatch, *, abort: bool) -> dict:
         "init_model": {"name": "vp", "path": str(vp)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(vp)}},
         "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
-        "freeze_top_n_rows": 7,
         "epochs": 2, "batchsize": 1, "show_every": 100,
         "stages": [{"epochs": 1, "dh_m": 2 * DH0, "dt_s": 0.004},
                    {"epochs": 1, "dh_m": DH0, "dt_s": 0.002}],
@@ -110,7 +109,6 @@ def _run_conventional(tmp_path: Path, monkeypatch, *, abort: bool) -> dict:
 
     def _spy(self, spec_, solver, wavelet, sources, receivers, inv_in_order,
              inv_by_name, obs, *args, **kwargs):
-        seen.setdefault("freeze_rows", []).append(kwargs.get("freeze_top_rows"))
         if "syn" not in seen:
             with torch.no_grad():
                 syn = solver(wavelet, sources, receivers,
@@ -148,8 +146,6 @@ def test_coarse_stage_traveltimes_match_the_native_grid(tmp_path, monkeypatch):
     seen = _run_conventional(tmp_path, monkeypatch, abort=False)
     assert seen["result"].status.state == "success", seen["result"].status.error
     assert seen["shape"] == (21, 81)                  # spans 400 m x 1600 m at 20 m
-    # freeze_top_n_rows=7 names 0..60 m; the 20 m stage freezes 0..60 m too
-    assert seen["freeze_rows"] == [4, 7]
     near, far = _first_arrival_drift(seen, 2 * DH0, 0.004)
     # what is left is the coarse grid's own (offset-independent) dispersion
     assert abs(far - near) < 1.0e-3, (near, far)
@@ -191,6 +187,9 @@ def _freqsel_spec(tmp_path: Path, stages: list) -> dict:
                                 "ramp_s": 0.3, "n_pools": 1}},
         "optimizer": {"kind": "adam", "lr": 1.0},
         "loss": {"kind": "steady_gcn"},
+        # No water layer: the gradient starts at exactly 1500 m/s in row 0,
+        # which this path used to pin silently; say it is not water.
+        "water": False,
         "epochs": sum(s["epochs"] for s in stages), "batchsize": 1,
         "show_every": 100, "stages": stages,
     }

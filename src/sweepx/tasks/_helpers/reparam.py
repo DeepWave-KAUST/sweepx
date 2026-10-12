@@ -1,8 +1,8 @@
 """Reparameterisation network (VelocityINR) build + hash schedule + tiled render. Verbatim from runner.py."""
 
 
-def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
-                       param_bases=None):
+def _build_reparam_net(spec, base_vp, bounds, water_mask=None,
+                       water_vp=1500.0, param_bases=None):
     """Construct the reparam network from a ReparamSpec.
 
     Single-parameter (default): a :class:`sweep_nn.VelocityINR` over ``base_vp``
@@ -15,6 +15,13 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
     resampled+padded to the stage grid); channel 0 is vp. Each channel's
     affine/bounds/water come from its :class:`FreeParamSpec`; the shared trunk
     reuses the ReparamSpec SIREN/hash hyperparameters.
+
+    ``water_mask`` (boolean, ``base_vp``'s shape) is where the network renders
+    ``water_vp`` instead of its own output -- the task's ``water:`` layer on
+    this grid, built by the caller (``_helpers.water.WaterRegion``). ``None``
+    leaves the whole model to the network. In a multi-parameter network the vp
+    channel holds ``water_vp`` there and every other channel its
+    ``FreeParamSpec.water_value`` (null = free).
     """
     import torch  # local import — runner.py keeps torch imports per-function
     from sweep_nn import VelocityINR
@@ -22,31 +29,12 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
     bounds_tuple = None
     if bounds is not None and bounds.min is not None and bounds.max is not None:
         bounds_tuple = (float(bounds.min), float(bounds.max))
-    # Water-layer pin: build a boolean mask whose True voxels are
-    # rendered as a fixed water velocity instead of the SIREN output.
-    # When ``water_mask_override`` is supplied the caller has already
-    # built the right mask (typically from a 2-D seabed_depth.npz,
-    # cropped to the post-model_plan window) — use it verbatim. Else
-    # fall back to ``init_vp == water_vp_m_s`` exact equality.
-    water_mask = None
-    if water_mask_override is not None:
-        water_mask = water_mask_override.to(
-            device=base_vp.device, dtype=torch.bool,
-        )
+    if water_mask is not None:
+        water_mask = water_mask.to(device=base_vp.device, dtype=torch.bool)
         if tuple(water_mask.shape) != tuple(base_vp.shape):
             raise ValueError(
-                f"water_mask_override shape {tuple(water_mask.shape)} != "
+                f"water_mask shape {tuple(water_mask.shape)} != "
                 f"base_vp shape {tuple(base_vp.shape)}"
-            )
-    elif bool(getattr(spec, "mask_water_layer", False)):
-        water_vp_val = float(getattr(spec, "water_vp_m_s", 1500.0))
-        water_mask = (base_vp.detach() == water_vp_val)
-        if not bool(water_mask.any()):
-            import warnings
-            warnings.warn(
-                f"reparam.mask_water_layer=True but no voxels in init_vp "
-                f"equal water_vp_m_s={water_vp_val}; mask will be empty.",
-                stacklevel=2,
             )
     # ---- multi-parameter reparam (free_params) -> MultiParamINR ---------- #
     free_params = getattr(spec, "free_params", None)
@@ -69,7 +57,8 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
             stds=[float(fp.std) for fp in free_params],
             bounds=[_fp_bounds(fp) for fp in free_params],
             water_mask=water_mask,
-            water_values=[(float(fp.water_value) if fp.water_value is not None
+            water_values=[(float(water_vp) if fp.name == "vp"
+                           else float(fp.water_value) if fp.water_value is not None
                            else float("nan")) for fp in free_params],
             hidden_features=int(spec.hidden_features),
             hidden_layers=int(spec.hidden_layers),
@@ -143,7 +132,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask_override=None,
         coord_max=float(spec.coord_max),
         bounds=bounds_tuple,
         water_mask=water_mask,
-        water_vp=float(getattr(spec, "water_vp_m_s", 1500.0)),
+        water_vp=float(water_vp),
         lateral_downsample=getattr(spec, "lateral_downsample", 1),
         compile_render=bool(getattr(spec, "compile_render", False)),
     ).to(base_vp.device)

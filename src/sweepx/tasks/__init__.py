@@ -23,6 +23,7 @@ from sweep_tasks.schemas import (
     RTMImagingSpec,
     RTMSpec,
     TaskSpec,
+    WaterSpec,
     WavefieldSpec,
 )
 from sweep_tasks.yaml_io import (
@@ -56,6 +57,7 @@ __all__ = [
     "TaskRunner",
     "TaskSpec",
     "TaskStatus",
+    "WaterSpec",
     "WavefieldSpec",
     "__version__",
     "dump_task",

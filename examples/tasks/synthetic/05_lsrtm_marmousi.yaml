@@ -96,8 +96,11 @@ reflectivity_bounds:
   max: 0.3
 
 # The top rows sit above the first reflector and only ever accumulate
-# source-side noise. Freezing them keeps that out of the image.
-freeze_top_n_rows: 10
+# source-side noise. `water:` holds their reflectivity at zero, which keeps
+# that out of the image: here the top 125 m (rows 0-9 of the 12.5 m grid).
+# Marmousi's water itself reaches 462.5 m; `seabed: 462.5` would hold all of it.
+water:
+  seabed: 125.0
 
 # Note: LSRTMSpec has no `qc:` block — the runner writes the loss curve and
 # per-epoch reflectivity snapshots unconditionally, paced by `show_every`.

@@ -56,11 +56,14 @@ def _solver_models(leaf, spec):
     if isinstance(leaf, (list, tuple)):
         return list(leaf)
     if getattr(getattr(spec, "physics", None), "equation", None) in _VRZ_EQUATIONS:
-        wthr = 1505.0
-        wv = (getattr(spec.reparam, "water_vp_m_s", None)
-              if getattr(spec, "reparam", None) else None)
-        if wv:
-            wthr = float(wv) + 5.0
+        # Still a velocity threshold (water = vp <= velocity + 5 m/s), keyed to
+        # the task's water velocity as it was to reparam.water_vp_m_s. Moving
+        # it onto the `water:` mask itself changes the coupling's physics and
+        # is left to its own change.
+        from sweep_tasks.schemas import water_of
+
+        w = water_of(spec)
+        wthr = float(w.velocity) + 5.0 if w is not None else 1505.0
         return [leaf, _gardner_z(leaf, water_thr=wthr)]
     return [leaf]
 

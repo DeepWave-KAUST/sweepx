@@ -83,12 +83,13 @@ backend:
 # cold start can be pushed. Paste 03's `linear_gradient` block in to make it
 # hard again.
 #
-# No `freeze_top_n_rows` here, unlike 03: blurring the true model also blurs
-# the water bottom, so `vp_smooth`'s top 37 rows ramp 1501 -> 1614 instead of
-# sitting at 1500 — a -14.8 ms two-way static. Freezing rows you KNOW are
-# wrong bakes that in; leaving them free lets the direct arrival correct them.
-# (With 03's `linear_gradient` start the water is exactly 1500 and freezing it
-# is the right call. The two examples differ for a reason.)
+# No `water:` block here, unlike 03: this example starts from the dataset's
+# smoothed model exactly as shipped, water column included. Blurring the true
+# model also blurs the water bottom, so `vp_smooth`'s top 37 rows ramp
+# 1501 -> 1614 instead of sitting at 1500 — a -14.8 ms two-way static that the
+# direct arrival corrects when the rows are left free. `water: {seabed: 462.5}`
+# would instead stamp 1500 m/s into them and hold it there (03 does exactly
+# that), a different run from the reference numbers above.
 init_model:
   name: vp
   dataset: marmousi:2d-demo

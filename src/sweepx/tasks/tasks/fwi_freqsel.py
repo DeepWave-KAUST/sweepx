@@ -39,10 +39,10 @@ from sweep_tasks._helpers.reparam import (
 from sweep_tasks._helpers.solver_build import _build_solver
 from sweep_tasks._helpers.stage_grid import (
     _resample_to_grid,
-    _seabed_to_grid,
     _set_physical_inr_frame,
     _stage_grid_shape,
 )
+from sweep_tasks._helpers.water import WaterRegion, rebake_water_
 from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.model import _model_array
 from sweep_tasks._helpers.util import (
@@ -237,6 +237,57 @@ def _freqsel_adam(params, lr):
     return torch.optim.Adam(params, lr=float(lr), eps=1e-8, betas=(0.9, 0.999))
 
 
+# The velocity whose cells this path used to pin without being asked.
+_OLD_IMPLICIT_PIN_VP = 1500.0
+
+
+def implicit_pin_cells(vp0_native, native_dh: float, stage_dhs) -> list:
+    """``[(dh, n_cells), ...]``: cells of each stage grid's starting model at
+    exactly 1500 m/s, the cells sweep-tasks pinned on this path before the
+    ``water:`` block existed (gradient zeroed and, on a grid model, the value
+    re-stamped every step) -- whether or not they were water.
+
+    Only used to refuse a task that leaves the water unsaid; the water itself
+    is never read off velocities.
+    """
+    import numpy as np
+
+    out, seen = [], set()
+    for dh in stage_dhs:
+        dh = float(dh)
+        key = round(dh, 9)
+        if key in seen:
+            continue
+        seen.add(key)
+        if abs(dh - float(native_dh)) < 1e-9:
+            m = vp0_native
+        else:
+            shape = _stage_grid_shape(vp0_native.shape, native_dh, dh)
+            m = _resample_to_grid(vp0_native, native_dh, shape, dh)
+        n = int(np.count_nonzero(m == _OLD_IMPLICIT_PIN_VP))
+        if n:
+            out.append((dh, n))
+    return out
+
+
+def _refuse_unsaid_water(hits) -> None:
+    where = ", ".join(f"{n:,} at dh={dh:g} m" for dh, n in hits)
+    raise ValueError(
+        "fwi (frequency_selection): the starting model has cells at exactly "
+        f"{_OLD_IMPLICIT_PIN_VP:g} m/s ({where}) and the task has no `water:` "
+        "block. Before `water:`, this path pinned exactly those cells without "
+        "being asked -- their gradient zeroed and, on a grid model, their value "
+        "re-stamped every step (with a reparam network only the gradient was "
+        "zeroed, which never held them) -- whether or not they were water. It "
+        "now holds only what `water:` names, so running on would change the run "
+        "silently. Say which it is:\n"
+        "    water: {seabed: <.npz, key 'seabed_depth'>}    # the water layer, from bathymetry\n"
+        "    water: {mask: <boolean .npy of the native grid>}  # e.g. the cells that used to be pinned\n"
+        "    water: false    # no water layer: those cells invert freely\n"
+        "A config_resolved.yaml from an older run lands here too: give it the "
+        "`water:` block of the run it reproduces.")
+
+
 def _release_card_between_stages(si: int, rank: int) -> None:
     """Hand the card back to the driver before the next stage builds its mesh.
 
@@ -321,7 +372,7 @@ class FreqselRunnerMixin:
         dd_on, dd_py, dd_px, rank, world, task_dir,
         use_reparam, net, optimizer, chunk_rows,
         vp0_native, native_dh, illum_spec, illum_on,
-        losses, times, peaks, epoch_offset, total_epochs,
+        losses, times, peaks, epoch_offset, total_epochs, water=None,
     ):
         """Run ONE frequency-selection stage on its own (dh, dt) grid.
 
@@ -381,12 +432,25 @@ class FreqselRunnerMixin:
                             -(-_ny0 // dd_py) * dd_py if dd_on else _ny0,
                             -(-_nx0 // dd_px) * dd_px if dd_on else _nx0)
         vp0p = np.pad(vp0, _pad, mode="edge")
-        frozen = vp0p == float(getattr(spec.reparam, "water_vp_m_s", 1500.0)
-                               if spec.reparam else 1500.0)
+        # The `water:` layer on THIS stage's grid, padded like the model (an
+        # edge replicate onto the DD tile pad). Never read off velocities.
+        wet = (np.pad(water.mask_on_grid(gshape, float(dh)), _pad, mode="edge")
+               if water is not None else None)
+        # Cells the inversion never moves: the DD tile pad (invented columns,
+        # held at the base) and, with water.mode = pin, the water.
+        frozen = np.zeros(vp0p.shape, dtype=bool)
         if not is2d:
             frozen[:, ny_:, :] = True
             frozen[:, :, nx_:] = True
+        if wet is not None and water.pin:
+            frozen |= wet
+        if wet is not None and not use_reparam:
+            # A grid model starts the stage at water.velocity in both modes;
+            # under `pin` re-stamping `frozen` from base_t then holds it there.
+            vp0p = vp0p.copy()
+            vp0p[wet] = water.velocity
         water_t = torch.tensor(frozen, device=dev)
+        wet_t = torch.tensor(wet, device=dev) if wet is not None else None
         base_t = torch.tensor(vp0p, device=dev)
 
         # Multi-parameter reparam: prepare a base tensor per freed parameter
@@ -570,53 +634,17 @@ class FreqselRunnerMixin:
                        n_pools=int(fspec.n_pools), dh=float(dh), dt=float(dt),
                        nt=nt, shape=list(gshape))
 
-        # ---- optional seabed-based water pin (geologically-correct) --------
-        # The seabed_depth npz is a 2-D (ny, nx) bathymetry (meters from z=0)
-        # on the model's lateral extent at ANY resolution; resample it to THIS
-        # stage's (ny_, nx_) — same physical window — then broadcast
-        # z*dh<seabed to a 3-D water mask. Preferred over the
-        # vp==water_vp_m_s heuristic (which only catches voxels stamped to
-        # exactly the water velocity — e.g. the lateral edge-fill — and misses
-        # a water column filled with extrapolated rock).
-        _seabed_override = None
-        if (use_reparam and spec.reparam is not None
-                and bool(getattr(spec.reparam, "mask_water_layer", False))
-                and getattr(spec.reparam, "seabed_depth_path", None) is not None):
-            from sweep_tasks.bathymetry import (
-                load_seabed_depth_npz, water_mask_from_seabed_depth)
-            _sd = load_seabed_depth_npz(spec.reparam.seabed_depth_path)
-            if _sd.ndim != 2:
-                raise ValueError(
-                    f"reparam.seabed_depth_path: expected 2-D (ny, nx) "
-                    f"seabed_depth for 3-D FWI; got shape {tuple(_sd.shape)}")
-            # Registration guard: the npz must cover the SAME lateral extent as
-            # the model (it is resampled to (ny_, nx_) below, so any resolution
-            # is fine) — verify by aspect ratio so a wrong-frame file (e.g. the
-            # full survey-frame bathymetry) is rejected instead of silently
-            # stretched into the model window.
-            _ar_model = float(vp0_native.shape[1]) / float(vp0_native.shape[2])
-            _ar_sd = float(_sd.shape[0]) / float(_sd.shape[1])
-            if abs(_ar_sd - _ar_model) / _ar_model > 0.03:
-                raise ValueError(
-                    f"reparam.seabed_depth_path shape {tuple(_sd.shape)} "
-                    f"(ny/nx={_ar_sd:.3f}) does not match the model lateral "
-                    f"aspect ratio {_ar_model:.3f} (native "
-                    f"{vp0_native.shape[1]}x{vp0_native.shape[2]}); wrong-frame "
-                    "bathymetry? regenerate on the model's lateral window.")
-            _sd_r = _seabed_to_grid(_sd, vp0_native.shape[1:], native_dh,
-                                    (int(ny_), int(nx_)), float(dh))
-            _mask_np = water_mask_from_seabed_depth(
-                _sd_r, nz=int(nz), dh_z_m=float(dh))
-            if (nyp, nxp) != (ny_, nx_):
-                _mask_np = np.pad(_mask_np, ((0, 0), (0, nyp - ny_),
-                                             (0, nxp - nx_)), mode="edge")
-            _seabed_override = torch.from_numpy(_mask_np).to(dev)
-            if rank == 0:
-                print(f"[freqsel] seabed water-pin from "
-                      f"{spec.reparam.seabed_depth_path}: "
-                      f"{int(_mask_np.sum()):,}/{_mask_np.size:,} voxels "
-                      f"({100 * _mask_np.mean():.2f}%), seabed depth "
-                      f"[{_sd_r.min():.0f}, {_sd_r.max():.0f}] m", flush=True)
+        # ---- the water as the reparam network sees it ----------------------
+        # `pin`: the network renders water.velocity there (render-time pin).
+        # `reset_each_stage`: no pin; the base is re-baked at stage entry below.
+        # The vp channel holds water.velocity; other channels their
+        # FreeParamSpec.water_value.
+        _render_pin = (wet_t if (water is not None and water.pin) else None)
+        _water_values = None
+        if water is not None:
+            _water_values = ([water.velocity if fp.name == "vp" else fp.water_value
+                              for fp in spec.reparam.free_params]
+                             if free_multi else water.velocity)
 
         # ---- parameterisation: grid vp or reparam INR ---------------------
         vp = None
@@ -624,7 +652,9 @@ class FreqselRunnerMixin:
             if use_reparam:
                 net = _build_reparam_net(spec.reparam, base_t,
                                          spec.model_bounds.get("vp"),
-                                         water_mask_override=_seabed_override,
+                                         water_mask=wet_t,
+                                         water_vp=(water.velocity
+                                                   if water is not None else 1500.0),
                                          param_bases=param_bases)
                 net = net.to(dev)
                 _set_physical_inr_frame(net, shape=_solver_shape, dh=float(dh),
@@ -644,19 +674,10 @@ class FreqselRunnerMixin:
                 # Carry the network across the band: resample only its base to
                 # the new grid, keep hash+SIREN params AND Adam state (the whole
                 # point — the coarse structure learned in prior bands stays).
-                # Rebuild the water-pin mask on the new grid (same base==water_vp
-                # basis as the si=0 build) and hand it to update_base_velocity —
-                # a grid (shape) change otherwise DROPS the stale render pin
-                # (VelocityINR.update_base_velocity), so water would un-pin at
-                # the 2-8 band. Mirrors the random/CRG path (passes new_mask).
-                _wvp = float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
-                # Seabed pin (rebuilt on THIS stage's grid above) wins over the
-                # vp==water_vp heuristic; keep the fallback for legacy configs.
-                _wm = (_seabed_override if _seabed_override is not None
-                       else ((base_t.detach() == _wvp)
-                             if bool(getattr(spec.reparam,
-                                             "mask_water_layer", False))
-                             else None))
+                # Hand update_base_velocity this stage's water mask: a grid
+                # (shape) change otherwise DROPS the old pin
+                # (VelocityINR.update_base_velocity) and the water un-pins.
+                _wm = _render_pin
                 if free_multi:
                     # Multi-parameter: carry the shared trunk, resample EVERY
                     # channel's base to the new grid (param_bases was rebuilt
@@ -720,6 +741,25 @@ class FreqselRunnerMixin:
                         optimizer = _freqsel_adam([vp], spec.optimizer.lr)
                         if rank == 0:
                             print(f"[freqsel] stage {si}: {_why}", flush=True)
+                    if wet_t is not None:
+                        # The carried model starts this stage at water.velocity
+                        # too, like the base (in place on a carried leaf: the
+                        # Adam state is keyed on that tensor).
+                        with torch.no_grad():
+                            vp[wet_t] = water.velocity
+        # water.mode = reset_each_stage on a network: drop the render pin and
+        # re-bake its base so this stage's first render is the water velocity
+        # there; the water then inverts freely until the next stage entry.
+        # Every rank does the same deterministic update to its replica.
+        if use_reparam and water is not None and not water.pin:
+            _n_wet = rebake_water_(
+                net, wet_t, _water_values,
+                render=(lambda: net.render_all(chunk_rows=chunk_rows))
+                if free_multi else (lambda: net.render(chunk_rows=chunk_rows)))
+            if rank == 0:
+                print(f"[freqsel] stage {si}: water reset to {water.velocity:g} "
+                      f"m/s in {_n_wet} cells, free within the stage", flush=True)
+
         # per-stage lr scale: this stage's lr is the base (reparam.lr, or
         # optimizer.lr for a grid model) x this stage's own scale, written on
         # EVERY entry. A carried optimizer (reparam, or a grid model on the
@@ -846,31 +886,6 @@ class FreqselRunnerMixin:
                   f"final_levels={getattr(_c2f, 'final_levels', None)}",
                   flush=True)
 
-        # ---- optional water-column gradient freeze, on THIS stage's grid --
-        # Zero the vp gradient above the seabed so the inversion never updates
-        # the (known) water velocity. Grid-mode path (reparam masks the water
-        # itself). Rebuilt every stage: a mask cached across stages (or across
-        # tasks on one runner) does not fit another grid.
-        _fwl = getattr(spec, "freeze_water_layer", None)
-        _freeze_mask_t = None
-        if (_fwl is not None and getattr(_fwl, "enabled", False)
-                and _fwl.seabed_depth_path is not None):
-            from sweep_tasks.bathymetry import (
-                load_seabed_depth_npz, water_mask_from_seabed_depth)
-            _sd = load_seabed_depth_npz(_fwl.seabed_depth_path)
-            _sdr = _seabed_to_grid(_sd, vp0_native.shape[1:], native_dh,
-                                   gshape[1:], float(dh))
-            _wm = water_mask_from_seabed_depth(
-                _sdr, nz=int(nz), dh_z_m=float(dh),
-                buffer_cells=int(_fwl.buffer_cells))
-            if not is2d and (nyp, nxp) != (ny_, nx_):
-                _wm = np.pad(_wm, ((0, 0), (0, nyp - ny_),
-                                   (0, nxp - nx_)), mode="edge")
-            _freeze_mask_t = torch.from_numpy(_wm).to(dev).bool()
-            if rank == 0:
-                print("[freqsel] freeze_water_layer: %d voxels zeroed"
-                      % int(_freeze_mask_t.sum()), flush=True)
-
         stage_epochs = int(stage.epochs)
         snap_every = int(os.environ.get("SWEEP_SNAP_EVERY",
                                         str(max(1, stage_epochs // 10))))
@@ -980,10 +995,6 @@ class FreqselRunnerMixin:
                           "to host memory after a CUDA OOM (all ranks)",
                           flush=True)
             g = leaf.grad
-            # Optional water-column gradient freeze (mask built for THIS
-            # stage's grid above the loop). See :class:`FreezeWaterLayerSpec`.
-            if _freeze_mask_t is not None and g is not None:
-                g[_freeze_mask_t] = 0.0
             # Debug: dump the raw velocity gradient of selected iters for
             # DD-vs-single parity checks (SWEEP_FREQSEL_DUMP_GRAD=<dir>).
             # DD dumps this rank's TILE grad + its global bounds; single dumps
@@ -1198,16 +1209,25 @@ class FreqselRunnerMixin:
                              f"(nz, ny, nx); got shape {vp0_native.shape}")
         if vp0_native.ndim == 2:
             # 2-D freqsel: same encoding/loss, single lateral axis. Domain
-            # decomposition and the (ny, nx) bathymetry pin are 3-D-only.
+            # decomposition is 3-D-only.
             if (getattr(spec, "dd", None) is not None
                     and getattr(spec.dd, "enabled", False)):
                 raise ValueError("freqsel 2-D does not support domain "
                                  "decomposition (dd.enabled); run single-device")
-            if (spec.reparam is not None
-                    and getattr(spec.reparam, "seabed_depth_path", None)):
-                raise ValueError("reparam.seabed_depth_path is a 3-D (ny, nx) "
-                                 "bathymetry; not available for 2-D freqsel")
         native_dh = float(spec.grid.dh)
+
+        # The water layer (`water:`), defined on the native grid and rebuilt
+        # on every stage grid. Unsaid water on a model that has cells at the
+        # value this path used to pin silently is refused, not reinterpreted.
+        water = WaterRegion.from_task(spec, vp0_native.shape, native_dh)
+        if spec.water is None:
+            _hits = implicit_pin_cells(
+                vp0_native, native_dh,
+                [float(st.dh_m) if st.dh_m else native_dh for st in stages])
+            if _hits:
+                _refuse_unsaid_water(_hits)
+        elif water is not None and rank == 0:
+            print(f"[freqsel] water: {water.describe()}", flush=True)
 
         task_dir.mkdir(parents=True, exist_ok=True)
         net = optimizer = None
@@ -1237,7 +1257,7 @@ class FreqselRunnerMixin:
                 dd_on, dd_py, dd_px, rank, world, task_dir,
                 use_reparam, net, optimizer, chunk_rows,
                 vp0_native, native_dh, illum_spec, illum_on,
-                losses, times, peaks, len(losses), total_epochs)
+                losses, times, peaks, len(losses), total_epochs, water=water)
             if chk_first is None:
                 chk_first = chk
             _release_card_between_stages(si, rank)

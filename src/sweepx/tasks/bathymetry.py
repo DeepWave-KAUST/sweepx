@@ -1,36 +1,43 @@
 """Bathymetry (seabed-depth) helpers for FWI.
 
-Generates a 2-D seabed-depth map from a 3-D init vp model and saves it
-in the npz format consumed by :class:`sweep_tasks.schemas.FreezeWaterLayerSpec`
-and the velocity-INR water-pin path (see ``ReparamSpec.seabed_depth_path``).
+The seabed file is how a task tells every inversion path where the water is:
+``water: {seabed: <file>}`` (:class:`sweep_tasks.schemas.WaterSpec`). Every
+grid the run uses -- the native grid, a stage grid with its own ``dh_m``, a
+model_plan crop -- builds its water mask from it with
+:func:`water_mask_from_seabed_depth`, the one runtime definition of "water".
 
-The convention — shared across these two consumers and matched by
-:class:`sweep_nn.SeabedFreezeMask`:
+The file format:
 
 * ``seabed_depth`` array, shape ``(nx,)`` for 2-D models or ``(ny, nx)``
-  for 3-D models.
+  for 3-D models, spanning the model's lateral extent (first and last
+  samples on the model's first and last columns; any resolution).
 * Values are depths in **meters** measured from grid index ``z=0``
   (typically the sea surface).
-* Saved as an npz with a single key ``"seabed_depth"``.
+* Saved as an npz with a single key ``"seabed_depth"``
+  (:func:`save_seabed_depth_npz`).
 
-Building the map alongside the init vp avoids two foot-guns:
-
-1. **Float-exact equality**: inferring the water mask via
-   ``vp == 1500.0`` only works when the init was stamped to exactly
-   1500. A smoothing step or unit conversion can break that silently.
-2. **Per-column bathymetry**: real surveys have varying water depth.
-   A 2-D map captures it correctly; a flat ``z < N`` rule does not.
-
-Usage (Python API)::
+The runner never guesses the water from velocities. When the starting model
+is all you have, :func:`derive_seabed_depth_from_vp` turns it into a seabed
+file once, as an explicit step you can inspect:
 
     import numpy as np
-    from sweep_tasks.bathymetry import derive_seabed_depth_from_vp
+    from sweep_tasks.bathymetry import (derive_seabed_depth_from_vp,
+                                        save_seabed_depth_npz)
 
     init_vp = np.load("init_vp.npy")  # (nz, nx) or (nz, ny, nx)
     seabed_depth = derive_seabed_depth_from_vp(
         init_vp, dh_z_m=75.0, water_vp=1500.0
     )
-    np.savez("seabed_depth.npz", seabed_depth=seabed_depth)
+    save_seabed_depth_npz("seabed_depth.npz", seabed_depth)
+
+Two foot-guns that a seabed file avoids and a velocity rule does not:
+
+1. **Float-exact equality**: inferring the water via ``vp == 1500.0`` only
+   works when the init was stamped to exactly 1500. A smoothing step or
+   unit conversion breaks it silently, and any deeper cell that happens to
+   sit on the constant is swept in.
+2. **Per-column bathymetry**: real surveys have varying water depth.
+   A 2-D map captures it correctly; a flat ``z < N`` rule does not.
 """
 
 from __future__ import annotations
@@ -122,6 +129,7 @@ def water_mask_from_seabed_depth(
     dh_z_m: float,
     buffer_cells: int = 0,
     use_cell_center: bool = True,
+    buffer_m: float | None = None,
 ) -> np.ndarray:
     """Broadcast a 2-D seabed map into a 3-D bool water mask.
 
@@ -143,6 +151,12 @@ def water_mask_from_seabed_depth(
         when its CENTER ``(z+0.5)*dh < seabed_depth + buffer*dh``.
         When False, uses the cell TOP — slightly more aggressive
         masking (one extra cell at the boundary).
+    buffer_m
+        The buffer as a DEPTH in metres instead of a cell count. A run
+        with several grids gives every grid the same physical buffer
+        this way (``buffer_cells`` of the native grid times its
+        spacing), not ``buffer_cells`` of whatever cell size the grid
+        has. Give ``buffer_cells`` or ``buffer_m``, not both.
 
     Returns
     -------
@@ -158,7 +172,14 @@ def water_mask_from_seabed_depth(
         )
     z_idx = np.arange(int(nz), dtype=np.float32)
     z_pos = (z_idx + (0.5 if use_cell_center else 0.0)) * float(dh_z_m)
-    buf_m = float(buffer_cells) * float(dh_z_m)
+    if buffer_m is not None:
+        if buffer_cells:
+            raise ValueError(
+                "water_mask_from_seabed_depth: give buffer_cells or "
+                "buffer_m, not both")
+        buf_m = float(buffer_m)
+    else:
+        buf_m = float(buffer_cells) * float(dh_z_m)
     threshold = sd + buf_m  # shape matches sd
     # Broadcast: (nz, 1) [< (ny, nx)] -> (nz, ny, nx) ; or (nz, 1) [< (nx,)] -> (nz, nx)
     if sd.ndim == 1:

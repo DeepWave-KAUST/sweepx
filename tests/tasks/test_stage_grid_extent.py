@@ -25,7 +25,6 @@ from sweep_tasks._helpers.stage_grid import (
     _set_physical_inr_frame,
     _snap_covered,
     _stage_grid_shape,
-    _stage_rows_covering,
 )
 
 # (native shape, native dh, stage dhs): the two benchmark ladders the bug
@@ -204,16 +203,6 @@ def test_finer_stage_keeps_edge_positions_on_the_grid():
     assert out[0, 0, 0] == st[1] - 1 and out[0, 1, 0] == 0
     assert out[0, 2, 0] == 20
     assert out[0, 3, 0] == stg[0, 3, 0]          # outside the native grid too: untouched
-
-
-def test_freeze_rows_cover_the_same_depth():
-    # Marmousi's 37 water rows at 12.5 m end at 450 m
-    assert _stage_rows_covering(37, 12.5, 12.5) == 37
-    assert _stage_rows_covering(37, 12.5, 25.0) == 19          # 0 .. 450 m
-    assert _stage_rows_covering(37, 12.5, 37.5) == 13          # 0 .. 450 m
-    assert _stage_rows_covering(37, 12.5, 100.0) == 5          # 0 .. 400 m
-    assert _stage_rows_covering(37, 12.5, 6.25) == 73          # 0 .. 450 m
-    assert _stage_rows_covering(0, 12.5, 25.0) == 0
 
 
 # ------------------------------------------------------------- INR frame --

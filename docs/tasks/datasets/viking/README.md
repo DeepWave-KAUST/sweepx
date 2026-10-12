@@ -693,13 +693,14 @@ init_model:
     water_vp: 1485.6          # measured from the direct arrival (Step 3a), not 1500
 ```
 
-The top `water_rows` rows are stamped to exactly `water_vp` — which is also what
-`reparam.mask_water_layer` keys on to pin the water column — and the ramp spans
+The top `water_rows` rows are stamped to exactly `water_vp`, and the ramp spans
 the rows *below* the water, so the gradient's range is not eaten by it. No
 lateral structure at all: nothing about the answer is smuggled into the start.
-(A bathymetry-aware builder remains on the roadmap; the flat 28 rows are within
-1-3 cells of the real seabed here, measured 343-372 m from the seabed
-reflection.)
+These rows only build the start; what the inversion holds fixed is the task's
+`water:` block, here a flat seabed at the same depth (`water: {seabed: 350.0,
+velocity: 1485.6}` holds rows 0-27). The flat 350 m is within 1-3 cells of the
+real seabed, measured 343-372 m from the seabed reflection; a per-trace seabed
+`.npz` (`sweep_tasks.bathymetry`) would follow it instead.
 
 ---
 
@@ -839,10 +840,10 @@ more iterations unchanged — it is an illumination limit, not a tuning problem.
 
 Known gaps of the reference run, left as exercises: `model_bounds` was not
 enabled (vp reaches 1254 m/s in spots, below water velocity — set
-`model_bounds: {vp: {min: 1450, max: 5500}}`); the water mask is a flat 28
-rows rather than the measured 343-372 m bathymetry
-(`reparam.seabed_depth_path`); and 30 iterations/band demonstrates the
-workflow rather than converging it.
+`model_bounds: {vp: {min: 1450, max: 5500}}`); the water layer is a flat 28
+rows rather than the measured 343-372 m bathymetry (point `water.seabed` at a
+per-trace seabed file); and 30 iterations/band demonstrates the workflow rather
+than converging it.
 
 ---
 
@@ -1058,7 +1059,7 @@ for Viking. Remaining nice-to-haves:
 
 | Item | Notes |
 | --- | --- |
-| bathymetry-aware water mask | flat `water_rows` is 1-3 cells off the real seabed here; `reparam.seabed_depth_path` exists, a picker CLI does not |
+| bathymetry-aware water mask | flat `water_rows` is 1-3 cells off the real seabed here; `water.seabed` takes a per-trace seabed file, a picker CLI does not exist |
 | truncated freqsel backward | the adjoint source lives only in the probe window — backward could stop ~40-67 % early and the boundary store shrink to the tail; design noted, unimplemented |
 
 ### CSG-index / SeismicPlan field mapping (for reference)

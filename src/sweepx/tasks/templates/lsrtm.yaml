@@ -132,9 +132,15 @@ show_every: 10
 # ═══ Reflectivity bounds (optional clip on the image) ════════════════════════
 # reflectivity_bounds: {enabled: true, min: -1.0, max: 1.0}
 
-# ═══ Shallow handling (optional) ═════════════════════════════════════════════
+# ═══ Water layer (optional) ══════════════════════════════════════════════════
+# The reflectivity is held at zero there (mode pin) or reset to zero at every
+# stage entry (reset_each_stage). Exactly one of seabed / mask; no velocity.
 
-freeze_top_n_rows: 0                # zero the reflectivity update in the top N rows
+# water:
+#   seabed: /path/seabed.npz        # npz key "seabed_depth" (metres below z=0),
+#                                   # or a number = a flat layer that deep
+#   # mask: /path/water.npy         # bool on the background model's grid
+#   mode: pin
 
 # ═══ Stages (optional) ═══════════════════════════════════════════════════════
 # An LSRTM stage reads epochs, lr_scale and wavelet only. Every stage runs on

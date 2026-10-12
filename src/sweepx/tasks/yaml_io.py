@@ -67,6 +67,7 @@ def _resolve_paths(value: Any, base: Path) -> Any:
             k: (
                 _resolve_one(v, base)
                 if k in RESOLVED_PATH_KEYS
+                else _resolve_water(v, base) if k == "water"
                 else _resolve_paths(v, base)
             )
             for k, v in value.items()
@@ -74,6 +75,18 @@ def _resolve_paths(value: Any, base: Path) -> Any:
     if isinstance(value, list):
         return [_resolve_paths(v, base) for v in value]
     return value
+
+
+def _resolve_water(v: Any, base: Path) -> Any:
+    """``water: {seabed | mask: <file>}`` -- both are paths, relative to the YAML
+    (a numeric ``seabed`` is a flat depth and stays a number).
+
+    Resolved here rather than by key name everywhere: ``mask`` and ``seabed``
+    are ordinary words, and only inside ``water:`` are they files."""
+    if not isinstance(v, dict):
+        return v
+    return {k: (_resolve_one(x, base) if k in {"seabed", "mask"} else x)
+            for k, x in v.items()}
 
 
 def _resolve_one(v: Any, base: Path) -> Any:

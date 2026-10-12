@@ -155,11 +155,15 @@ def test_fwi_reparam_water_reset_resume_is_bit_identical(tmp_path, monkeypatch,
     true_vp[:6] = init_vp[:6] = 1500.0
     np.save(tmp_path / "true_water.npy", true_vp)
     np.save(tmp_path / "init_water.npy", init_vp)
+    water = np.zeros(shape, dtype=bool)
+    water[:6] = True
+    np.save(tmp_path / "water_mask.npy", water)
     _assert_resume_bit_identical(
         tmp_path, monkeypatch, _COARSE, 6, 4,
         init_model={"name": "vp", "path": str(tmp_path / "init_water.npy")},
         obs={"synthetic_from": {"name": "vp", "path": str(tmp_path / "true_water.npy")}},
-        **_reparam(mask_water_layer=True, water_reset_each_stage=True))
+        water={"mask": str(tmp_path / "water_mask.npy"), "mode": "reset_each_stage"},
+        **_REPARAM)
 
 
 def test_fwi_reparam_resume_keeps_the_init_optimizer_from_lr(tmp_path, monkeypatch,

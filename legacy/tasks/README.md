@@ -56,6 +56,9 @@ models:
 Any of them can be post-processed with `smooth_sigma_cells`. When the start is
 built in memory there is no input file to point at afterwards, so an FWI run
 writes the resolved array to `output/initial_vp.npy` before training.
+`water_rows` only builds the start: what an inversion holds fixed is the
+task's one `water:` block (a seabed or a mask; see
+[CLI workflow](docs/cli_workflow.md#the-water-layer-water)).
 
 Or hand-write your own task YAML using the bundled templates:
 

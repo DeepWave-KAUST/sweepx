@@ -388,31 +388,29 @@ def test_plan_streaming_fwi_qc_flags_gate_each_product(tmp_path):
     assert (qc_on / "loss_curve.png").exists(), "loss_curve.png missing"
 
 
-def test_plan_streaming_fwi_with_smooth_reg_and_seabed_freeze(tmp_path):
-    """Wire TVPrior + SeabedFreezeMask through the plan-streaming path."""
+def test_plan_streaming_fwi_with_smooth_reg_and_water_pin(tmp_path):
+    """Wire TVPrior + the `water:` pin through the plan-streaming path."""
+    from sweep_tasks.bathymetry import save_seabed_depth_npz
+
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    # Seabed-depth npy: shape (ny, nx) = (16, 24); seabed at z=100m
-    # everywhere -> freeze rows 0..1 (with dh=50m -> z_idx=2 cutoff).
-    sb = np.full((16, 24), 100.0, dtype=np.float64)
-    sb_path = tmp_path / "seabed_depth.npy"
-    np.save(sb_path, sb)
+    # Seabed (ny, nx) = (16, 24) at 100 m everywhere -> rows 0..1 are water
+    # (cell centres 25 m and 75 m lie above it, 125 m does not).
+    sb_path = save_seabed_depth_npz(tmp_path / "seabed_depth.npz",
+                                    np.full((16, 24), 100.0))
     spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2)
     spec["smooth_regularization"] = {
         "weight": 1.0e-3, "order": "first",
         "x_weight": 1.0, "y_weight": 1.0, "z_weight": 1.0,
         "velocity_scale_m_s": 1000.0,
     }
-    spec["freeze_water_layer"] = {
-        "enabled": True, "seabed_depth_path": str(sb_path),
-        "buffer_cells": 0,
-    }
+    spec["water"] = {"seabed": str(sb_path), "velocity": 2500.0}
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "ss_priors.yaml")))
     assert result.status.state == "success", result.status.error
-    # Inverted vp should be unchanged in the water column (rows 0..1)
-    # because the seabed mask zeroed those gradient entries each step.
+    # The water (rows 0..1) holds water.velocity, here the starting value.
     inv = np.load(result.task_dir / "output" / "inverted_vp.npy")
     init = np.load(fixture["init_vp"])
-    np.testing.assert_allclose(inv[:2, :, :], init[:2, :, :])
+    assert np.array_equal(inv[:2, :, :], init[:2, :, :])
+    assert not np.array_equal(inv[2:, :, :], init[2:, :, :])
 
 
 def test_plan_streaming_fwi_requires_shared_shots_per_iter(tmp_path):
@@ -484,17 +482,17 @@ def test_plan_streaming_stage_grid_spans_the_base_extent(tmp_path, capsys, repar
     Base (16, 16, 24) at 50 m spans (750, 750, 1150) m; the 100 m stage needs
     (9, 9, 13) points for that -- the old round(n / 2) gave (8, 8, 12), 50 m
     short on every axis, with the rows near the far edge left to the kernel's
-    out-of-bounds guard. The seabed freeze is rebuilt for the stage grid
-    (it used to fail on the shape change), and with a reparam network the
-    stage coordinates stay in the base frame.
+    out-of-bounds guard. The `water:` layer is rebuilt on the stage grid, and
+    with a reparam network the stage coordinates stay in the base frame.
     """
+    from sweep_tasks.bathymetry import save_seabed_depth_npz
+
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    sb_path = tmp_path / "seabed_depth.npy"
-    np.save(sb_path, np.full((16, 24), 100.0, dtype=np.float64))
+    sb_path = save_seabed_depth_npz(tmp_path / "seabed_depth.npz",
+                                    np.full((16, 24), 100.0))
     spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
         "stages": [{"epochs": 1, "dh_m": 100.0}, {"epochs": 1, "dh_m": 50.0}],
-        "freeze_water_layer": {"enabled": True, "seabed_depth_path": str(sb_path),
-                               "buffer_cells": 0},
+        "water": {"seabed": str(sb_path), "velocity": 2500.0},
     })
     spec["backend"]["eager_options"] = {"use_compile": False}
     if reparam:

@@ -30,6 +30,23 @@ models:
 
 Any source can be post-processed with `smooth_sigma_cells`.
 
+## The water layer — `water:`
+
+`water_rows` above only builds a starting model. What an inversion holds fixed
+is one top-level block, read by every inversion path:
+
+```yaml
+water:
+  seabed: seabed.npz     # key "seabed_depth", metres below z = 0; or a number
+  # mask: water.npy      # or a boolean mask of the starting model's grid
+  velocity: 1500.0
+  mode: pin              # or reset_each_stage
+```
+
+Details, and how the retired `freeze_top_n_rows` / `freeze_water_layer` /
+`reparam.mask_water_layer` keys map onto it (`sweep-tasks migrate-water`), are
+in [CLI workflow](../cli_workflow.md#the-water-layer-water).
+
 ## The CLI
 
 ```

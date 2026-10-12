@@ -949,7 +949,7 @@ def save_vp_well_logs_png(
     — especially the shallow water column (`should` be ~1500 m/s) and
     the seabed-to-1st-reflector transition. A flat line at 1500 m/s
     across the water depth is a strong sanity signal; SIREN init noise
-    or freeze-water-layer mis-config show up here immediately.
+    or a mis-configured ``water:`` block show up here immediately.
 
     Parameters
     ----------

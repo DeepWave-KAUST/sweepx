@@ -85,7 +85,7 @@ backend:
 #   * the water column. Marmousi's top 37 rows (462.5 m) are exactly 1500 m/s,
 #     but `vp_linear` already ramps to 1797 there. Water velocity is a known
 #     constant, so starting it wrong AND inverting it is pure contamination —
-#     `freeze_top_n_rows: 37` below then holds it fixed.
+#     the `water:` block below then holds it fixed.
 #   * the deep ceiling. `vp_linear` tops out at 3812 while the true model's
 #     bottom 50 rows average 3926 and peak at 4700, so the deep section could
 #     never be reached from below. 4000 sits just above that 3926 mean.
@@ -137,8 +137,14 @@ stages:
     lr_scale: 0.2
 
 # Hold the water column fixed: its velocity is a known constant, not
-# something to solve for. Zeroes the gradient in the top 37 rows.
-freeze_top_n_rows: 37
+# something to solve for. Marmousi's seabed is flat at 462.5 m, so a number
+# does instead of a seabed file: the cells whose centres lie above it -- rows
+# 0-36 of this 12.5 m grid -- are held at 1500 m/s (their gradient zeroed,
+# their value re-stamped after every step). A field task points `seabed:` at
+# an .npz of per-trace depths instead (sweep_tasks.bathymetry).
+water:
+  seabed: 462.5
+  velocity: 1500.0
 
 epochs: 200                 # required: the sum of the stage epochs (checked)
 batchsize: 8                # shots drawn per optimizer step (stochastic

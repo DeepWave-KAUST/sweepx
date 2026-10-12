@@ -68,9 +68,13 @@ from sweep_tasks._helpers.solver_build import (
 )
 from sweep_tasks._helpers.stage_grid import (
     _resample_to_grid,
-    _seabed_to_grid,
     _set_physical_inr_frame,
     _stage_grid_shape,
+)
+from sweep_tasks._helpers.water import (
+    WaterRegion,
+    rebake_water_,
+    stamp_water_,
 )
 from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.util import (
@@ -90,9 +94,9 @@ def _dd_skipped_features(spec) -> list[tuple[str, str]]:
 
     Each is listed only when it asks for something: a block with ``enabled:
     false`` or a zero weight asks for nothing, so the config_resolved.yaml of
-    a run that left them off still loads. ``reparam.mask_water_layer`` is not
-    one of them: the network's water mask is padded to the DD grid and pins
-    every tile's render.
+    a run that left them off still loads. ``water:`` is not one of them: a
+    network's water mask is padded to the DD grid and pins every tile's
+    render, and a grid model is re-stamped after every step.
     """
     return _leaf_gradient_features(spec)
 
@@ -208,7 +212,7 @@ class PlanStreamingFWIMixin:
                 f"{_it}, so the run would go ahead without {_it}. Turn {_it} "
                 "off (" + ", ".join(f"{n}.{off}" for n, off in _dd_skipped)
                 + "), or run without DD (unset SWEEP_DD_ENABLE). "
-                "reparam.mask_water_layer works under DD. The "
+                "The `water:` block works under DD. The "
                 "config_resolved.yaml of an earlier DD run records "
                 f"{_it} as set, though that run went without {_it}.")
         _dd_unread = _dd_unread_reparam_options(spec) if dd_on else []
@@ -439,6 +443,23 @@ class PlanStreamingFWIMixin:
                       f"({_pz},{_pny},{_pnx}) -> {shape} (px={dd_px} py={dd_py})",
                       flush=True)
         nz, ny, nx = shape
+
+        # The water layer (`water:`), defined on the starting model's grid and
+        # cut with the same model_plan window as the model. DD tile pads are
+        # added per grid below, like the model's.
+        water = WaterRegion.from_task(spec, (nz_pre, ny_pre, nx_pre),
+                                      (dz_m, dy_m, dx_m))
+        if water is not None:
+            water = water.cropped((z_lo, y_lo, x_lo), (z_hi, y_hi, x_hi))
+            print(f"[plan-stream] water: {water.describe()}", flush=True)
+
+        def _water_mask_np(grid_shape, grid_dh):
+            """`water:` on a grid of this run, or None. Columns past the crop
+            (the DD tile pad) take the edge column's water, the same edge
+            replicate the pad gives the model."""
+            if water is None:
+                return None
+            return water.mask_on_grid(grid_shape, grid_dh)
 
         # Final cropped-frame origin (used by all grid-index projections).
         origin_z = init_origin_z + crop_origin_offset[0]
@@ -751,53 +772,21 @@ class PlanStreamingFWIMixin:
         vp_leaf = torch.from_numpy(init_vp_np).to(dev, copy=True).requires_grad_(True)
         inv_by_name = {"vp": vp_leaf}
         reparam_net = None
-        # Pre-build the SIREN water mask from a 2-D seabed-depth map
-        # (preferred — geological data) before constructing the reparam
-        # net. The full-extent npz is sliced with the SAME (y_lo:y_hi,
-        # x_lo:x_hi) window that cropped init_vp_np above, so the
-        # broadcast 3-D mask lines up voxel-for-voxel with vp_leaf.
-        water_mask_override = None
-        cropped_sd = None   # captured for per-stage water-mask rebuild (multi-res)
-        if (spec.reparam is not None
-                and bool(getattr(spec.reparam, "mask_water_layer", False))
-                and getattr(spec.reparam, "seabed_depth_path", None) is not None):
-            from sweep_tasks.bathymetry import (
-                load_seabed_depth_npz, water_mask_from_seabed_depth,
-            )
-            full_sd = load_seabed_depth_npz(spec.reparam.seabed_depth_path)
-            if full_sd.ndim != 2:
-                raise ValueError(
-                    f"reparam.seabed_depth_path: expected 2-D (ny, nx) "
-                    f"seabed_depth for 3-D FWI; got shape {full_sd.shape}"
-                )
-            if (full_sd.shape[0] != ny_pre or full_sd.shape[1] != nx_pre):
-                raise ValueError(
-                    f"reparam.seabed_depth_path shape {full_sd.shape} "
-                    f"!= init_vp pre-crop (ny, nx) ({ny_pre}, {nx_pre}); "
-                    "regenerate the bathymetry from the same init_vp."
-                )
-            cropped_sd = full_sd[y_lo:y_hi, x_lo:x_hi]
-            mask_np = water_mask_from_seabed_depth(
-                cropped_sd, nz=int(init_vp_np.shape[0]), dh_z_m=float(dz_m),
-            )
-            if dd_on and tuple(mask_np.shape) != tuple(shape):
-                # match the DD-padded base grid (edge-replicate high x/y)
-                mask_np = np.pad(
-                    mask_np, ((0, 0),
-                              (0, shape[-2] - mask_np.shape[-2]),
-                              (0, shape[-1] - mask_np.shape[-1])), mode="edge")
-            water_mask_override = torch.from_numpy(mask_np)
-            print(
-                f"[crg] reparam water_mask from {spec.reparam.seabed_depth_path}: "
-                f"shape={tuple(mask_np.shape)}, "
-                f"voxels={int(mask_np.sum()):,}/{mask_np.size:,} "
-                f"({100*mask_np.sum()/mask_np.size:.2f}%), "
-                f"depth range [{cropped_sd.min():.1f}, {cropped_sd.max():.1f}] m"
-            )
+        # `water:` on the base grid (DD tile pad included). A reparam network
+        # renders water.velocity there; a grid model starts the stage there
+        # (_stamp_stage_water below).
+        _wm_np = _water_mask_np(shape, (dz_m, dy_m, dx_m))
+        water_mask_t = (torch.from_numpy(_wm_np).to(dev)
+                        if _wm_np is not None else None)
+        if _wm_np is not None:
+            print(f"[crg] water mask: shape={tuple(_wm_np.shape)}, "
+                  f"voxels={int(_wm_np.sum()):,}/{_wm_np.size:,} "
+                  f"({100 * _wm_np.sum() / _wm_np.size:.2f}%)")
         if spec.reparam is not None:
             reparam_net = _build_reparam_net(
                 spec.reparam, vp_leaf, _effective_bound(spec.model_bounds, "vp"),
-                water_mask_override=water_mask_override,
+                water_mask=water_mask_t,
+                water_vp=(water.velocity if water is not None else 1500.0),
             )
             with torch.no_grad():
                 rendered = reparam_net().detach()
@@ -832,25 +821,6 @@ class PlanStreamingFWIMixin:
         _mr_src_model_xy = src_model_xy
         _mr_row_z = np.ascontiguousarray(plan.row_source_xyz[:, 2]).astype(np.float64)
         _mr_grp_z = np.ascontiguousarray(plan.group_xyz[:, 2]).astype(np.float64)
-        _mr_cropped_sd = cropped_sd
-        # When the water mask is derived INTERNALLY (seabed_depth_path=null →
-        # mask = init_vp == water_vp), there is no 2-D seabed_depth to resample
-        # per stage; deriving the mask from the trilinear-resampled base would
-        # fail the exact-equality test. Recover an effective 2-D seabed depth
-        # from the base water mask (water column is contiguous from z=0:
-        # seabed_depth[x,y] = n_water_cells * dz_base) so the per-stage
-        # ``water_mask_from_seabed_depth`` rebuild works for both cases.
-        if (_mr_cropped_sd is None and spec.reparam is not None
-                and bool(getattr(spec.reparam, "mask_water_layer", False))):
-            _wvp = float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
-            _base_wmask = (init_vp_np == _wvp)            # (nz, ny, nx)
-            if bool(_base_wmask.any()):
-                _mr_cropped_sd = (_base_wmask.sum(axis=0).astype(np.float64)
-                                  * float(dz_m))          # (ny, nx) seabed depth (m)
-                print(f"[crg] multi-res: derived effective seabed_depth from "
-                      f"base water mask (init_vp=={_wvp:.0f}) for per-stage mask "
-                      f"rebuild ({int((_mr_cropped_sd > 0).sum())}/"
-                      f"{_mr_cropped_sd.size} wet columns)")
         _cur_dh = float(dx_m)
         _cur_dh_zyx = _mr_base_dh_zyx      # spacing of the grid the model is on
 
@@ -935,7 +905,7 @@ class PlanStreamingFWIMixin:
             pristine model, resampled), water mask and coordinates move.
             """
             nonlocal shape, plan_grid_xyz, src_grid_xyz, vp_leaf, optimizer
-            nonlocal _cur_dh, _cur_dh_zyx
+            nonlocal _cur_dh, _cur_dh_zyx, water_mask_t
             sh, pg, sg = _grid_for_dh(dh)
             plan_grid_xyz, src_grid_xyz = pg, sg
             nz_s, ny_s, nx_s = sh
@@ -945,17 +915,9 @@ class PlanStreamingFWIMixin:
             else:
                 new_base = _resample_to_grid(vp_leaf.detach(), _cur_dh_zyx, sh,
                                              float(dh)).to(dev)
-            new_mask = None
-            if _mr_cropped_sd is not None:
-                from sweep_tasks.bathymetry import water_mask_from_seabed_depth
-                # The cropped seabed sits on the base model's columns (before
-                # any DD tile pad), at the base spacing.
-                sd_s = _seabed_to_grid(
-                    np.ascontiguousarray(_mr_cropped_sd), _mr_cropped_sd.shape,
-                    _mr_base_dh_zyx[1:], (ny_s, nx_s), float(dh))
-                new_mask = torch.from_numpy(
-                    water_mask_from_seabed_depth(sd_s, nz=nz_s, dh_z_m=float(dh))
-                ).to(dev)
+            # `water:` rebuilt on this stage's grid (the same physical layer).
+            new_mask = (torch.from_numpy(water.mask_on_grid(sh, float(dh))).to(dev)
+                        if water is not None else None)
             if dd_on:
                 # DD v1 needs uniform tiles.  The base pad (at grid.dh) does NOT
                 # survive a per-stage dh_m resample (e.g. 25 m -> 18.75 m can
@@ -979,13 +941,18 @@ class PlanStreamingFWIMixin:
                     sh = (nz_s, ny_s + _yp, nx_s + _xp)
                     nz_s, ny_s, nx_s = sh
             shape = sh
+            water_mask_t = new_mask
             if reparam_net is not None:
                 # update_base_velocity resamples coords + (optionally) the water
                 # mask to the new shape; per-iter ``reparam_net()`` then renders
                 # at the new grid, so no inv_by_name swap is needed here. The
                 # coords it builds are i/n of the new shape: put them back in the
-                # base grid's frame so the learned field does not stretch.
-                reparam_net.update_base_velocity(new_base, water_mask=new_mask)
+                # base grid's frame so the learned field does not stretch. In
+                # reset_each_stage mode there is no render pin (re-baked at the
+                # stage entry instead).
+                reparam_net.update_base_velocity(
+                    new_base,
+                    water_mask=new_mask if (water is not None and water.pin) else None)
                 _set_physical_inr_frame(reparam_net, shape=sh, dh=float(dh),
                                         frame_shape=_mr_base_shape,
                                         frame_dh=_mr_base_dh_zyx)
@@ -1417,7 +1384,7 @@ class PlanStreamingFWIMixin:
                 return int(iter_idx) + int(os.environ.get("SWEEP_ENUM_START", "0"))
             return _next_rng_state()
 
-        # --- 7b) Optional priors: TVPrior + SeabedFreezeMask.
+        # --- 7b) Optional priors: TVPrior (the water pin is `water:`, below).
         tv_prior = None
         smooth_spec = getattr(spec, "smooth_regularization", None)
         if smooth_spec is not None and float(smooth_spec.weight) > 0.0:
@@ -1430,21 +1397,26 @@ class PlanStreamingFWIMixin:
                 z_weight=float(smooth_spec.z_weight),
                 velocity_scale_m_s=float(smooth_spec.velocity_scale_m_s),
             )
-        seabed_mask = None
-        _freeze_sb = None
-        freeze_spec = getattr(spec, "freeze_water_layer", None)
-        if freeze_spec is not None and freeze_spec.enabled:
-            from sweep_nn import SeabedFreezeMask
+        _water_pin = water is not None and water.pin
 
-            sb = np.load(freeze_spec.seabed_depth_path)
-            if isinstance(sb, np.lib.npyio.NpzFile):
-                sb = sb["seabed_depth"]
-            _freeze_sb = np.asarray(sb)
-            seabed_mask = SeabedFreezeMask(
-                _freeze_sb, dz_m=dz_m,
-                buffer_cells=int(freeze_spec.buffer_cells),
-            )
-        _seabed_mask_base = seabed_mask
+        def _stamp_stage_water():
+            """Stage entry: the water starts at water.velocity (grid model) or
+            the network re-bakes its base there (reparam, reset_each_stage)."""
+            if water is None:
+                return
+            if reparam_net is None:
+                stamp_water_(vp_leaf, water_mask_t, water.velocity)
+            elif not water.pin:
+                if dd_on:
+                    # The replicated net renders the full grid on every rank,
+                    # tiled through the host (a full-lateral slab OOMs a tile).
+                    _r = (lambda: _render_full_to_cpu_tiled(reparam_net))
+                else:
+                    _r = (lambda: reparam_net.render(chunk_rows=dd_rc))
+                _n = rebake_water_(reparam_net, water_mask_t, water.velocity,
+                                   render=_r)
+                print(f"[crg] water reset to {water.velocity:g} m/s in {_n:,} "
+                      "cells, free within the stage", flush=True)
 
         # --- 8) Outputs / QC dirs (rank-0 / single-rank).
         out_dir = task_dir / "output"
@@ -1539,28 +1511,21 @@ class PlanStreamingFWIMixin:
                 "reparam_vp_mean": (
                     float(spec.reparam.vp_mean) if spec.reparam is not None else None
                 ),
-                "reparam_mask_water_layer": (
-                    bool(getattr(spec.reparam, "mask_water_layer", False))
-                    if spec.reparam is not None else False
-                ),
-                "reparam_water_vp_m_s": (
-                    float(getattr(spec.reparam, "water_vp_m_s", 1500.0))
-                    if spec.reparam is not None else None
-                ),
-                "reparam_seabed_depth_path": (
-                    str(getattr(spec.reparam, "seabed_depth_path", None))
-                    if (spec.reparam is not None
-                        and getattr(spec.reparam, "seabed_depth_path", None)
-                        is not None)
-                    else None
+                "water": (
+                    {"kind": water.kind,
+                     "source": (str(water.path) if water.path is not None
+                                else float(water.spec.seabed)),
+                     "mode": water.mode, "velocity": float(water.velocity),
+                     "buffer_m": float(water.buffer_m)}
+                    if water is not None else None
                 ),
                 "water_mask_voxels_true": (
-                    int(water_mask_override.sum().item())
-                    if water_mask_override is not None else None
+                    int(water_mask_t.sum().item())
+                    if water_mask_t is not None else None
                 ),
                 "water_mask_voxels_total": (
-                    int(water_mask_override.numel())
-                    if water_mask_override is not None else None
+                    int(water_mask_t.numel())
+                    if water_mask_t is not None else None
                 ),
                 "bandpass_hz": (
                     [float(bandpass_spec.lo_hz),
@@ -1674,19 +1639,7 @@ class PlanStreamingFWIMixin:
                           f"shape={shape})", flush=True)
                 if _dh_changed:
                     _apply_stage_dh(float(_stage_dh), _si)
-                    if _freeze_sb is not None:
-                        # The freeze is a (ny, nx) seabed quantised at dz: give
-                        # a stage grid its own, sampled at its columns.
-                        if abs(_cur_dh - float(dx_m)) < 1e-9:
-                            seabed_mask = _seabed_mask_base
-                        else:
-                            from sweep_nn import SeabedFreezeMask
-                            seabed_mask = SeabedFreezeMask(
-                                _seabed_to_grid(_freeze_sb, _freeze_sb.shape,
-                                                (float(dy_m), float(dx_m)),
-                                                tuple(shape[1:]), _cur_dh),
-                                dz_m=_cur_dh,
-                                buffer_cells=int(freeze_spec.buffer_cells))
+                _stamp_stage_water()
                 if _time_changed and epoch > 0:
                     # the in-flight prefetch for THIS iter was loaded at the OLD
                     # dt/nt; redo it at the new time axis (same seed → same shots).
@@ -2388,10 +2341,19 @@ class PlanStreamingFWIMixin:
             if _tprof and dev.type == "cuda": torch.cuda.synchronize(dev)
             t_smoothreg = time.perf_counter() - _t_reg0
 
-            # --- Seabed-freeze mask on the leaf gradient (post illum +
-            # post smooth-reg so any mask zeros take precedence).
-            if seabed_mask is not None and v_leaf_for_illum is not None:
-                seabed_mask.apply_to(v_leaf_for_illum.grad)
+            # --- water: pin -> zero the leaf gradient in the water (post illum
+            # + post smooth-reg so the zeros take precedence). A reparam
+            # network's render pin already gives those cells no gradient; a DD
+            # tile leaf there is left to it.
+            if (_water_pin and v_leaf_for_illum is not None
+                    and v_leaf_for_illum.grad is not None):
+                _g = v_leaf_for_illum.grad
+                if tuple(_g.shape) == tuple(water_mask_t.shape):
+                    _g[water_mask_t] = 0.0
+                elif not (dd_on and reparam_net is not None):
+                    raise RuntimeError(
+                        f"water mask {tuple(water_mask_t.shape)} does not fit "
+                        f"the gradient {tuple(_g.shape)}")
 
             # --- Reparam two-pass: push leaf grad through the net.
             # UNCONDITIONALLY drain any in-flight solver-adjoint async tail BEFORE
@@ -2460,6 +2422,9 @@ class PlanStreamingFWIMixin:
                 bound = _effective_bound(spec.model_bounds, "vp")
                 if bound is not None:
                     vp_leaf.data.clamp_(min=bound.min, max=bound.max)
+                # water: pin holds water.velocity through every step.
+                if _water_pin:
+                    stamp_water_(vp_leaf, water_mask_t, water.velocity)
             else:
                 # The global vp render is consumed ONLY by snapshots/QC/final-
                 # save, so render it on THOSE epochs — not every iter. At 3-D

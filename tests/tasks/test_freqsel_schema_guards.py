@@ -23,14 +23,15 @@ def _freqsel_fwi_doc(**extra):
     return doc
 
 
-def test_freqsel_rejects_freeze_top_n_rows():
-    """The freqsel loop pins water by value, so a row count would be a no-op."""
+def test_freqsel_rejects_retired_freeze_top_n_rows():
+    """freeze_top_n_rows is retired on every path; the error names `water:`."""
     from pydantic import TypeAdapter
     from sweep_tasks.schemas import TaskSpec
 
     ta = TypeAdapter(TaskSpec)
     ta.validate_python(_freqsel_fwi_doc())                    # baseline parses
-    with pytest.raises(Exception, match="freeze_top_n_rows is not supported"):
+    ta.validate_python(_freqsel_fwi_doc(freeze_top_n_rows=0))  # old resolved default
+    with pytest.raises(Exception, match=r"freeze_top_n_rows: 37` was retired"):
         ta.validate_python(_freqsel_fwi_doc(freeze_top_n_rows=37))
 
 

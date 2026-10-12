@@ -182,24 +182,6 @@ def _seabed_to_grid(seabed_depth, model_lateral_shape, native_dh,
     return _resample_to_grid(sd, spacing, lat, d)
 
 
-def _stage_rows_covering(n_rows: int, native_dh: float, dh: float) -> int:
-    """Stage rows whose depth lies inside the top ``n_rows`` native rows.
-
-    ``freeze_top_n_rows`` names native rows ``0 .. n_rows-1``, i.e. depths
-    ``0 .. (n_rows-1) * native_dh``. A stage row ``j`` (depth ``j * dh``) is
-    frozen when it lies in that interval, so the frozen depth is the same
-    physical layer on every grid instead of ``n_rows`` cells of whatever size
-    the stage uses.
-    """
-    n_rows = int(n_rows)
-    if n_rows <= 0:
-        return 0
-    if _same_spacing((float(native_dh),), (float(dh),)):
-        return n_rows
-    depth_cells = (n_rows - 1) * float(native_dh) / float(dh)
-    return int(math.floor(depth_cells + _COVER_CELLS)) + 1
-
-
 def _snap_covered(stage_idx, native_idx, stage_shape, native_shape):
     """Keep positions the native grid holds inside the stage grid.
 
@@ -286,7 +268,6 @@ __all__ = [
     "_stage_grid_shape",
     "_resample_to_grid",
     "_seabed_to_grid",
-    "_stage_rows_covering",
     "_snap_covered",
     "_set_physical_inr_frame",
 ]

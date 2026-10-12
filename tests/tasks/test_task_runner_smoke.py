@@ -306,13 +306,18 @@ def test_fwi_model_bounds_enforced(tmp_path):
     assert inv.max() <= 2600.0 + 1e-3
 
 
-def test_fwi_freeze_top_n_rows_keeps_top_unchanged(tmp_path):
-    spec_dict = _fwi_smoke_spec(tmp_path, freeze_top_n_rows=8, epochs=3)
+def test_fwi_water_mask_holds_the_top_rows(tmp_path):
+    spec_dict = _fwi_smoke_spec(tmp_path, epochs=3)
     init_arr = np.load(spec_dict["init_model"]["path"])
+    mask = np.zeros(init_arr.shape, dtype=bool)
+    mask[:8] = True
+    np.save(tmp_path / "water.npy", mask)
+    spec_dict["water"] = {"mask": str(tmp_path / "water.npy"), "velocity": 2500.0}
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "freeze.yaml")))
     assert result.status.state == "success", result.status.error
     inv = np.load(result.task_dir / "output" / "inverted_vp.npy")
-    assert np.allclose(inv[:8, :], init_arr[:8, :])
+    assert np.array_equal(inv[:8, :], init_arr[:8, :])
+    assert not np.array_equal(inv[8:, :], init_arr[8:, :])
 
 
 def test_fwi_multi_stage_runs(tmp_path):
