@@ -140,7 +140,7 @@ stages:
 # something to solve for. Zeroes the gradient in the top 37 rows.
 freeze_top_n_rows: 37
 
-epochs: 200                 # required by the schema; ignored when `stages:` is set
+epochs: 200                 # required: the sum of the stage epochs (checked)
 batchsize: 8                # shots drawn per optimizer step (stochastic
                             # mini-batch, not a pass over the survey)
 show_every: 5

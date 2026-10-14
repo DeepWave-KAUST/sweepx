@@ -87,10 +87,72 @@ def _build_scheduler(sched_spec, optimizer, total_epochs):
     return build_scheduler(sched_spec, optimizer, total_epochs)
 
 
+def _bind_stage_scheduler(sched_spec, optimizer, total_epochs, epoch, *,
+                          resume_lrs=None):
+    """Put the run's LR schedule on the optimizer a stage steps.
+
+    ``scheduler`` is ONE schedule over the whole run, indexed by the global
+    epoch ``t`` (``0 .. total_epochs - 1`` across all stages). Each stage has
+    its own base lr -- ``optimizer.lr`` (``reparam.lr``) times ``lr_scale``
+    (times ``inr_lr_scale`` under reparam) -- and at epoch ``t`` it runs at
+    ``runtime.scheduler.lr_at(spec, base, t)``. A rebuilt optimizer (a
+    ``dh_m`` change, ``optimizer_reset``) drops Adam's moments, not the
+    schedule's position, and ``lr_scale`` rescales the schedule instead of
+    restarting it. A cosine with the default ``t_max`` (all stages' epochs)
+    therefore anneals once, over the whole run.
+
+    Call it at every stage entry, after the stage's base lr is in
+    ``optimizer.param_groups`` (``_apply_stage_lr_scale``); ``epoch`` is the
+    global epoch the stage starts at. Within the stage the torch scheduler
+    steps in its usual chained form, so a run without ``stages`` steps exactly
+    as a plain torch scheduler would.
+
+    ``resume_lrs``: on a resume that lands inside a stage, the lrs of the
+    checkpointed optimizer. A group's checkpointed lr is kept when it is this
+    schedule's lr at ``epoch`` (equal up to the rounding of the chained steps
+    that produced it), so the resumed run is bit-identical to the
+    uninterrupted one; otherwise -- the schedule or the group's base lr
+    changed since the checkpoint -- the schedule's lr is used.
+
+    Every param group is bound, a ``hash.c2f.growing`` network's grown levels
+    included: they run at the network's lr (``_apply_stage_lr_scale`` gives
+    them its base, ``_helpers.reparam._add_grown_levels`` joins a level
+    grown during the stage to this schedule).
+
+    Returns the torch scheduler, or ``None`` for ``kind: constant``.
+    """
+    if sched_spec.kind == "constant":
+        return None
+    import math
+    from sweep_tasks.runtime.scheduler import lr_at
+    for group in optimizer.param_groups:
+        group["initial_lr"] = group["lr"]     # the stage's base lr
+    scheduler = _build_scheduler(sched_spec, optimizer, total_epochs)
+    if epoch > 0:
+        lrs = [lr_at(sched_spec, base, epoch, total_epochs)
+               for base in scheduler.base_lrs]
+        if resume_lrs is not None and len(resume_lrs) == len(lrs):
+            lrs = [r if math.isclose(r, s, rel_tol=1e-9) else s
+                   for r, s in zip(resume_lrs, lrs)]
+        for group, lr in zip(optimizer.param_groups, lrs):
+            group["lr"] = lr
+        # the state torch's own step() would leave at this epoch
+        scheduler.last_epoch = int(epoch)
+        scheduler._last_lr = [group["lr"] for group in optimizer.param_groups]
+    return scheduler
+
+
 def _remember_initial_lrs(optimizer) -> list[float]:
     return [float(g["lr"]) for g in optimizer.param_groups]
 
 
 def _apply_stage_lr_scale(optimizer, initial_lrs: list[float], scale: float) -> None:
-    for group, base in zip(optimizer.param_groups, initial_lrs):
+    """Set every param group to its base lr x ``scale``: the stage's base lr.
+
+    ``initial_lrs`` are the bases of the groups the optimizer was built with.
+    A group added after that, a level a ``hash.c2f.growing`` network grew,
+    belongs to the network of the first group and takes its base.
+    """
+    for i, group in enumerate(optimizer.param_groups):
+        base = initial_lrs[i] if i < len(initial_lrs) else initial_lrs[0]
         group["lr"] = base * float(scale)

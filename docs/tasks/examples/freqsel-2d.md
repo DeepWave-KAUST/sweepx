@@ -53,6 +53,10 @@ stage reading it: `--n-p` must equal that stage's `probe_samples`.
 
 `r` = 0.575; low-wavenumber RMSE 321.6 → 243.4.
 
+These numbers were measured with a fresh Adam at every rung, so rungs 2 and 3
+of 12 set `optimizer_reset: true`; without it, Adam's moments carry over on the
+same grid (see [The optimizer is fixed](#the-optimizer-is-fixed)).
+
 ![freqsel by rung](figures/12_by_rung.png)
 
 ## Against conventional FWI, at equal cost
@@ -99,3 +103,19 @@ Two things that cost real runs to learn:
   transient that does *not* cancel between a transient obs and a steady-state
   syn. `abcn: 40` (in both 11 and 12) puts the 1–3 Hz rung's steady-state check
   at 5.9e-3.
+
+## The optimizer is fixed
+
+This path builds its own optimizer: `torch.optim.Adam` at torch's defaults,
+**`eps` = 1e-8** and **`betas` = (0.9, 0.999)**, with no LR scheduler. Each
+stage runs at a constant lr, set afresh on entry: `optimizer.lr × lr_scale`
+for a grid model (25 → 15 → 8.75 m/s down the rungs of 12), `reparam.lr ×
+inr_lr_scale` under `reparam:`. Adam's moments and step count carry from one
+stage into the next, as in conventional FWI. A stage starts a fresh Adam only
+with `optimizer_reset: true` or, for a grid model, on a grid other than the
+previous stage's (`dh_m`), since the state is shape-bound; the run log says
+which. The schema rejects what the path would otherwise ignore: an optimizer
+kind other than `adam`, an `eps` or `betas` other than the schema default, a
+`scheduler` other than `constant`, and a stage `lr_scale` under `reparam:`.
+The `eps: 1e-22` in a run's `config_resolved.yaml` is that schema default
+written out, not the eps Adam ran with.

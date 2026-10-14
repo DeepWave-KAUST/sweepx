@@ -172,13 +172,36 @@ def _has_hash_schedule(net) -> bool:
     return hasattr(enc, "set_progress") or hasattr(enc, "grow_to_progress")
 
 
-def _advance_hash_schedule(net, progress, c2f_cfg, optimizer):
+def _add_grown_levels(optimizer, params, scheduler=None):
+    """Register a growing hash grid's new latent tables with ``optimizer``.
+
+    A new level joins at the lr the network's parameters run at at that
+    moment, the first param group's: base lr x the stage's scale x the
+    schedule's factor at the current epoch. ``add_param_group`` alone would
+    give it ``optimizer.defaults['lr']``, the base the optimizer was built
+    with, unscaled and off the schedule. It also takes the first group's
+    ``initial_lr`` (the stage's base, set by ``_bind_stage_scheduler``) and
+    joins ``scheduler.base_lrs``, so the schedule steps it as it steps the
+    others.
+    """
+    lead = optimizer.param_groups[0]
+    group = {"params": params, "lr": lead["lr"]}
+    if "initial_lr" in lead:
+        group["initial_lr"] = lead["initial_lr"]
+    optimizer.add_param_group(group)
+    if scheduler is not None:
+        scheduler.base_lrs.append(group["initial_lr"])
+
+
+def _advance_hash_schedule(net, progress, c2f_cfg, optimizer, scheduler=None):
     """Advance the hash coarse-to-fine schedule by one epoch (``progress`` in [0,1]).
 
     Two encoder mechanisms, picked by duck-typing:
       * ``GrowingHashGrid``      -> allocate fine levels ON DEMAND and register the
-        new latent Parameters with ``optimizer`` (``add_param_group``) so Adam
-        trains them (saves latent memory: fine levels aren't allocated until due).
+        new latent Parameters with ``optimizer`` (``_add_grown_levels``: a param
+        group at the lr the network runs at now, on ``scheduler`` when one is
+        bound) so Adam trains them (saves latent memory: fine levels aren't
+        allocated until due).
       * ``CoarseToFineHashGrid`` -> soft per-level mask (``set_progress``).
 
     Both read ``base_levels -> final_levels`` over ``[warmup, ramp_end]`` from
@@ -198,7 +221,7 @@ def _advance_hash_schedule(net, progress, c2f_cfg, optimizer):
         new = enc.grow_to_progress(progress, base_levels=base, final_levels=final,
                                    warmup=warmup, ramp_end=ramp_end)
         if new and optimizer is not None:
-            optimizer.add_param_group({"params": new})
+            _add_grown_levels(optimizer, new, scheduler)
         return float(enc.n_active), int(enc.L)
     if hasattr(enc, "set_progress"):              # CoarseToFineHashGrid (soft mask)
         enc.set_progress(progress, warmup=warmup, ramp_end=ramp_end, final_levels=final)

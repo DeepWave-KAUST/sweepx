@@ -154,7 +154,45 @@ plan-streaming supershot loop with ±1 source encoding. The runner auto-
 detects this and dispatches to the dedicated plan-streaming training loop;
 no separate `from_crg_plan` / `obs.crg_plan` / `build-crg-plan` symbols
 exist anymore. See `src/sweep_tasks/templates/fwi.yaml` for the canonical
-shape.
+shape. That loop refuses, when the YAML loads, the keys it never reads
+(`scheduler`, `resume` / `resume_from`, `train_shot_batchsize`,
+`save_illumination`, `grad_smooth`, `diffusion_prior`, `local_model_window`,
+`data_plan`, `modeling_override`, `freeze_top_n_rows`, a stage's `boundary:`
+or `frequency:`, `source_encoding.frequency`, the static-dataset keys
+`obs.plan.n_receivers_per_shot` / `receiver_select` / `max_shots` /
+`min_receivers` / `materialize_seed`, `sampling.prefetch_factor`,
+`sampling.per_crg_independent` with encoding on, `sampling.receiver_first`
+with `per_crg_independent`, a `bandpass` `target` / `padtype` other than the
+default, and a `min_coverage` it would not apply) instead of running without
+them. Under domain decomposition (`SWEEP_DD_ENABLE=1`) it also refuses, when
+the run starts, `illumination_precondition`, `smooth_regularization` and
+`freeze_water_layer`, which the DD loop skips (`reparam.mask_water_layer`
+works there), and a `reparam.backward_mode` / `backward_chunk_rows` other than
+the default: DD pushes each tile's gradient through the network in z-slabs of
+`SWEEP_DD_RENDER_CHUNK` rows. Without DD, `reparam.backward_mode:
+single_step` leaves no velocity gradient for those three blocks, so it is
+refused with them when the YAML loads.
+
+What the sampler draws each iteration: `batchsize` nodes (virtual sources),
+then the shots they share, thinned by `source_lines_per_group` /
+`max_traces_per_sourceline`, then at most `shared_shots_per_iter` of those (a
+random subset when there are more; all of them, said once in the log, when
+there are fewer; `null`, the default, keeps them all). `dedup_mode` then
+drops shots that share a grid cell. With `per_crg_independent` each node
+keeps its own shots instead, one per grid cell, and `shared_shots_per_iter`
+caps each node's count. `min_coverage` leaves nodes with fewer rows out of
+the draw, but only the receiver-first sampler applies it (`receiver_first:
+true`; not in an iteration where it falls back to the random sampler); with
+the random or per-CRG sampler a value other than 0 is refused.
+`source_encoding.min_coverage` adds to it with encoding on and is refused in
+a block with `enabled: false`, which has no effect.
+
+Bandpass: this loop takes `lo_hz`, `hi_hz` and `order` from the top-level
+`bandpass` or a stage's, filters the source wavelet at each stage entry and
+the observed data every iteration with its own zero-phase FFT Butterworth
+(no padding), and never filters the synthetic, whatever `target` says. The
+default `target: syn` (filter the synthetic) does not describe this path; a
+`target` or `padtype` other than the default is refused.
 
 ### Filter knobs
 
@@ -203,6 +241,15 @@ wavelet:    {kind: siren_pipeline_npz, path: ..., scale: 1.0}
 init_model: {name: vp, path: /path/to/vp_init.npy}
 # ...physics, backend, optimizer, loss, reparam, stages... (see benchmark YAML)
 ```
+
+Without `obs.plan.sampling` the dataset is materialised from the plan once, so
+of a `data_plan:` block only `dt_target_s` applies; its other fields are
+rejected when the YAML loads. Select shots, receivers and offsets in
+`build-plan`, or cap them with `obs.plan.max_shots` / `n_receivers_per_shot`.
+This path also rejects a stage's `frequency:` and `boundary:` blocks (only
+frequency selection reads them), an `inr_lr_scale` without `reparam:`, and,
+with `stages:`, a top-level `epochs` other than the sum of the stage epochs,
+which is what runs.
 
 Submit with the usual sbatch:
 
@@ -372,6 +419,24 @@ Two things that cost real runs to learn:
   pinned by VALUE instead: every cell whose starting value is exactly the water
   velocity (1500 m/s, or `reparam.water_vp_m_s`) has its gradient zeroed.
 
+The optimizer is fixed as well: Adam at torch's defaults (`eps` 1e-8, `betas`
+(0.9, 0.999)) with no scheduler, each stage at `optimizer.lr × lr_scale`, or
+`reparam.lr × inr_lr_scale` under `reparam:`. Its state carries from stage to
+stage unless a stage sets `optimizer_reset: true` or, for a grid model,
+changes the grid (`dh_m`). Another optimizer kind, `eps`,
+`betas` or scheduler, and a stage `lr_scale` under `reparam:`, are rejected;
+the `eps: 1e-22` a `config_resolved.yaml` records is the schema default, not
+what ran.
+
+The same goes for the stage keys this mode never reads: a stage's `wavelet`
+(no wavelet is modeled), `nt`, `batch_size` and `bandpass` are rejected, since
+its `frequency:` block sets the record length (`steady_samples` +
+`slack_samples` + `probe_samples`), the pools and the band, and so is an
+`inr_lr_scale` without `reparam:`. With `stages:`, the top-level `epochs` must
+be the sum of the stage epochs. Under `reparam:` with `hash.c2f.growing`, a
+level grown inside a stage runs at that stage's lr, like the rest of the
+network.
+
 A worked synthetic end-to-end — forward, three extractions, three-rung
 inversion, with measured numbers — is examples 11 + 12 (2-D) and 13 + 14 (3-D),
 walked through in [Frequency-selection FWI, 2-D](examples/freqsel-2d.md) and
@@ -504,7 +569,7 @@ When enabled, the runner adds these files per target to `artifacts`:
 | Drop far-offset noise | `... --offset-max-m 5000` |
 | Random sub-sample per group | `... --max-traces-per-group 100 --seed 42` |
 | OBN receiver-gather build | `sweep-tasks build-plan --index idx.npz --grouping crg --receiver-quantize-m 0.5 --out crg_plan.npz` |
-| OBN plan-streaming supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + `obs.plan.sampling.shared_shots_per_iter > 0` |
+| OBN plan-streaming supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + an `obs.plan.sampling:` block (its `shared_shots_per_iter` caps the shots per gather and iteration) |
 | Inspect a plan | `python -c "from sweep_io.seismic_plan import SeismicPlan; p=SeismicPlan.load('plan.npz'); print(p.grouping, p.n_groups, p.n_rows, p.build_meta)"` |
 | Run FWI on a plan | `sweep-tasks run fwi.yaml` (with `geometry.kind=from_plan` + `obs.plan.plan_path`) |
 | Extract freqsel coefficients | `sweep-tasks extract-coeff <forward_run_dir> --n-p 24000 --k-lo 24 --k-hi 72 -o coeff.npz` |

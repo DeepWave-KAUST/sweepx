@@ -41,9 +41,9 @@ from sweep_tasks._helpers.model import (
     _model_names_for_equation,
 )
 from sweep_tasks._helpers.optimizer import (
+    _bind_stage_scheduler,
     _build_optimizer,
     _build_reparam_optimizer,
-    _build_scheduler,
     _remember_initial_lrs,
 )
 def _MASK_WINDOW(spec):
@@ -86,6 +86,8 @@ from sweep_tasks._helpers.stages import (
     _bandpass_syn_torch,
     _normalise_stage_list,
     _prepare_stage,
+    _restore_stage_state,
+    _stage_checkpoint_fields,
 )
 from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import _apply_seed
@@ -447,7 +449,9 @@ class FWIRunnerMixin:
             )
             nshots = int(sources.shape[0])
 
-        # 6) Optimizer + scheduler.
+        # 6) Optimizer. The LR scheduler is bound at each stage entry in the
+        # stage loop (_bind_stage_scheduler): one schedule over the whole run,
+        # on whichever optimizer the stage steps.
         total_epochs = (sum(s.epochs for s in spec.stages)
                         if spec.stages else int(spec.epochs))
         if reparam_net is not None:
@@ -497,7 +501,7 @@ class FWIRunnerMixin:
                       f"(tensors={len(_st)}, step={_step})", flush=True)
         else:
             optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
-        scheduler = _build_scheduler(spec.scheduler, optimizer, total_epochs)
+        scheduler = None
         initial_lrs = _remember_initial_lrs(optimizer)
 
         # Smoothing prior (TVPrior) — applied to the velocity gradient each
@@ -581,9 +585,13 @@ class FWIRunnerMixin:
         #   * ``spec.resume``: auto-resume from THIS task_dir's checkpoint
         #     if one is on disk. Pairs with ``ctrl-c → re-run same yaml``.
         #     Silent no-op when no checkpoint is found.
+        # The models, network and optimizer are restored onto the checkpoint's
+        # stage grid once the stage state exists (_restore_stage_state below).
         losses: list[float] = []
         start_epoch = 0
         resume_src: str | None = None
+        resume_lrs: list | None = None
+        ckpt = None
         if spec.resume_from:
             resume_src = spec.resume_from
             ckpt_dir = Path(spec.output_dir).expanduser() / spec.resume_from
@@ -595,20 +603,9 @@ class FWIRunnerMixin:
         if ckpt_dir is not None:
             if dist_info.is_root:
                 ckpt = _load_checkpoint(ckpt_dir)
-            else:
-                ckpt = None
             ckpt = _dist.broadcast_object(ckpt, dist_info, src=0)
-            for name, t in inv_by_name.items():
-                t.data.copy_(ckpt["models"][name].to(dev))
-            optimizer.load_state_dict(ckpt["optimizer"])
-            if scheduler is not None and ckpt.get("scheduler") is not None:
-                scheduler.load_state_dict(ckpt["scheduler"])
             losses = list(ckpt.get("losses", []))
             start_epoch = int(ckpt["epoch"]) + 1
-            if dist_info.is_root:
-                torch.set_rng_state(ckpt["torch_rng"])
-                np.random.set_state(ckpt["numpy_rng"])
-                print(f"[fwi] resumed from '{resume_src}' at epoch {start_epoch}")
 
         # 8) Multi-stage training loop.
         stages = _normalise_stage_list(spec)
@@ -756,6 +753,20 @@ class FWIRunnerMixin:
             "qc_initial_vp": inv_by_name["vp"].detach().cpu().clone()
                 if "vp" in inv_by_name else None,
         }
+        if ckpt is not None:
+            # Onto the grid of the stage the checkpoint was written in. The
+            # stage entry re-applies lr_scale; the stage loop hands these lrs
+            # back to _bind_stage_scheduler (the schedule's position is the
+            # global epoch, so the saved scheduler state is not needed).
+            resume_lrs = _restore_stage_state(
+                spec=spec, ckpt=ckpt, state=state, stages=stages,
+                required_names=required_names, dev=dev)
+            # Last: loading a grown hash grid draws from the torch RNG.
+            if dist_info.is_root:
+                torch.set_rng_state(ckpt["torch_rng"])
+                np.random.set_state(ckpt["numpy_rng"])
+                print(f"[fwi] resumed from '{resume_src}' at epoch {start_epoch}")
+            del ckpt
 
         # QC setup. The qc_dir + cadence guard live outside the stage loop
         # so the per-epoch hook is just a single function call.
@@ -804,7 +815,15 @@ class FWIRunnerMixin:
                 spec=spec, stage=stage, state=state,
                 equation_cls=equation_cls, required_names=required_names,
                 dev=dev, dist_info=dist_info, stage_idx=stage_idx,
+                resumed=already_done_in_stage > 0,
             )
+            # _prepare_stage may have rebuilt the optimizer and has reset its
+            # lr to the stage base; put the whole-run schedule on it at this
+            # epoch (and, inside a resumed stage, the checkpointed lr).
+            scheduler = _bind_stage_scheduler(
+                spec.scheduler, state["optimizer"], total_epochs, epoch_global,
+                resume_lrs=resume_lrs if already_done_in_stage else None)
+            resume_lrs = None
 
             # Record stage-end epoch index for the final loss-curve QC
             # (shading boundaries). Use the absolute epoch counter.
@@ -840,13 +859,15 @@ class FWIRunnerMixin:
             for _ in range(remaining):
                 # coarse-to-fine: advance the encoder level mask by whole-run
                 # progress before rendering/backprop this epoch (no-op unless
-                # reparam.hash.c2f is on and the encoder is CoarseToFine).
+                # reparam.hash.c2f is on and the encoder is CoarseToFine). A
+                # level a growing grid adds runs at the network's lr, on the
+                # stage's schedule.
                 if _c2f_on:
                     _net = state.get("reparam_net")
                     if _has_hash_schedule(_net):
                         _act = _advance_hash_schedule(
                             _net, epoch_global / max(1, total_epochs - 1),
-                            _c2f, state.get("optimizer"))
+                            _c2f, state.get("optimizer"), scheduler)
                         if _act is not None and dist_info.is_root and (
                                 epoch_global < 3 or epoch_global % 20 == 0):
                             print(f"[fwi] c2f epoch {epoch_global}: active levels "
@@ -891,6 +912,7 @@ class FWIRunnerMixin:
                     grad_smoother=_gsmooth,
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
+                    freeze_top_rows=state.get("freeze_top_rows"),
                 )
                 losses.append(loss_value)
                 if scheduler is not None:
@@ -942,6 +964,7 @@ class FWIRunnerMixin:
                         "losses": losses,
                         "torch_rng": torch.get_rng_state(),
                         "numpy_rng": np.random.get_state(),
+                        **_stage_checkpoint_fields(state, stage_idx),
                     })
                 # Honor graceful-stop request now that the checkpoint for the
                 # just-completed epoch is on disk. The next ``sweep-tasks run``
@@ -1423,7 +1446,8 @@ class FWIRunnerMixin:
                         diff_weight_mode: str = "relative",
                         diff_kind: str = "red", diff_apply: bool = False,
                         diff_sds_t=(0.02, 0.5), diff_seed: int = 0,
-                        grad_smoother=None, grad_smooth_every: int = 1) -> float:
+                        grad_smoother=None, grad_smooth_every: int = 1,
+                        freeze_top_rows: int | None = None) -> float:
         """One outer optimizer step.
 
         In single-process mode the rank picks a `batchsize` shot batch, breaks
@@ -1438,11 +1462,18 @@ class FWIRunnerMixin:
         ``stage_batchsize`` (if given) overrides ``spec.batchsize`` — used
         by the multi-stage loop so each stage can pick its own shot count
         (Gap 4).
+
+        ``freeze_top_rows`` (if given) is ``spec.freeze_top_n_rows`` carried
+        onto the stage grid (the same depth in that grid's rows); the stage
+        loop passes it, so a ``dh_m`` stage freezes the layer the spec names.
         """
 
         import torch
 
         from sweep_tasks.runtime import distributed as _dist
+
+        _freeze_rows = (int(spec.freeze_top_n_rows) if freeze_top_rows is None
+                        else int(freeze_top_rows))
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()
@@ -1592,7 +1623,7 @@ class FWIRunnerMixin:
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
                 if reparam_net is None:
-                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                    _zero_top_rows(inv_in_order, _freeze_rows)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
             result = optimizer.step(_closure)
             return float(result) if result is not None else 0.0
@@ -1692,7 +1723,7 @@ class FWIRunnerMixin:
                     )
                 if _TPROF: _sync(); _t_snap = _t.perf_counter()
             if reparam_net is None:
-                _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                _zero_top_rows(inv_in_order, _freeze_rows)
                 _dist.all_reduce_grad_sum(inv_in_order, dist_info)
                 if illum_on:
                     # Match the gradient's all-reduce so multi-rank accumulation
@@ -1755,7 +1786,7 @@ class FWIRunnerMixin:
                     # z-conv smears gradient from unfrozen rows back into the
                     # frozen top rows, which optimizer.step would then update
                     # (silently defeating freeze_top_n_rows). Cheap re-zero.
-                    _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                    _zero_top_rows(inv_in_order, _freeze_rows)
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:

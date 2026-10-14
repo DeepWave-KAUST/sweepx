@@ -5,7 +5,6 @@ Confirms that:
 
 * the 3-D geometry dispatcher accepts ``ExplicitGeometry`` / ``FromFileGeometry``
   with ``(x, y, z)`` source/receiver indices;
-* ``_resample_vp_tensor`` does the right thing on a 3-D vp (trilinear);
 * the runner builds an Acoustic3D solver and runs a few epochs without
   crashing;
 * loss decreases.

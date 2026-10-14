@@ -43,9 +43,9 @@ SAMPLES_PER_TRACE = 80
 DT_S = 0.002
 
 
-def _trace_byte_offset(idx: int) -> int:
+def _trace_byte_offset(idx: int, samples: int = SAMPLES_PER_TRACE) -> int:
     return (SEGY_TEXT_HEADER_SIZE + SEGY_BIN_HEADER_SIZE
-            + idx * (SEGY_TRACE_HEADER_SIZE + SAMPLES_PER_TRACE * 4))
+            + idx * (SEGY_TRACE_HEADER_SIZE + samples * 4))
 
 
 def _write(spec_dict, path: Path) -> Path:
@@ -475,3 +475,353 @@ def test_plan_streaming_solver_mode_comes_from_source_shape(tmp_path, monkeypatc
             assert len(shape) == 3 and shape[0] == 1    # (1, nsrc, 3): one supershot
         else:
             assert len(shape) == 2                       # (nshots, 3): a shot per row
+
+
+@pytest.mark.parametrize("reparam", [False, True])
+def test_plan_streaming_stage_grid_spans_the_base_extent(tmp_path, capsys, reparam):
+    """A ``dh_m`` stage runs on a grid spanning the whole base extent.
+
+    Base (16, 16, 24) at 50 m spans (750, 750, 1150) m; the 100 m stage needs
+    (9, 9, 13) points for that -- the old round(n / 2) gave (8, 8, 12), 50 m
+    short on every axis, with the rows near the far edge left to the kernel's
+    out-of-bounds guard. The seabed freeze is rebuilt for the stage grid
+    (it used to fail on the shape change), and with a reparam network the
+    stage coordinates stay in the base frame.
+    """
+    fixture = _build_tiny_plan_streaming_fixture(tmp_path)
+    sb_path = tmp_path / "seabed_depth.npy"
+    np.save(sb_path, np.full((16, 24), 100.0, dtype=np.float64))
+    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
+        "stages": [{"epochs": 1, "dh_m": 100.0}, {"epochs": 1, "dh_m": 50.0}],
+        "freeze_water_layer": {"enabled": True, "seabed_depth_path": str(sb_path),
+                               "buffer_cells": 0},
+    })
+    spec["backend"]["eager_options"] = {"use_compile": False}
+    if reparam:
+        spec["reparam"] = {"kind": "velocity_inr", "hidden_features": 8,
+                           "hidden_layers": 1, "hash": {"enabled": False},
+                           "lr": 1.0e-4}
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "mr.yaml")))
+    assert result.status.state == "success", result.status.error
+    out = capsys.readouterr().out
+    assert "STAGE 1 grid -> dh=100.0 m shape=(9, 9, 13)" in out, out[-3000:]
+    assert "STAGE 2 grid -> dh=50.0 m shape=(16, 16, 24)" in out
+    inv = np.load(result.task_dir / "output" / "inverted_vp.npy")
+    assert inv.shape == (16, 16, 24)
+
+
+# ---- stage grids: the model and its optimizer cross a stage change ----------
+#
+# Data modelled from a true model with the solver the inversion runs, so a
+# working inversion has to lower the misfit in every stage. Nodes (the virtual
+# sources) and shots (their receivers) sit on multiples of 100 m: exact on the
+# 50 m base grid and on the 100 m stage grid alike.
+
+_SYN_SHAPE = (12, 12, 16)                     # (nz, ny, nx) at 50 m
+_SYN_DT, _SYN_NT = 0.0075, 80
+_SYN_NODES = np.array([[x, y, 400.0] for y in (200.0, 400.0) for x in (200.0, 600.0)])
+_SYN_SHOTS = np.array([[x, y, 100.0] for y in (100.0, 300.0, 500.0)
+                       for x in (100.0, 300.0, 500.0, 700.0)])
+_BAND_LO, _BAND_HI = {"lo_hz": 1.0, "hi_hz": 4.0}, {"lo_hz": 1.0, "hi_hz": 8.0}
+
+
+def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> dict:
+    """Spec + on-disk fixture for the stage-change tests (default: CPU, per shot)."""
+    import torch
+    from sweep_tasks._helpers.solver_build import _build_solver
+    from sweep_tasks._helpers.wavelet_build import _build_wavelet
+    from sweep_tasks.yaml_io import load_task_from_dict
+
+    z, y, x = np.meshgrid(*(np.arange(n) * 50.0 for n in shape), indexing="ij")
+    true_vp = (2500.0 + 250.0 * np.exp(-((x - 400.0) ** 2 + (y - 300.0) ** 2
+                                         + (z - 250.0) ** 2) / (2 * 120.0 ** 2)))
+    np.save(tmp_path / "init_vp.npy", np.full(shape, 2500.0, dtype=np.float32))
+    rot = tmp_path / "rotation_metadata.json"
+    rot.write_text(json.dumps({
+        "origin_xy": [0.0, 0.0], "rotation_matrix": [[1.0, 0.0], [0.0, 1.0]],
+        "target_axis": "x", "inline_shift": 0.0, "crossline_shift": 0.0}))
+    plan_path, segy = tmp_path / "plan.npz", tmp_path / "line_001.sgy"
+    spec = {
+        "task_type": "fwi", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
+        "grid": {"dh": 50.0, "shape": list(shape)},
+        "time": {"dt": _SYN_DT, "nt": _SYN_NT},
+        "wavelet": {"kind": "ricker", "fm": 5.0, "delay": 0.2},
+        "geometry": {"kind": "from_plan", "plan_path": str(plan_path),
+                     "rotation_metadata": str(rot), "dh_xyz_m": [50.0] * 3,
+                     "grid_origin_xyz_m": [0.0, 0.0, 0.0]},
+        "physics": {"equation": "Acoustic3D", "spatial_order": 4, "abcn": 4,
+                    "free_surface": False, "pml_type": "cpmlr",
+                    "source_type": ["h1"], "receiver_type": ["h1"]},
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
+        "init_model": {"name": "vp", "path": str(tmp_path / "init_vp.npy")},
+        "obs": {"plan": {"plan_path": str(plan_path), "cache_all": False,
+                         "sampling": {"shared_shots_per_iter": len(_SYN_SHOTS),
+                                      "min_coverage": 0, "num_workers": 1}}},
+        "optimizer": {"kind": "adam", "lr": 10.0},
+        "epochs": sum(s["epochs"] for s in stages), "batchsize": len(_SYN_NODES),
+        "show_every": 100, "loss": {"kind": "trace_cosine"},
+        "model_bounds": {"vp": {"min": 1500.0, "max": 4000.0}},
+        "stages": stages, **extra,
+    }
+
+    # One CRG per node: the node fires, the shots record (CRG reciprocity).
+    model_spec = load_task_from_dict(spec, base_dir=tmp_path)
+    solver = _build_solver(model_spec.physics, model_spec.backend, shape, 50.0,
+                           _SYN_DT, _SYN_NT, torch.device("cpu"))
+    wav = torch.as_tensor(_build_wavelet(model_spec.wavelet, model_spec.time))
+    src = np.rint(_SYN_NODES / 50.0).astype(np.int64)
+    rec = np.rint(_SYN_SHOTS / 50.0).astype(np.int64)
+    n_nodes, n_shots = len(src), len(rec)
+    with torch.no_grad():
+        syn = solver(wav[None].expand(n_nodes, -1).contiguous(), src,
+                     np.broadcast_to(rec[None], (n_nodes, n_shots, 3)).copy(),
+                     models=[torch.as_tensor(true_vp, dtype=torch.float32)])
+    traces = syn[..., 0].transpose(1, 2).reshape(n_nodes * n_shots, _SYN_NT)
+    write_segy_minimal(segy, np.ascontiguousarray(traces.numpy(), dtype=np.float32),
+                       dt=_SYN_DT, sample_format=FORMAT_IEEE_FLOAT32)
+    n_rows = n_nodes * n_shots
+    SeismicPlan(
+        grouping="crg", files=[segy],
+        trace_size_per_file=np.asarray([SEGY_TRACE_HEADER_SIZE + _SYN_NT * 4]),
+        sample_format=FORMAT_IEEE_FLOAT32, samples_per_trace=_SYN_NT, dt_s=_SYN_DT,
+        row_file_id=np.zeros(n_rows, dtype=np.int64),
+        row_trace_offset=np.array([_trace_byte_offset(i, _SYN_NT) for i in range(n_rows)]),
+        row_source_xyz=np.tile(_SYN_SHOTS, (n_nodes, 1)),
+        row_receiver_xyz=np.repeat(_SYN_NODES, n_shots, axis=0),
+        group_id=np.arange(n_nodes, dtype=np.int64) + 10, group_xyz=_SYN_NODES.copy(),
+        group_offsets=np.arange(0, n_rows + 1, n_shots, dtype=np.int64),
+        build_meta={"label": "stage_change_fixture"},
+    ).save(plan_path)
+    return spec
+
+
+def _spy_solver_and_optimizers(monkeypatch):
+    """Record, per solver call, the model tensor it differentiates (and its value)
+    next to the optimizer live at that moment; and every optimizer the run builds."""
+    from sweep.propagator.torch import PropTorch
+    import sweep_tasks.tasks.fwi_plan_streaming as ps
+
+    rec = {"calls": [], "opts": []}
+    forward = PropTorch.forward
+
+    def spy(self, wavelet, sources, receivers, *args, **kwargs):
+        m = kwargs["models"][0]
+        rec["calls"].append((m, m.detach().cpu().clone(), rec["opts"][-1]))
+        return forward(self, wavelet, sources, receivers, *args, **kwargs)
+
+    monkeypatch.setattr(PropTorch, "forward", spy)
+    for name in ("_build_optimizer", "_build_reparam_optimizer"):
+        def build(*args, _orig=getattr(ps, name), **kwargs):
+            rec["opts"].append(_orig(*args, **kwargs))
+            return rec["opts"][-1]
+        monkeypatch.setattr(ps, name, build)
+    return rec
+
+
+def _holds(opt, t) -> bool:
+    return any(p is t for g in opt.param_groups for p in g["params"])
+
+
+@pytest.mark.parametrize("path", ["per_shot", "encoded", "reparam"])
+def test_plan_streaming_stage_dh_keeps_inverting(tmp_path, monkeypatch, path):
+    """A ``dh_m`` stage change moves the current model to the new grid and keeps
+    updating it.
+
+    Grid mode used to swap in a fresh leaf (resampled from the pristine start)
+    while the optimizer kept the old one: from the first dh change on, every
+    gradient landed on a tensor no optimizer held, the model never moved again
+    and the loss stayed flat. Now the stage-1 model, resampled onto the stage-2
+    grid, is the tensor stage 2 starts from and steps. A reparam network has
+    always kept its parameters and optimizer across the change; it is pinned
+    here as well.
+    """
+    import torch
+    from sweep_tasks._helpers.stage_grid import _resample_to_grid
+
+    E = 3
+    extra = {}
+    if path == "encoded":
+        extra["source_encoding"] = {"enabled": True, "min_coverage": 0, "sign_seed": 7}
+    if path == "reparam":
+        extra["reparam"] = {"kind": "velocity_inr", "hidden_features": 16,
+                            "hidden_layers": 2, "hash": {"enabled": False},
+                            "lr": 1.0e-3, "vp_std": 100.0}
+    spec = _synthetic_stage_spec(tmp_path, [
+        {"epochs": E, "dh_m": 100.0, "bandpass": _BAND_LO},
+        {"epochs": E, "dh_m": 50.0, "bandpass": _BAND_HI}], **extra)
+    rec = _spy_solver_and_optimizers(monkeypatch)
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "stage_dh.yaml")))
+    assert result.status.state == "success", result.status.error
+    loss = np.load(result.task_dir / "output" / "loss.npy")
+    calls = rec["calls"]
+    assert len(calls) == 2 * E
+    assert [tuple(v.shape) for _, v, _ in calls] == [(7, 7, 9)] * E + [_SYN_SHAPE] * E
+
+    for e in range(1, 2 * E):
+        if e != E:          # every step of each stage moves the model
+            assert not torch.equal(calls[e][1], calls[e - 1][1]), f"epoch {e}: frozen"
+    if path == "reparam":
+        assert len(rec["opts"]) == 1                 # one network, one optimizer
+        init = torch.from_numpy(np.load(tmp_path / "init_vp.npy"))
+        assert not torch.equal(calls[E][1], init)    # stage 2 starts from what 1 learnt
+    else:
+        for e, (t, _, opt) in enumerate(calls):
+            assert _holds(opt, t), f"epoch {e}: the optimizer does not hold the model"
+        s1_final = np.load(result.task_dir / "output" / "epochs" / f"vp_epoch_{E - 1:04d}.npy")
+        carried = _resample_to_grid(torch.from_numpy(s1_final), 100.0, _SYN_SHAPE, 50.0)
+        assert torch.equal(calls[E][1], carried)
+    if path != "encoded":   # the encoded misfit changes with every sign draw
+        for k in range(2):
+            assert loss[(k + 1) * E - 1] < loss[k * E], (k, loss)
+
+
+def test_plan_streaming_time_only_stage_keeps_model_and_optimizer(tmp_path, monkeypatch):
+    """A stage that changes only dt_s / nt rebuilds the solver and nothing else.
+
+    It used to run the grid switch at the unchanged dh, which in grid mode put
+    a fresh leaf in place, resampled from the pristine start model, that the
+    optimizer did not hold: the rest of the run was frozen too.
+    """
+    E = 3
+    spec = _synthetic_stage_spec(tmp_path, [
+        {"epochs": E, "bandpass": _BAND_LO},
+        {"epochs": E, "dt_s": _SYN_DT / 2, "nt": 2 * _SYN_NT, "bandpass": _BAND_HI}])
+    rec = _spy_solver_and_optimizers(monkeypatch)
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "stage_dt.yaml")))
+    assert result.status.state == "success", result.status.error
+    loss = np.load(result.task_dir / "output" / "loss.npy")
+    assert len({id(t) for t, _, _ in rec["calls"]}) == 1    # one leaf throughout
+    leaf, _, opt = rec["calls"][-1]
+    assert len(rec["opts"]) == 1 and _holds(opt, leaf)
+    assert int(opt.state[leaf]["step"]) == 2 * E        # Adam state carried over
+    s1_final = np.load(result.task_dir / "output" / "epochs" / f"vp_epoch_{E - 1:04d}.npy")
+    np.testing.assert_array_equal(rec["calls"][E][1].numpy(), s1_final)
+    assert loss[2 * E - 1] < loss[E], loss
+
+
+def _cuda() -> bool:
+    import torch
+    return torch.cuda.is_available()
+
+
+@pytest.mark.skipif(not _cuda(), reason="solver illumination needs impl='c' (a GPU)")
+def test_plan_streaming_stage_solver_keeps_illumination(tmp_path, monkeypatch):
+    """Every per-stage solver computes illumination when the precondition is on.
+
+    The c backend computes it only on request, and the request was made once,
+    on the setup solver: a stage that rebuilt the solver silently turned the
+    precondition off (the first stage, when it set its own dh_m).
+    """
+    import sweep_tasks.tasks.fwi_plan_streaming as ps
+
+    seen = []
+    precond = ps._apply_illumination_precond
+
+    def spy(grad, sill, rill, **kwargs):
+        seen.append(sill is not None and rill is not None)
+        return precond(grad, sill, rill, **kwargs)
+
+    monkeypatch.setattr(ps, "_apply_illumination_precond", spy)
+    spec = _synthetic_stage_spec(tmp_path, [
+        {"epochs": 2, "dh_m": 100.0, "bandpass": _BAND_LO},
+        {"epochs": 2, "dh_m": 50.0, "bandpass": _BAND_HI}],
+        illumination_precondition={"enabled": True, "relative_epsilon": 1.0e-3})
+    spec["device"] = "cuda"
+    spec["backend"] = {"impl": "c", "use_ckpt": False}
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "stage_illum.yaml")))
+    assert result.status.state == "success", result.status.error
+    assert seen == [True] * 4
+
+
+def _illumination_spec(tmp_path: Path, per_crg: bool, epochs: int = 2) -> dict:
+    """GPU (impl='c') run on the stage fixture with the illumination precondition."""
+    spec = _synthetic_stage_spec(
+        tmp_path, [{"epochs": epochs}],
+        illumination_precondition={"enabled": True, "relative_epsilon": 1.0e-3})
+    spec["device"] = "cuda"
+    spec["backend"] = {"impl": "c", "use_ckpt": False}
+    spec["obs"]["plan"]["sampling"]["per_crg_independent"] = per_crg
+    spec["task_id"] = "per_crg" if per_crg else "per_shot"
+    return spec
+
+
+def _spy_illumination(monkeypatch):
+    """Record every solver call's illumination, and what the precondition gets.
+
+    A call's buffers are complete once its backward ran, which is before the
+    next call (or the precondition): snapshot them then, so the record holds
+    whether the solver hands out fresh buffers per call or reuses them.
+    """
+    import sweep_tasks.tasks.fwi_plan_streaming as ps
+    from sweep.propagator.torch import PropTorch
+
+    rec = {"calls": [], "used": [], "pending": None}
+
+    def snap():
+        s, rec["pending"] = rec["pending"], None
+        if s is not None:
+            rec["calls"].append((s.source_illumination.detach().clone(),
+                                 s.receiver_illumination.detach().clone()))
+
+    forward = PropTorch.forward
+
+    def spy(self, *args, **kwargs):
+        snap()
+        out = forward(self, *args, **kwargs)
+        rec["pending"] = self
+        return out
+
+    precond = ps._apply_illumination_precond
+
+    def spy_precond(grad, sill, rill, **kwargs):
+        snap()
+        rec["used"].append((sill.detach().clone(), rill.detach().clone()))
+        return precond(grad, sill, rill, **kwargs)
+
+    monkeypatch.setattr(PropTorch, "forward", spy)
+    monkeypatch.setattr(ps, "_apply_illumination_precond", spy_precond)
+    return rec
+
+
+def _rel_max(a, b) -> float:
+    return float((a - b).abs().max() / b.abs().max())
+
+
+@pytest.mark.skipif(not _cuda(), reason="solver illumination needs impl='c' (a GPU)")
+def test_plan_streaming_per_crg_precondition_sums_every_node(tmp_path, monkeypatch):
+    """Per CRG solves the batch node by node, and the solver keeps the
+    illumination of its last call only: the precondition used to divide by
+    that node's. Every iteration it now gets the sum over all its nodes."""
+    spec = _illumination_spec(tmp_path, per_crg=True)
+    rec = _spy_illumination(monkeypatch)   # after the fixture's own solver call
+    result = TaskRunner().run(load_task(_write(spec, tmp_path / "crg.yaml")))
+    assert result.status.state == "success", result.status.error
+    n = len(_SYN_NODES)
+    assert len(rec["used"]) == 2 and len(rec["calls"]) == 2 * n
+    for sill, rill in rec["calls"]:              # every node lights the grid
+        assert float(sill.abs().max()) > 0 and float(rill.abs().max()) > 0
+    for e, used in enumerate(rec["used"]):
+        nodes = rec["calls"][e * n:(e + 1) * n]
+        for k in range(2):                       # source, receiver
+            total = nodes[0][k].clone()
+            for node in nodes[1:]:
+                total += node[k]
+            assert _rel_max(used[k], total) < 1e-6, (e, k)
+
+
+@pytest.mark.skipif(not _cuda(), reason="solver illumination needs impl='c' (a GPU)")
+def test_plan_streaming_per_crg_illumination_equals_one_batched_call(tmp_path, monkeypatch):
+    """The same four nodes and twelve receivers, per CRG (a call per node) and
+    per shot (one call for the batch): the first precondition, on the starting
+    model, divides by the same source and receiver illumination."""
+    specs = {c: _illumination_spec(tmp_path, per_crg=c, epochs=1) for c in (True, False)}
+    rec = _spy_illumination(monkeypatch)   # after the fixture's own solver calls
+    used = {}
+    for per_crg, spec in specs.items():
+        rec["used"].clear()
+        result = TaskRunner().run(load_task(_write(spec, tmp_path / f"{per_crg}.yaml")))
+        assert result.status.state == "success", result.status.error
+        used[per_crg] = rec["used"][0]
+    for k in range(2):                           # source, receiver
+        assert _rel_max(used[True][k], used[False][k]) < 1e-5, k

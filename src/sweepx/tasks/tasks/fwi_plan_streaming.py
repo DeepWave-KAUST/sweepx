@@ -21,11 +21,12 @@ from sweep_tasks.preproc.filter import (
     apply_receiver_smoothing as _apply_receiver_smoothing,
     receiver_smoothing_matrix as _receiver_smoothing_matrix,
 )
+import dataclasses
 import math
 import numpy as np
 import os
 import time
-from sweep_tasks.schemas import FWISpec
+from sweep_tasks.schemas import FWISpec, ReparamSpec, _leaf_gradient_features
 from sweep_tasks._helpers.bounds import _effective_bound
 from sweep_tasks._helpers.dd import (
     _dd_backward_tile,
@@ -34,7 +35,10 @@ from sweep_tasks._helpers.dd import (
     _dd_tile_bounds,
     _dd_wrap,
 )
-from sweep_tasks._helpers.illumination import _apply_illumination_precond
+from sweep_tasks._helpers.illumination import (
+    _accumulate_illumination,
+    _apply_illumination_precond,
+)
 from sweep_tasks._helpers.loss import (
     _compute_loss,
     _diving_asinh_for_nodes,
@@ -62,10 +66,13 @@ from sweep_tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
 )
-from sweep_tasks._helpers.stages import (
-    _normalise_stage_list,
-    _resample_vp_tensor,
+from sweep_tasks._helpers.stage_grid import (
+    _resample_to_grid,
+    _seabed_to_grid,
+    _set_physical_inr_frame,
+    _stage_grid_shape,
 )
+from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
@@ -74,6 +81,52 @@ from sweep_tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
+
+
+def _dd_skipped_features(spec) -> list[tuple[str, str]]:
+    """The settings of ``spec`` that the domain-decomposed (DD) loop skips,
+    each with the value that turns it off.
+
+    Each is listed only when it asks for something: a block with ``enabled:
+    false`` or a zero weight asks for nothing, so the config_resolved.yaml of
+    a run that left them off still loads. ``reparam.mask_water_layer`` is not
+    one of them: the network's water mask is padded to the DD grid and pins
+    every tile's render.
+    """
+    return _leaf_gradient_features(spec)
+
+
+def _dd_unread_reparam_options(spec) -> list[str]:
+    """The ``reparam`` options the DD loop never reads, as ``name=value``.
+
+    DD renders each tile and pushes its gradient through the network in
+    z-slabs of ``SWEEP_DD_RENDER_CHUNK`` rows, whatever ``backward_mode`` and
+    ``backward_chunk_rows`` say. Judged by value against the schema default,
+    which the config_resolved.yaml of a run that did not set them records.
+    """
+    if spec.reparam is None:
+        return []
+    return [f"reparam.{n}={getattr(spec.reparam, n)!r}"
+            for n in ("backward_mode", "backward_chunk_rows")
+            if getattr(spec.reparam, n) != ReparamSpec.model_fields[n].get_default()]
+
+
+def _cap_shared_shots(batch, cap, rng):
+    """Keep at most ``cap`` of a shared-shot batch's shots.
+
+    When the batch has more, a random subset of ``cap`` (drawn from ``rng``,
+    kept in the sampler's order) is taken from every node's rows alike, so
+    row ``j`` still holds the same physical shot across the nodes; otherwise
+    the batch comes back as it is. Returns the batch and the number of shots
+    it had.
+    """
+    n = int(batch.n_shared)
+    if cap is None or n <= int(cap):
+        return batch, n
+    keep = np.sort(rng.choice(n, size=int(cap), replace=False))
+    return dataclasses.replace(
+        batch, rows_per_group=[r[keep] for r in batch.rows_per_group],
+        shared_shot_xyz_m=batch.shared_shot_xyz_m[keep], n_shared=int(cap)), n
 
 
 class PlanStreamingFWIMixin:
@@ -143,6 +196,33 @@ class PlanStreamingFWIMixin:
 
         _apply_seed(spec.seed)
         dd_on, dd_py, dd_px, dd_rc = _dd_config()
+        # DD is switched on by the environment, which the schema cannot see:
+        # refuse here, before anything is loaded, what the DD loop would skip.
+        _dd_skipped = _dd_skipped_features(spec) if dd_on else []
+        if _dd_skipped:
+            _it = "it" if len(_dd_skipped) == 1 else "them"
+            raise ValueError(
+                "fwi: domain decomposition (SWEEP_DD_ENABLE=1) does not support "
+                f"{', '.join(n for n, _ in _dd_skipped)}: the DD loop skips "
+                f"{_it}, so the run would go ahead without {_it}. Turn {_it} "
+                "off (" + ", ".join(f"{n}.{off}" for n, off in _dd_skipped)
+                + "), or run without DD (unset SWEEP_DD_ENABLE). "
+                "reparam.mask_water_layer works under DD. The "
+                "config_resolved.yaml of an earlier DD run records "
+                f"{_it} as set, though that run went without {_it}.")
+        _dd_unread = _dd_unread_reparam_options(spec) if dd_on else []
+        if _dd_unread:
+            _it = "it" if len(_dd_unread) == 1 else "them"
+            raise ValueError(
+                "fwi: domain decomposition (SWEEP_DD_ENABLE=1) never reads "
+                f"{', '.join(_dd_unread)}: it renders each tile and pushes its "
+                "gradient through the network in z-slabs of "
+                "SWEEP_DD_RENDER_CHUNK rows, whatever the reparam block says. "
+                f"Set {_it} back to the default (reparam.backward_mode: "
+                "two_pass_full, reparam.backward_chunk_rows: 64) and size the "
+                "slabs with SWEEP_DD_RENDER_CHUNK, or run without DD (unset "
+                "SWEEP_DD_ENABLE). The config_resolved.yaml of an earlier DD "
+                f"run records {_it} as set, though that run ignored {_it}.")
         dev = (_dist.resolve_dist_device(spec.device, dist_info.local_rank)
                if dd_on else _resolve_device(spec.device))
 
@@ -176,14 +256,17 @@ class PlanStreamingFWIMixin:
             dd_mesh = MeshTopology(py=dd_py, px=dd_px, shot_groups=1,
                                    world_size=_w, rank=_r)
             print(f"[dd] ModelParallel ON: world={_w} py={dd_py} px={dd_px} "
-                  f"render_chunk={dd_rc} (illum/smooth/seabed/cudagraph "
-                  f"disabled in DD v1)", flush=True)
-        if int(sampling_cfg.shared_shots_per_iter) == 0:
-            raise ValueError(
-                "obs.plan.sampling.shared_shots_per_iter > 0 is required "
-                "for both the encoded supershot path and the per-shot path "
-                "(every batch group needs a shared-receiver set)."
-            )
+                  f"render_chunk={dd_rc} (the SWEEP_REPARAM_CUDAGRAPH backward "
+                  f"is not used in DD)", flush=True)
+        # At most this many shots per node gather and iteration (None: all the
+        # sampler draws). Drawn in the prefetch worker, before the SEG-Y read.
+        shot_cap = sampling_cfg.shared_shots_per_iter
+        if dist_info.is_root:
+            print("[plan-stream] shots per node gather and iteration: "
+                  + (f"at most {shot_cap} (obs.plan.sampling.shared_shots_per_iter)"
+                     if shot_cap is not None else
+                     "all the sampler draws (shared_shots_per_iter: null)"),
+                  flush=True)
 
         # Setup-phase timer: each major step prints its wall time so the
         # iter-loop profile isn't bottlenecked by setup costs we can't see.
@@ -211,8 +294,12 @@ class PlanStreamingFWIMixin:
                 "Set FromPlanGeometry.rotation_metadata to the dataset's "
                 "rotation_metadata.json."
             )
+        # A source_encoding block switched off has no effect (the schema refuses
+        # a min_coverage in it). Only the receiver-first index applies min_cov:
+        # the random and per-CRG samplers are handed eligible_groups, which
+        # sweep-io takes over min_coverage (the schema refuses it there too).
         min_cov = int(sampling_cfg.min_coverage)
-        if encoding_spec is not None:
+        if encoding_on:
             min_cov = max(min_cov, int(encoding_spec.min_coverage))
         # Per-CRG independent coverage: each iter gives every node its OWN
         # sub-sampled rows (no shared-shot intersection). Only meaningful on
@@ -226,18 +313,17 @@ class PlanStreamingFWIMixin:
             print("[plan-stream] per_crg_independent=ON — each node inverts its "
                   "own aperture (ragged rows, padded+masked; no shared "
                   "intersection).", flush=True)
-        # NOTE: we do NOT pre-filter the plan by min_coverage at this point.
-        # `sample_shared_shots_from_plan` accepts min_coverage as a sampling
-        # parameter and applies it as a cheap per-group-row-counts mask
-        # each iter (microseconds). Pre-filtering via plan.filter_groups
-        # rewrites the entire multi-GB plan even when only a few
-        # groups are dropped — costs minutes of setup on a large survey
-        # and saves zero solver compute.
+        # NOTE: we do NOT pre-filter the plan by min_coverage. Pre-filtering via
+        # plan.filter_groups rewrites the entire multi-GB plan even when only a
+        # few groups are dropped — minutes of setup on a large survey for zero
+        # solver compute. The receiver-first index leaves those nodes out
+        # instead (build_shotkey_to_nodes_index below).
         if min_cov > 0:
             n_below = int((plan.per_group_row_counts() < min_cov).sum())
-            print(f"[plan-stream] min_coverage={min_cov}: deferred to sampler "
-                  f"(would drop {n_below}/{plan.n_groups} groups; pre-filtering "
-                  "the plan is too expensive on a multi-GB CRG layout).")
+            print(f"[plan-stream] min_coverage={min_cov}: the receiver-first "
+                  f"sampler leaves out {n_below}/{plan.n_groups} groups (an "
+                  "iteration where it falls back to the random sampler draws "
+                  "from every node in the grid).")
         frame = resolve_rotation_frame(spec.geometry.rotation_metadata)
         _t = _stage("load_rotation_metadata", _t)
 
@@ -575,9 +661,10 @@ class PlanStreamingFWIMixin:
         # None, using spec.bandpass + spec.epochs). The encoded path
         # bandpasses BOTH the source wavelet and the per-iter obs from the
         # PRISTINE wavelet at each stage entry ("target=wavelet" regime: syn
-        # stays naturally bandlimited, no per-iter syn filter). The reparam
-        # net / optimizer carry over across stages — one plan load + one
-        # solver build for the whole sweep, no per-band resume.
+        # stays naturally bandlimited, no per-iter syn filter). The model
+        # carries over across stages — one plan load for the whole sweep, no
+        # per-band resume; a stage that changes dh_m resamples it onto its
+        # grid (see _apply_stage_dh for what happens to the optimizer).
         stage_list = _normalise_stage_list(spec)
         for _si, _st in enumerate(stage_list):
             # Multi-resolution: per-stage ``dh_m`` IS supported (coarse grid for
@@ -658,7 +745,9 @@ class PlanStreamingFWIMixin:
                   f"cutoff={_recsm.cutoff_sigmas} sigma — applied to {_tgt}",
                   flush=True)
 
-        vp_leaf = torch.from_numpy(init_vp_np).to(dev).requires_grad_(True)
+        # copy=True: on a CPU device .to() would hand back init_vp_np's own
+        # memory, and the optimizer would then rewrite the "initial" model.
+        vp_leaf = torch.from_numpy(init_vp_np).to(dev, copy=True).requires_grad_(True)
         inv_by_name = {"vp": vp_leaf}
         reparam_net = None
         # Pre-build the SIREN water mask from a 2-D seabed-depth map
@@ -723,15 +812,21 @@ class PlanStreamingFWIMixin:
         # Capture the dh-INDEPENDENT base state so a stage that sets ``dh_m``
         # can re-project geometry + resample vp/water-mask + rebuild the solver
         # at its own spacing (coarse for low-freq bands → fine for high), cutting
-        # low-frequency compute by ~(dh_base/dh_stage)^3 cells. dt/nt stay fixed
-        # (a dt valid at the finest grid is conservatively valid coarser), so the
-        # obs/wavelet time axis never re-samples. Geometry re-projects from the
-        # model-frame metres (dh-independent); the C kernel's OOB guard absorbs
-        # the handful of edge rows that round just out of a coarser grid.
+        # low-frequency compute by ~(dh_base/dh_stage)^3 cells. (A stage's
+        # dt_s/nt is handled at stage entry below.) Geometry re-projects from the
+        # model-frame metres (dh-independent) with round(x / dh); the stage grid
+        # samples the base model at those same positions, i * dh from the origin,
+        # and spans the whole base extent (``_helpers.stage_grid``), so every row
+        # the in-window filter kept stays on every stage grid.
         _mr_origin = (float(origin_x), float(origin_y), float(origin_z))
         _mr_base_shape = tuple(int(v) for v in shape)
         _mr_base_dh = float(dx_m)
-        _mr_pristine_vp = torch.from_numpy(np.ascontiguousarray(init_vp_np)).to(dev)
+        _mr_base_dh_zyx = (float(dz_m), float(dy_m), float(dx_m))
+        # The pristine model is the reparam network's base on every grid; grid
+        # mode carries its CURRENT model instead, so it needs no pristine copy.
+        _mr_pristine_vp = (
+            torch.from_numpy(np.ascontiguousarray(init_vp_np)).to(dev)
+            if reparam_net is not None else None)
         _mr_plan_model_xy = plan_model_xy
         _mr_src_model_xy = src_model_xy
         _mr_row_z = np.ascontiguousarray(plan.row_source_xyz[:, 2]).astype(np.float64)
@@ -756,14 +851,11 @@ class PlanStreamingFWIMixin:
                       f"rebuild ({int((_mr_cropped_sd > 0).sum())}/"
                       f"{_mr_cropped_sd.size} wet columns)")
         _cur_dh = float(dx_m)
+        _cur_dh_zyx = _mr_base_dh_zyx      # spacing of the grid the model is on
 
         def _grid_for_dh(dh):
             ox, oy, oz = _mr_origin
-            nz_b, ny_b, nx_b = _mr_base_shape
-            r = _mr_base_dh / float(dh)
-            sh = (max(1, int(round(nz_b * r))),
-                  max(1, int(round(ny_b * r))),
-                  max(1, int(round(nx_b * r))))
+            sh = _stage_grid_shape(_mr_base_shape, _mr_base_dh_zyx, float(dh))
             pg = np.stack([
                 np.rint((_mr_plan_model_xy[:, 0] - ox) / dh).astype(np.int64),
                 np.rint((_mr_plan_model_xy[:, 1] - oy) / dh).astype(np.int64),
@@ -787,24 +879,79 @@ class PlanStreamingFWIMixin:
                 _sb_m = _lift_seabed_m[_bz, _bx]                       # seabed depth (m)
                 _zmax = np.ceil((_sb_m - oz) / dh).astype(np.int64) - 1
                 sg[:, 2] = np.maximum(np.minimum(sg[:, 2], _zmax), 0)
+            # Every row/node is on the base grid (in-window filter), and the
+            # stage grid spans the base extent, so a coarser stage holds them
+            # all. A FINER stage can round a position within half a base cell
+            # of the edge one cell past it -- where the kernel would silently
+            # zero the trace. Put it on the edge node instead: no further than
+            # the base grid's own snap already moved it.
+            _hi = np.asarray(sh[::-1], dtype=np.int64) - 1              # (x, y, z)
+            for _a in (pg, sg):
+                _over = np.maximum(np.maximum(-_a, _a - _hi), 0)
+                if int(_over.max(initial=0)) > 1:
+                    raise AssertionError(
+                        f"stage dh={dh}: a base-grid position falls "
+                        f"{int(_over.max())} cells outside the stage grid {sh}")
+                np.clip(_a, 0, _hi, out=_a)
             return sh, pg, sg
 
+        def _rebuild_solver(sh, dh):
+            """Build the solver for grid ``sh`` at ``dh`` and the current dt/nt."""
+            nonlocal solver
+            # Free the PREVIOUS stage's solver GPU buffers before building the new
+            # one. Each DD stage holds tile boundary rings + wavefields + record
+            # buffers; if the old ModelParallel/PropTorch isn't dropped first they
+            # accumulate across stages (a fine stage OOM'd while still carrying
+            # the coarser stages' residue, though it alone needs far less).
+            solver = None
+            import gc as _gc
+            _gc.collect()
+            if dev.type == "cuda":
+                torch.cuda.empty_cache()
+            solver = _build_solver(
+                spec.physics, spec.backend, sh, float(dh),
+                effective_dt, effective_nt, dev,
+            )
+            if dd_on:
+                solver = _dd_wrap(solver, dd_mesh)
+            # A new solver starts with illumination off (see the setup below);
+            # without this the precondition went silently inert at the first
+            # stage that rebuilt the solver.
+            if illum_on and getattr(spec.backend, "impl", "eager") == "c":
+                try:
+                    solver.compute_illumination = True
+                except Exception:
+                    pass
+
         def _apply_stage_dh(dh, si):
-            """Switch the run to grid spacing ``dh`` (m) for the current stage."""
-            nonlocal shape, plan_grid_xyz, src_grid_xyz, solver, vp_leaf, _cur_dh
+            """Switch the run to grid spacing ``dh`` (m) for the current stage.
+
+            Grid mode carries the CURRENT model onto the new grid (resampled
+            from the grid it is on, the conventional path's rule) and builds a
+            new leaf and a new optimizer for it: Adam's moments are shape-bound,
+            so they restart, as on the conventional path. The reparam network
+            keeps its parameters and optimizer state; only its base (the
+            pristine model, resampled), water mask and coordinates move.
+            """
+            nonlocal shape, plan_grid_xyz, src_grid_xyz, vp_leaf, optimizer
+            nonlocal _cur_dh, _cur_dh_zyx
             sh, pg, sg = _grid_for_dh(dh)
             plan_grid_xyz, src_grid_xyz = pg, sg
             nz_s, ny_s, nx_s = sh
-            new_base = _resample_vp_tensor(_mr_pristine_vp, sh).detach().to(dev)
+            if reparam_net is not None:
+                new_base = _resample_to_grid(_mr_pristine_vp, _mr_base_dh_zyx, sh,
+                                             float(dh)).to(dev)
+            else:
+                new_base = _resample_to_grid(vp_leaf.detach(), _cur_dh_zyx, sh,
+                                             float(dh)).to(dev)
             new_mask = None
             if _mr_cropped_sd is not None:
-                import torch.nn.functional as _F
                 from sweep_tasks.bathymetry import water_mask_from_seabed_depth
-                sd_t = torch.from_numpy(
-                    np.ascontiguousarray(_mr_cropped_sd))[None, None].float()
-                sd_s = _F.interpolate(
-                    sd_t, size=(ny_s, nx_s), mode="bilinear",
-                    align_corners=False)[0, 0].numpy()
+                # The cropped seabed sits on the base model's columns (before
+                # any DD tile pad), at the base spacing.
+                sd_s = _seabed_to_grid(
+                    np.ascontiguousarray(_mr_cropped_sd), _mr_cropped_sd.shape,
+                    _mr_base_dh_zyx[1:], (ny_s, nx_s), float(dh))
                 new_mask = torch.from_numpy(
                     water_mask_from_seabed_depth(sd_s, nz=nz_s, dh_z_m=float(dh))
                 ).to(dev)
@@ -834,28 +981,22 @@ class PlanStreamingFWIMixin:
             if reparam_net is not None:
                 # update_base_velocity resamples coords + (optionally) the water
                 # mask to the new shape; per-iter ``reparam_net()`` then renders
-                # at the new grid, so no inv_by_name swap is needed here.
+                # at the new grid, so no inv_by_name swap is needed here. The
+                # coords it builds are i/n of the new shape: put them back in the
+                # base grid's frame so the learned field does not stretch.
                 reparam_net.update_base_velocity(new_base, water_mask=new_mask)
+                _set_physical_inr_frame(reparam_net, shape=sh, dh=float(dh),
+                                        frame_shape=_mr_base_shape,
+                                        frame_dh=_mr_base_dh_zyx)
             else:
                 vp_leaf = new_base.requires_grad_(True)
                 inv_by_name["vp"] = vp_leaf
-            # Free the PREVIOUS stage's solver GPU buffers before building the new
-            # one. Each DD stage holds tile boundary rings + wavefields + record
-            # buffers; if the old ModelParallel/PropTorch isn't dropped first they
-            # accumulate across stages (a fine stage OOM'd while still carrying
-            # the coarser stages' residue, though it alone needs far less).
-            solver = None
-            import gc as _gc
-            _gc.collect()
-            if dev.type == "cuda":
-                torch.cuda.empty_cache()
-            solver = _build_solver(
-                spec.physics, spec.backend, sh, float(dh),
-                effective_dt, effective_nt, dev,
-            )
-            if dd_on:
-                solver = _dd_wrap(solver, dd_mesh)
+                # The old optimizer holds the previous grid's leaf: stepping it
+                # would leave this one, the tensor the gradient lands on, frozen.
+                optimizer = _build_optimizer(spec.optimizer, inv_by_name, ["vp"])
+            _rebuild_solver(sh, dh)
             _cur_dh = float(dh)
+            _cur_dh_zyx = (float(dh),) * 3
             print(f"[crg] STAGE {si + 1} grid -> dh={dh:.1f} m shape={sh} "
                   f"(base {_mr_base_dh:.1f} m / {_mr_base_shape})", flush=True)
 
@@ -1052,11 +1193,20 @@ class PlanStreamingFWIMixin:
         # main loop's wait_io only tells us the OUTER prefetcher cost.
         # Each entry is one iter's dict; reset by main loop after read.
         prefetch_timings: list[dict] = []
+        # A gather short of shot_cap uses everything it has; said once per run.
+        _short_noted: list[bool] = []
+
+        def _note_short(text):
+            if not _short_noted and dist_info.is_root:
+                _short_noted.append(True)
+                print(f"[plan-stream] sampling.shared_shots_per_iter={shot_cap}: "
+                      f"{text} (printed once)", flush=True)
 
         def _load_iter_payload(rng_state, bs_iter=None):
             """Sample shared-shots + read all per-group traces. Returns
             ``(batch, traces_per_group)`` where ``traces_per_group`` is a
-            ``(B, n_shared, nt_segy)`` ``float32`` numpy array.
+            ``(B, n_shared, nt_segy)`` ``float32`` numpy array, ``n_shared``
+            at most ``shot_cap`` (``sampling.shared_shots_per_iter``).
 
             ``rng_state`` seeds the sampler for determinism — the caller
             (the main loop) advances the master ``sample_rng`` state so
@@ -1116,13 +1266,25 @@ class PlanStreamingFWIMixin:
                     batch_size=_bs_iter,
                     source_lines_per_group=int(sampling_cfg.source_lines_per_group),
                     max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
-                    # min_coverage + eligible_groups applied per-iter at sample
-                    # time (instead of pre-filtering the plan via filter_groups
-                    # / filter_rows) — see _run_fwi_plan_streaming setup.
+                    # eligible_groups (the in-grid nodes) takes precedence over
+                    # min_coverage in sweep-io: this sampler never applies it,
+                    # and the schema refuses a min_coverage here.
                     min_coverage=int(min_cov),
                     eligible_groups=_elig_iter,
                     precomputed_group_unique_keys=group_unique_keys,
                 )
+            if not _percrg_iter:
+                # Every node's gather holds the same shots: cap them alike,
+                # before anything is read.
+                b, _n_drawn = _cap_shared_shots(b, shot_cap, local_rng)
+                if shot_cap is not None and _n_drawn < shot_cap:
+                    _note_short(
+                        f"the {int(b.group_indices.size)} nodes of an iteration "
+                        f"share only {_n_drawn} shots after "
+                        "source_lines_per_group / max_traces_per_sourceline, "
+                        "and it uses them all; an iteration short of the cap "
+                        "uses every shot it has, the epoch line's n_shared is "
+                        "what each used")
             tstats["sample"] = time.perf_counter() - t_sample0
             t_alloc0 = time.perf_counter()
             B = int(b.group_indices.size)
@@ -1134,28 +1296,39 @@ class PlanStreamingFWIMixin:
                 # in ``valid_mask`` and masked out of the loss. Padding the
                 # receiver rows with row 0 keeps every padded receiver on a
                 # valid grid cell (its residual is zeroed by the mask anyway).
-                _obs_list: list = [None] * B
-                _rows_list: list = [None] * B
-
-                def _read_dedup(i):
-                    # Dedup rows to unique receiver cells BEFORE reading, so
-                    # full-coverage nodes (many raw rows, several shots per cell)
-                    # only pay the SEG-Y read for the ~unique-cell subset.
-                    rows_i = b.rows_per_group[i]
-                    cells_i = plan_grid_xyz[rows_i]               # (nrec_i, 3)
-                    _, keep = np.unique(cells_i, axis=0, return_index=True)
-                    keep = np.sort(keep)
-                    rows_kept = rows_i[keep]
-                    _rows_list[i] = rows_kept
-                    _obs_list[i] = reader.read_rows(rows_kept)    # read deduped only
-
                 tstats["alloc"] = time.perf_counter() - t_alloc0
                 t_read0 = time.perf_counter()
+                # One receiver per grid cell for each node, at most shot_cap of
+                # them, decided here node by node (so the cap's draw does not
+                # depend on which read thread runs first); then only the kept
+                # rows are read: full-coverage nodes (many raw rows, several
+                # shots per cell) pay the SEG-Y read for that subset only.
+                _grid = plan_grid_xyz
+                _rows_list: list = []
+                for i in range(B):
+                    rows_i = b.rows_per_group[i]
+                    _, keep = np.unique(_grid[rows_i], axis=0, return_index=True)
+                    keep = np.sort(keep)
+                    if shot_cap is not None and keep.size > shot_cap:
+                        keep = np.sort(local_rng.choice(keep, size=shot_cap,
+                                                        replace=False))
+                    elif shot_cap is not None and keep.size < shot_cap:
+                        _note_short(
+                            f"node {int(b.group_indices[i])} has only "
+                            f"{keep.size} receivers (one per grid cell) in an "
+                            "iteration, and uses them all; a node short of the "
+                            "cap uses every receiver it has")
+                    _rows_list.append(rows_i[keep])
+                _obs_list: list = [None] * B
+
+                def _read_rows(i):
+                    _obs_list[i] = reader.read_rows(_rows_list[i])
+
                 if io_pool is None:
                     for i in range(B):
-                        _read_dedup(i)
+                        _read_rows(i)
                 else:
-                    list(io_pool.map(_read_dedup, range(B)))
+                    list(io_pool.map(_read_rows, range(B)))
                 _counts = np.array([r.size for r in _rows_list], dtype=np.int64)
                 n_shared = int(_counts.max())
                 if dist_info.is_root:
@@ -1257,6 +1430,7 @@ class PlanStreamingFWIMixin:
                 velocity_scale_m_s=float(smooth_spec.velocity_scale_m_s),
             )
         seabed_mask = None
+        _freeze_sb = None
         freeze_spec = getattr(spec, "freeze_water_layer", None)
         if freeze_spec is not None and freeze_spec.enabled:
             from sweep_nn import SeabedFreezeMask
@@ -1264,10 +1438,12 @@ class PlanStreamingFWIMixin:
             sb = np.load(freeze_spec.seabed_depth_path)
             if isinstance(sb, np.lib.npyio.NpzFile):
                 sb = sb["seabed_depth"]
+            _freeze_sb = np.asarray(sb)
             seabed_mask = SeabedFreezeMask(
-                np.asarray(sb), dz_m=dz_m,
+                _freeze_sb, dz_m=dz_m,
                 buffer_cells=int(freeze_spec.buffer_cells),
             )
+        _seabed_mask_base = seabed_mask
 
         # --- 8) Outputs / QC dirs (rank-0 / single-rank).
         out_dir = task_dir / "output"
@@ -1297,6 +1473,7 @@ class PlanStreamingFWIMixin:
         # perf/acoustic-bwd-skip-illum (3d6fe97): c-backend illumination is now
         # opt-in (default off). Re-enable on the solver when precond is active so
         # the backend populates source/receiver_illumination. No-op on old cores.
+        # Every per-stage solver gets the same (_rebuild_solver).
         if illum_on and getattr(spec.backend, "impl", "eager") == "c":
             try:
                 solver.compute_illumination = True
@@ -1391,7 +1568,7 @@ class PlanStreamingFWIMixin:
                     if bandpass_spec is not None else None
                 ),
                 "sampling": {
-                    "shared_shots_per_iter": int(sampling_cfg.shared_shots_per_iter),
+                    "shared_shots_per_iter": shot_cap,     # None: no cap
                     "source_lines_per_group": int(sampling_cfg.source_lines_per_group),
                     "max_traces_per_sourceline": int(sampling_cfg.max_traces_per_sourceline),
                     "min_coverage": int(sampling_cfg.min_coverage),
@@ -1476,15 +1653,33 @@ class PlanStreamingFWIMixin:
                       f"epoch[{epoch}:{epoch + int(_st.epochs)}] "
                       f"bandpass={_bp_txt} ===", flush=True)
                 # Multi-resolution: switch grid spacing if this stage sets dh_m
-                # (geometry re-projection + vp/water-mask resample + solver
-                # rebuild). A per-stage dt/nt change ALSO needs the solver rebuilt,
-                # so trigger on either. Reparam net params + Adam state carry over.
+                # (geometry re-projection + model/water-mask resample + new leaf
+                # and optimizer in grid mode + solver rebuild; _apply_stage_dh).
+                # A dt/nt change on the same grid rebuilds only the solver: the
+                # model and the optimizer state carry over unchanged.
                 _stage_dh = getattr(_st, "dh_m", None)
                 _dh_changed = (_stage_dh is not None
                                and abs(float(_stage_dh) - _cur_dh) > 1e-9)
-                if _dh_changed or _time_changed:
-                    _apply_stage_dh(
-                        float(_stage_dh) if _stage_dh is not None else _cur_dh, _si)
+                if _time_changed and not _dh_changed:
+                    _rebuild_solver(shape, _cur_dh)
+                    print(f"[crg] STAGE {_si + 1} solver rebuilt for the new time "
+                          f"axis on the same grid (dh={_cur_dh:.1f} m "
+                          f"shape={shape})", flush=True)
+                if _dh_changed:
+                    _apply_stage_dh(float(_stage_dh), _si)
+                    if _freeze_sb is not None:
+                        # The freeze is a (ny, nx) seabed quantised at dz: give
+                        # a stage grid its own, sampled at its columns.
+                        if abs(_cur_dh - float(dx_m)) < 1e-9:
+                            seabed_mask = _seabed_mask_base
+                        else:
+                            from sweep_nn import SeabedFreezeMask
+                            seabed_mask = SeabedFreezeMask(
+                                _seabed_to_grid(_freeze_sb, _freeze_sb.shape,
+                                                (float(dy_m), float(dx_m)),
+                                                tuple(shape[1:]), _cur_dh),
+                                dz_m=_cur_dh,
+                                buffer_cells=int(freeze_spec.buffer_cells))
                 if _time_changed and epoch > 0:
                     # the in-flight prefetch for THIS iter was loaded at the OLD
                     # dt/nt; redo it at the new time axis (same seed → same shots).
@@ -1727,7 +1922,10 @@ class PlanStreamingFWIMixin:
                 v_leaf_for_illum = base_leaf
             elif spec.reparam.backward_mode == "single_step":
                 models = [reparam_net()]
-                v_leaf_for_illum = None  # net params; illum precond no-op
+                # The gradient goes straight to the net params: the illumination
+                # precondition, smoothness prior and seabed freeze have no
+                # velocity gradient to work on (the schema refuses them here).
+                v_leaf_for_illum = None
             else:
                 # Chunk the forward render (bit-identical, pointwise) so the
                 # single-GPU hash-render peak stays bounded — same knob the DD
@@ -1743,6 +1941,11 @@ class PlanStreamingFWIMixin:
             if _memprof and epoch == 0 and dev.type == "cuda":
                 torch.cuda.synchronize(dev)
                 _mem_pre_fwd = torch.cuda.memory_allocated(dev)
+            # This iteration's illumination, for the precondition below. The
+            # solver keeps only its LAST call's: one call holds the whole
+            # batch's, and per CRG every node's call is added in, as the
+            # conventional path adds up its shot chunks.
+            sill_sum = rill_sum = None
             t = time.perf_counter()
             if dd_on:
                 # Per-iter shared-shot sampling varies each tile's owned
@@ -1826,7 +2029,10 @@ class PlanStreamingFWIMixin:
                 # makes the summed, globally-normalised gradient equal the 1-GPU run.
                 if dist_info.is_distributed:
                     import torch.distributed as _td
-                    _gtn = torch.tensor(float(global_norm), device=dev)
+                    # A dummy-slice rank re-solves a node another rank owns only
+                    # to stay in the collectives: it adds no samples.
+                    _gtn = torch.tensor(0.0 if dummy_slice else float(global_norm),
+                                        device=dev)
                     _td.all_reduce(_gtn, op=_td.ReduceOp.SUM)
                     global_norm = float(_gtn.item()) or 1.0
                 for _j in range(_B_loc):
@@ -1916,8 +2122,17 @@ class PlanStreamingFWIMixin:
                             loss=float(_loss_j.detach().cpu()) / float(global_norm))
                         print(f"[lossio] epoch {epoch} node {_nd}: dumped "
                               f"syn/obs {tuple(_sy.shape)} -> {qc_dir}", flush=True)
-                    (_loss_j / global_norm).backward()
-                    loss_t = loss_t + _loss_j.detach()
+                    if dummy_slice:
+                        # Zero weight, kept out of the loss: the node belongs to
+                        # another rank, and counting it here weighed it twice.
+                        (_loss_j * 0.0).backward()
+                    else:
+                        (_loss_j / global_norm).backward()
+                        loss_t = loss_t + _loss_j.detach()
+                    if illum_on:
+                        # Before the next node's call replaces it.
+                        sill_sum, rill_sum = _accumulate_illumination(
+                            solver, sill_sum, rill_sum)
                     if _j == _B_loc - 1:
                         syn = _syn_j.detach()
                         obs_super = _obs_j
@@ -1998,6 +2213,15 @@ class PlanStreamingFWIMixin:
                 global_norm = float(_tn.item()) or 1.0
                 _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
                 (loss_t / global_norm).backward()
+                if reparam_net is None:
+                    # Grid mode hands ModelParallel the whole (replicated) model,
+                    # whose gradient comes back filled on THIS rank's tile only:
+                    # the tile interior, the halo cells belong to the neighbour,
+                    # so the tiles are disjoint. SUM them, as sweep's ModelParallel
+                    # asks for a replicated model (and the freqsel DD loop does),
+                    # so every rank steps the whole model -- the one rank 0 saves
+                    # and a dh_m stage resamples -- not just its own tile.
+                    _td.all_reduce(vp_leaf.grad, op=_td.ReduceOp.SUM)
             else:
                 if valid_mask_local is not None:
                     # Per-CRG ragged batch: zero the padded-receiver tail in
@@ -2010,13 +2234,26 @@ class PlanStreamingFWIMixin:
                 else:
                     loss_t = loss_fn(syn, obs_match).sum()
                     global_norm = float(syn.numel())
+                    if not encoding_on and dist_info.is_distributed:
+                        # Normalise by the GLOBAL element count, all B shots of
+                        # the batch (syn holds this rank's slice), as the
+                        # conventional path does: the SUM all-reduce below then
+                        # gives the one-rank gradient and loss. This rank's own
+                        # count made both world_size times too large.
+                        global_norm = float(syn.numel() // int(syn.shape[0]) * B)
                 # Dummy-slice ranks contribute zero loss / zero grad so the
                 # all_reduce stays consistent across ranks; non-dummy ranks
                 # use their full per-rank loss.
                 loss_scale = 0.0 if (not encoding_on and dummy_slice) else 1.0
                 (loss_t / global_norm * loss_scale).backward()
+                if loss_scale == 0.0:
+                    loss_t = loss_t.detach() * 0.0   # nor in the loss SUM below
             _csync()
             t_bwd = time.perf_counter() - t
+            if illum_on and not _percrg:
+                # One solver call: its buffers already hold the whole batch's.
+                sill_sum = getattr(solver, "source_illumination", None)
+                rill_sum = getattr(solver, "receiver_illumination", None)
 
             # DDP gradient sync (per-shot path only). Each rank's
             # vp_leaf.grad holds B_local shots' partial contribution; sum
@@ -2032,12 +2269,23 @@ class PlanStreamingFWIMixin:
                 # loss_t/global_norm is the true global per-trace mean, not the
                 # ~1/world_size fragment each rank would otherwise report.
                 _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
-                # Also sync illuminations stored on the solver for the
-                # precond step below (per-rank partial sums → global sum).
-                for _attr in ("source_illumination", "receiver_illumination"):
-                    _ill = getattr(solver, _attr, None)
+                # Also sync this iteration's illuminations for the precond
+                # step below (per-rank partial sums → global sum).
+                for _ill in (sill_sum, rill_sum):
                     if isinstance(_ill, torch.Tensor):
+                        if dummy_slice:
+                            _ill.zero_()   # a dummy shot lights nothing
                         _td.all_reduce(_ill, op=_td.ReduceOp.SUM)
+            elif (not encoding_on and dist_info.is_distributed
+                    and reparam_net is not None and v_leaf_for_illum is None):
+                # single_step: the gradient lands on the network parameters,
+                # so sum those (as the conventional path does); without this
+                # every rank trained its own copy on its own shots.
+                _dist.all_reduce_grad_sum(
+                    [p for p in reparam_net.parameters() if p.grad is not None],
+                    dist_info)
+                import torch.distributed as _td
+                _td.all_reduce(loss_t, op=_td.ReduceOp.SUM)
             losses.append(float(loss_t.detach().cpu()) / global_norm)
 
             # Raw dL/dvp dump when illum precond is OFF (the illum branch below
@@ -2055,12 +2303,11 @@ class PlanStreamingFWIMixin:
                 print(f"[dump] raw dL/dvp -> {_dd}/grad_raw.npy "
                       f"shape={tuple(v_leaf_for_illum.grad.shape)}", flush=True)
 
-            # --- Illumination precond (single_step + grid; or two_pass leaf).
-            # DD v1: disabled (ModelParallel exposes no illum tensors; v_leaf is
-            # a tile). See _dd_config / the [dd] setup banner.
-            if illum_on and not dd_on:
-                sill = getattr(solver, "source_illumination", None)
-                rill = getattr(solver, "receiver_illumination", None)
+            # --- Illumination precond (grid mode, or a reparam two-pass leaf).
+            # Never under DD: setup refuses it (_dd_skipped_features); nor with
+            # backward_mode single_step: the schema refuses it there.
+            if illum_on:
+                sill, rill = sill_sum, rill_sum
                 if reparam_net is None or v_leaf_for_illum is not None:
                     target_grad = v_leaf_for_illum.grad if v_leaf_for_illum is not None else None
                     # DUMP grad before/after illum precond. SWEEP_DUMP_GRAD=1
@@ -2114,14 +2361,15 @@ class PlanStreamingFWIMixin:
                         _np.save(_dd + "/grad_precond.npy",
                                  target_grad.detach().cpu().numpy())
 
-            # --- Smooth regularization (TVPrior on the current vp/leaf).
+            # --- Smooth regularization (TVPrior on the current vp/leaf). Never
+            # under DD, like the seabed freeze below: setup refuses both.
             # SYNCED profile (SWEEP_TASKS_TPROF=1): time smooth-reg separately
             # and sync before the reparam timer so t_reparam_bwd is PURE reparam
             # (otherwise the smooth-reg backward's async tail bleeds into it).
             _tprof = os.environ.get("SWEEP_TASKS_TPROF") == "1"
             if _tprof and dev.type == "cuda": torch.cuda.synchronize(dev)
             _t_reg0 = time.perf_counter()
-            if tv_prior is not None and v_leaf_for_illum is not None and not dd_on:
+            if tv_prior is not None and v_leaf_for_illum is not None:
                 reg_loss = float(smooth_spec.weight) * tv_prior(v_leaf_for_illum)
                 # Accumulate into v_leaf_for_illum.grad (.backward adds).
                 reg_loss.backward(retain_graph=False)
@@ -2130,7 +2378,7 @@ class PlanStreamingFWIMixin:
 
             # --- Seabed-freeze mask on the leaf gradient (post illum +
             # post smooth-reg so any mask zeros take precedence).
-            if seabed_mask is not None and v_leaf_for_illum is not None and not dd_on:
+            if seabed_mask is not None and v_leaf_for_illum is not None:
                 seabed_mask.apply_to(v_leaf_for_illum.grad)
 
             # --- Reparam two-pass: push leaf grad through the net.
@@ -2310,12 +2558,17 @@ class PlanStreamingFWIMixin:
                 )
             if qc_enabled and (epoch % spec.qc.every_n_epochs == 0
                                or epoch == total_epochs - 1):
+                # The rendered vp is on the CURRENT stage grid: label its axes
+                # with that grid's spacing, not the base one.
+                _qc_base = abs(float(_cur_dh) - float(dx_m)) < 1e-9
                 state_for_qc = {
                     "inv_by_name": inv_by_name,
-                    "dh": float(dx_m),
-                    "dh_xyz": (float(dz_m), float(dy_m), float(dx_m)),
+                    "dh": float(_cur_dh),
+                    "dh_xyz": ((float(dz_m), float(dy_m), float(dx_m)) if _qc_base
+                               else (float(_cur_dh),) * 3),
                     "dt": float(effective_dt),
                     "qc_initial_vp": torch.from_numpy(init_vp_np),
+                    "pristine_dh": float(dx_m),
                 }
                 self._run_epoch_qc_safe(
                     spec=spec, state=state_for_qc, qc_dir=qc_dir,

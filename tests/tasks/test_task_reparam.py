@@ -108,7 +108,7 @@ def test_fwi_reparam_multistage_preserves_params(tmp_path):
     spec = _base_fwi_spec(tmp_path, init_path, true_path)
     spec.update({
         "optimizer": {"kind": "adam", "lr": 25.0, "eps": 1.0e-22},
-        "epochs": 1, "batchsize": 3, "show_every": 1,
+        "epochs": 4, "batchsize": 3, "show_every": 1,
         "task_id": "fwi_reparam_stages",
         "reparam": {
             "kind": "velocity_inr",

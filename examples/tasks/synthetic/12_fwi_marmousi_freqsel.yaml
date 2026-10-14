@@ -135,6 +135,7 @@ stages:
     lr_scale: 1.0
   - epochs: 70              # 2-6 Hz: structure
     lr_scale: 0.6
+    optimizer_reset: true   # the quoted numbers used fresh Adam moments per band
     frequency:
       coeff_shards: ./sweep_runs/coeff_2_6hz.npz
       probe_samples: 25000  # 25 s -> 0.04 Hz bins
@@ -146,6 +147,7 @@ stages:
       n_pools: 1
   - epochs: 70              # 4-10 Hz: detail
     lr_scale: 0.35
+    optimizer_reset: true   # the quoted numbers used fresh Adam moments per band
     frequency:
       coeff_shards: ./sweep_runs/coeff_4_10hz.npz
       probe_samples: 17000  # 17 s -> 0.059 Hz bins
@@ -164,6 +166,6 @@ stages:
 # so is row 37, where the ramp happens to begin at exactly 1500.0 too. One
 # 12.5 m cell of seabed, worth knowing about.
 
-epochs: 240                 # required by the schema; ignored when `stages:` is set
+epochs: 240                 # required: the sum of the stage epochs (checked)
 batchsize: 1                # ignored: the pool IS the batch
 show_every: 10

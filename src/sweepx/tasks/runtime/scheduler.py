@@ -10,11 +10,13 @@ The four shipped variants cover the FWI-common cases:
 Each variant maps to the corresponding ``torch.optim.lr_scheduler.*`` class.
 The wrapper provides a single ``build(spec, optimizer, total_epochs)`` entry
 so YAML / Pydantic-driven runners can dispatch without growing a switch
-statement in every callsite.
+statement in every callsite. :func:`lr_at` is the same schedule in closed
+form, for placing a schedule at a given epoch on a new optimizer.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -78,10 +80,37 @@ def build(spec: Any, optimizer: Any, total_epochs: int):
             optimizer, gamma=float(spec.gamma),
         )
     if kind == "cosine":
-        t_max = spec.t_max if spec.t_max is not None else max(int(total_epochs), 1)
         return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=int(t_max), eta_min=float(spec.eta_min),
+            optimizer, T_max=_t_max(spec, total_epochs), eta_min=float(spec.eta_min),
         )
+    raise ValueError(f"Unknown scheduler kind {kind!r}")
+
+
+def _t_max(spec: Any, total_epochs: int) -> int:
+    return int(spec.t_max if spec.t_max is not None else max(int(total_epochs), 1))
+
+
+def lr_at(spec: Any, base_lr: float, epoch: int, total_epochs: int) -> float:
+    """The lr :func:`build`'s schedule gives ``base_lr`` at ``epoch``.
+
+    The torch schedulers step in chained form (each lr from the previous one);
+    this is their closed form, with the same expressions:
+    ``step``: ``base * gamma ** (epoch // step_size)``; ``exp``:
+    ``base * gamma ** epoch``; ``cosine``: ``eta_min + (base - eta_min) *
+    (1 + cos(pi * epoch / t_max)) / 2``; ``constant``: ``base``.
+    """
+    kind = getattr(spec, "kind")
+    epoch = int(epoch)
+    if kind == "constant":
+        return float(base_lr)
+    if kind == "step":
+        return base_lr * float(spec.gamma) ** (epoch // int(spec.step_size))
+    if kind == "exp":
+        return base_lr * float(spec.gamma) ** epoch
+    if kind == "cosine":
+        eta_min = float(spec.eta_min)
+        return eta_min + (base_lr - eta_min) * (
+            1 + math.cos(math.pi * epoch / _t_max(spec, total_epochs))) / 2
     raise ValueError(f"Unknown scheduler kind {kind!r}")
 
 
@@ -91,4 +120,5 @@ __all__ = [
     "ExpSpec",
     "CosineSpec",
     "build",
+    "lr_at",
 ]

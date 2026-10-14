@@ -108,19 +108,25 @@ obs:
     # min_receivers: 8              # drop shots with fewer live receivers
     #
     # ---- OBN supershot / CRG sampler (see `source_encoding` below) ----
-    # Presence of `sampling:` routes to the plan-streaming supershot loop.
+    # Presence of `sampling:` routes to the plan-streaming supershot loop,
+    # which refuses the keys it never reads: drop local_model_window and
+    # train_shot_batchsize (below) and the static-obs keys above when you
+    # turn it on.
     # sampling:
-    #   shared_shots_per_iter: 20000  # >0 ⇒ per-iter shared-shot supershot
-    #   min_coverage: 0               # drop groups covering < N shared shots
+    #   shared_shots_per_iter: null   # at most N shots per node gather and
+    #                                 #  iteration (a random subset when the
+    #                                 #  sampler draws more); null = all it draws
+    #   min_coverage: 0               # drop nodes with < N rows; applied by
+    #                                 #  receiver_first only (refused otherwise)
     #   source_lines_per_group: 0     # 0 = all source lines per CRG
     #   max_traces_per_sourceline: 0  # 0 = all traces per source line
     #   dedup_mode: nearest           # "none" | "first" | "nearest"
     #   receiver_first: false         # receiver-first sampling (OBN in-window)
     #   per_crg_independent: false    # true ⇒ each CRG keeps its OWN traces
-    #                                 #  (no shared intersection; pairs with
-    #                                 #   source_encoding.enabled=false)
-    #   num_workers: 4
-    #   prefetch_factor: 2
+    #                                 #  (no shared intersection; needs
+    #                                 #   source_encoding.enabled=false, and
+    #                                 #   draws nodes at random: no receiver_first)
+    #   num_workers: 4                # read pool; one iteration is prefetched
 # ── ALTERNATIVES (other obs sources) ──
 # obs:
 #   synthetic_from_models: [{name: vp, path: /path/true_vp.npy}]  # gen obs from a true model
@@ -198,6 +204,9 @@ optimizer:
 
 # ═══ LR scheduler ═════════════════════════════════════════════════════════════
 # Discriminated on `kind`: constant | step | exp | cosine
+# One schedule over the whole run: its epoch counts across all stages, applied
+# to each stage's base lr (optimizer.lr x lr_scale); cosine t_max defaults to
+# the total epochs. Optimizer rebuilds at stage entry do not restart it.
 
 scheduler:
   kind: constant
@@ -259,6 +268,10 @@ reparam:
   direct_velocity: false            # true ⇒ predict absolute vp (not residual)
   lr: 1.0e-4
   # backward_mode: two_pass_full | two_pass_chunked | single_step
+  # (plan-streaming: single_step has no velocity gradient, so it refuses
+  #  illumination_precondition / smooth_regularization / freeze_water_layer;
+  #  under DD neither key is read, its tile backward slabs by
+  #  SWEEP_DD_RENDER_CHUNK, and a non-default value is refused)
   backward_mode: two_pass_full
   # backward_chunk_rows: 64         # rows/chunk for two_pass_chunked (VRAM knob)
   # mask_water_layer: false         # hold water column at water_vp_m_s
@@ -300,7 +313,10 @@ reparam:
 #   enabled: true
 #   mode: random
 #   sign_seed: null
-#   min_coverage: 0
+#   min_coverage: 0                # like obs.plan.sampling.min_coverage (the
+#                                  #  larger applies, receiver_first only); with
+#                                  #  enabled: false the block has no effect and
+#                                  #  a value other than 0 is refused
 #
 # source_encoding:                 # --- ② frequency selection (fs) ---
 #   enabled: true
@@ -313,6 +329,15 @@ reparam:
 #     n_pools: 14
 # (this mode fixes the misfit: set loss: {kind: steady_gcn} or drop the
 #  loss block — any other loss setting is rejected)
+# (and the optimizer: Adam at torch's eps 1e-8 / betas (0.9, 0.999), no
+#  scheduler, stage lr = optimizer.lr x lr_scale, or reparam.lr x inr_lr_scale
+#  under reparam — drop optimizer.eps / betas, keep scheduler: constant, and
+#  no lr_scale under reparam; anything else is rejected. Adam's state carries
+#  from stage to stage; optimizer_reset: true, or a grid model's dh_m change,
+#  starts a fresh one)
+# (a stage's wavelet / nt / batch_size / bandpass are rejected as well: no
+#  wavelet is modeled, and each stage's frequency: block sets its record
+#  length, pools and band)
 
 # ═══ Illumination preconditioning (diagonal pseudo-Hessian) ═══════════════════
 # illumination_precondition:
@@ -330,6 +355,8 @@ reparam:
 #   velocity_scale_m_s: 1000.0
 
 # ═══ Pre-FWI data / model selection plans ═════════════════════════════════════
+# With obs.plan (above) only data_plan.dt_target_s applies; its other fields
+# are rejected (select shots / offsets in build-plan or obs.plan's caps).
 # data_plan:                        # subsample shots / receivers / time
 #   shot_start: 0
 #   shot_stop: null
@@ -364,7 +391,7 @@ local_model_window:
 
 # ═══ Iteration budget (top-level; per-stage `stages:` override these) ═════════
 
-epochs: 300                        # total iters across all stages
+epochs: 300                        # total iters: with stages, their sum (checked)
 batchsize: 48                      # shots per iter (before stage override)
 train_shot_batchsize: 1            # gradient micro-batch per forward solve
 show_every: 10                     # console-log cadence
@@ -372,8 +399,12 @@ show_every: 10                     # console-log cadence
 # ═══ Multiscale stages (low → high frequency) ════════════════════════════════
 # Each stage runs `epochs` iters on its own (dh_m, dt_s, nt) grid with
 # bandpass-filtered obs. Low-freq / coarse-grid first fights cycle-skip.
-# Per-stage keys: epochs, batch_size, dh_m, dt_s, nt, lr_scale, inr_lr_scale,
-# optimizer_reset, wavelet, bandpass, frequency (freqsel).
+# A dh_m grid samples the native model at i*dh_m (where geometry snaps) and
+# spans its whole extent: ceil((n-1)*grid.dh/dh_m)+1 points per axis.
+# Per-stage keys: epochs, batch_size, dh_m, dt_s, nt, lr_scale, inr_lr_scale
+# (reparam only), optimizer_reset, wavelet, bandpass. frequency and boundary
+# are frequency-selection keys, rejected here. The stages' epochs are the run:
+# the top-level epochs must be their sum.
 
 stages:
   - {epochs: 50, batch_size: 48,  dh_m: 75.0,  dt_s: 0.004,  nt: 1500, bandpass: {lo_hz: 2.0, hi_hz:  5.0, order: 4, target: syn}}
@@ -384,6 +415,11 @@ stages:
   - {epochs: 50, batch_size: 128, dh_m: 12.5,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0, order: 4, target: syn}}
 # bandpass.target: "syn" (filter modeled+obs) | "wavelet" (filter the wavelet)
 # bandpass.padtype: "odd" | "even" | "constant"
+# The plan-streaming loop (obs.plan.sampling) reads only lo_hz / hi_hz / order:
+# it filters the wavelet at each stage entry and the obs every iteration with
+# its own zero-phase FFT Butterworth (no padding) and never the syn, whatever
+# target says -- the default "syn" included. Other target / padtype values are
+# refused there.
 
 # ═══ QC artifacts ═════════════════════════════════════════════════════════════
 
