@@ -132,6 +132,7 @@ stages:
     lr_scale: 1.0
   - epochs: 60              # 2-4 Hz
     lr_scale: 0.6
+    optimizer_reset: true   # the quoted numbers used fresh Adam moments per band
     frequency:
       coeff_shards: ./sweep_runs/coeff_3d_2_4hz.npz
       probe_samples: 8000   # 32 s — twice the band, so half the window for the
@@ -142,6 +143,6 @@ stages:
       ramp_s: 1.0
       n_pools: 1
 
-epochs: 120                 # required by the schema; ignored when `stages:` is set
+epochs: 120                 # required: the sum of the stage epochs (checked)
 batchsize: 1                # ignored: the pool IS the batch
 show_every: 5

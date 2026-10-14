@@ -109,6 +109,8 @@ optimizer:
 
 # ═══ LR scheduler ═════════════════════════════════════════════════════════════
 # Discriminated on `kind`: constant | step | exp | cosine
+# One schedule over the whole run (epoch counted across stages), applied to
+# each stage's base lr (optimizer.lr x lr_scale), as in FWI.
 
 scheduler:
   kind: constant
@@ -134,12 +136,15 @@ show_every: 10
 
 freeze_top_n_rows: 0                # zero the reflectivity update in the top N rows
 
-# ═══ Multiscale stages (optional; low → high frequency) ══════════════════════
-# Same per-stage keys as FWI: epochs, batch_size, dh_m, dt_s, nt, lr_scale,
-# optimizer_reset, wavelet, bandpass (lo_hz/hi_hz/order/padtype odd|even|constant/target syn|wavelet).
+# ═══ Stages (optional) ═══════════════════════════════════════════════════════
+# An LSRTM stage reads epochs, lr_scale and wavelet only. Every stage runs on
+# the top-level grid, time axis, batchsize, backend and optimizer; the FWI-only
+# stage keys (dh_m, dt_s, nt, batch_size, bandpass, optimizer_reset,
+# inr_lr_scale, frequency, boundary) are refused at load. A stage wavelet
+# changes the demigration source only; the observed data are modeled once.
 # stages:
-#   - {epochs: 25, batch_size: 8, bandpass: {lo_hz: 3.0, hi_hz: 10.0, order: 4, target: syn}}
-#   - {epochs: 25, batch_size: 8, bandpass: {lo_hz: 3.0, hi_hz: 25.0, order: 4, target: syn}}
+#   - {epochs: 25}
+#   - {epochs: 25, lr_scale: 0.5}
 
 # ═══ Obs-synthesis override + resume (optional) ══════════════════════════════
 # modeling_override:                # different wavelet/geometry for data gen

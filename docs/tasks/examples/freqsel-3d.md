@@ -36,6 +36,10 @@ patch at 2.4 km, 2401 surface positions on a 49 × 49 patch at 400 m.
 
 **Reference: 35 min**, RMSE 644.1 → 512.3, `r` = 0.309.
 
+Measured with a fresh Adam at each rung, so the second rung of 14 sets
+`optimizer_reset: true`; without it, Adam's moments carry over on the same grid
+(see the [2-D page](freqsel-2d.md#the-optimizer-is-fixed)).
+
 ![3-D freqsel](figures/14_3d_cuts.png)
 
 The thrust comes out in the right place — the depth slice recovers the curved

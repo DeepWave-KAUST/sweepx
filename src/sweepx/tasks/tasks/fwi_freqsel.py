@@ -225,6 +225,17 @@ def stage_freq_override_warnings(fspec_global, fspec_stage, si) -> list[str]:
     return out
 
 
+def _freqsel_adam(params, lr):
+    """The optimizer this path runs: Adam at torch's default eps and betas.
+
+    Only the lr comes from the config. FWISpec rejects another optimizer kind,
+    eps or betas, and any scheduler, rather than let them be ignored.
+    """
+    import torch
+
+    return torch.optim.Adam(params, lr=float(lr), eps=1e-8, betas=(0.9, 0.999))
+
+
 def _release_card_between_stages(si: int, rank: int) -> None:
     """Hand the card back to the driver before the next stage builds its mesh.
 
@@ -267,7 +278,8 @@ class FreqselRunnerMixin:
         Restoring only the network weights is not equivalent to a continuous
         run, so a missing file RAISES rather than silently leaving a zero
         state: a silent fall back reads as "resumed, and the mismatch is
-        something else".
+        something else". The lr the state was saved at comes back with it;
+        the stage entry replaces it with this run's base lr x stage scale.
         """
         import torch
         from pathlib import Path
@@ -314,10 +326,11 @@ class FreqselRunnerMixin:
 
         Builds this stage's comb / solver / targets / scheduler / loss, carries
         over the reparam network across stages (resampling its base to the new
-        grid via ``update_base_velocity``; net params + Adam state kept), runs
-        ``stage.epochs`` iterations appending to ``losses/times/peaks``. Returns
-        ``(net, optimizer, ny_, nx_, chk)``. Single-stage runs reduce to the
-        original single-band behaviour bit-for-bit.
+        grid via ``update_base_velocity``; net params + Adam state kept) or the
+        grid model (and its Adam, on the same grid without ``optimizer_reset``),
+        runs ``stage.epochs`` iterations appending to ``losses/times/peaks``.
+        Returns ``(net, optimizer, ny_, nx_, chk)``. Single-stage runs reduce
+        to the original single-band behaviour bit-for-bit.
         """
         import time as _time
 
@@ -612,12 +625,11 @@ class FreqselRunnerMixin:
                     import torch.distributed as dist
                     for p in net.parameters():
                         dist.broadcast(p.data, src=0)
-                optimizer = torch.optim.Adam(net.parameters(),
-                                             lr=float(spec.reparam.lr))
+                optimizer = _freqsel_adam(net.parameters(), spec.reparam.lr)
                 self._restore_optimizer_state(spec, optimizer, rank)
             else:
                 vp = base_t.clone().requires_grad_(True)
-                optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
+                optimizer = _freqsel_adam([vp], spec.optimizer.lr)
         else:
             if use_reparam:
                 # Carry the network across the band: resample only its base to
@@ -650,42 +662,74 @@ class FreqselRunnerMixin:
                                         frame_shape=_frame_shape,
                                         frame_dh=native_dh)
                 if bool(getattr(stage, "optimizer_reset", False)):
-                    optimizer = torch.optim.Adam(net.parameters(),
-                                                 lr=float(spec.reparam.lr))
+                    optimizer = _freqsel_adam(net.parameters(), spec.reparam.lr)
             else:
-                # grid-vp mode: Adam state is shape-bound, so the OPTIMIZER has
-                # to be rebuilt — but the MODEL must carry the previous band's
+                # grid-vp mode: the MODEL always carries the previous band's
                 # result forward. Cloning ``base_t`` here restarted every stage
                 # from the pristine init model, which silently turns a frequency
                 # ladder into "only the last rung counts". The reparam branch
                 # above never had the bug: it carries ``net`` and only swaps
                 # the base, which is why production iFWI runs never showed it.
+                # The OPTIMIZER follows the conventional path's rule
+                # (_helpers.stages._prepare_stage): on the same grid -- same dh
+                # and same padded shape -- the stage keeps the same leaf and the
+                # same Adam, moments and step count included, unless it sets
+                # ``optimizer_reset``. A grid change rebuilds it: Adam's state
+                # is shape-bound. Rebuilding on every entry ignored
+                # ``optimizer_reset: false``.
                 prev = getattr(self, "_freqsel_last_vp", None)
                 if prev is None:
                     vp = base_t.clone().requires_grad_(True)
+                    optimizer = _freqsel_adam([vp], spec.optimizer.lr)
                 else:
-                    prev = prev.detach()
                     prev_dh = float(self._freqsel_last_dh)
-                    if abs(prev_dh - float(dh)) >= 1e-9:
-                        # dh changed with the stage: crop the previous result
-                        # to its physical grid (drop the DD tile pad), sample it
-                        # at this grid's positions, pad like the base. The
-                        # resample returns a plain tensor, so the clone below is
-                        # a LEAF Adam can step.
-                        _ps = self._freqsel_last_shape
-                        prev = prev[tuple(slice(0, int(n)) for n in _ps)]
-                        prev = _resample_to_grid(prev, prev_dh, gshape, float(dh))
-                        prev = torch.from_numpy(np.pad(
-                            prev.cpu().numpy(), _pad, mode="edge"))
-                    vp = prev.to(dev).clone().requires_grad_(True)
-                optimizer = torch.optim.Adam([vp], lr=float(spec.optimizer.lr))
-        # per-stage lr scale on the carried optimizer (INR: inr_lr_scale)
-        _scale = (float(stage.inr_lr_scale) if use_reparam
-                  else float(stage.lr_scale))
-        if abs(_scale - 1.0) > 1e-12:
-            for g in optimizer.param_groups:
-                g["lr"] = float(spec.reparam.lr if use_reparam
-                                else spec.optimizer.lr) * _scale
+                    same_grid = (abs(prev_dh - float(dh)) < 1e-9
+                                 and tuple(prev.shape) == tuple(base_t.shape))
+                    if same_grid and not bool(getattr(stage, "optimizer_reset",
+                                                      False)):
+                        # the very leaf the carried Adam steps: its state is
+                        # keyed on this tensor, so a copy would start from zero
+                        vp = prev
+                    else:
+                        prev = prev.detach()
+                        if same_grid:
+                            _why = "optimizer_reset=True — Adam moments dropped"
+                        else:
+                            # crop the previous result to its physical grid
+                            # (drop the DD tile pad), sample it at this grid's
+                            # positions, pad like the base. The resample
+                            # returns a plain tensor, so the clone below is a
+                            # LEAF Adam can step.
+                            _ps = self._freqsel_last_shape
+                            prev = prev[tuple(slice(0, int(n)) for n in _ps)]
+                            prev = _resample_to_grid(prev, prev_dh, gshape, float(dh))
+                            prev = torch.from_numpy(np.pad(
+                                prev.cpu().numpy(), _pad, mode="edge"))
+                            _why = (f"dh {prev_dh:g} -> {float(dh):g} m — Adam "
+                                    "moments dropped (its state is shape-bound)")
+                        vp = prev.to(dev).clone().requires_grad_(True)
+                        optimizer = _freqsel_adam([vp], spec.optimizer.lr)
+                        if rank == 0:
+                            print(f"[freqsel] stage {si}: {_why}", flush=True)
+        # per-stage lr scale: this stage's lr is the base (reparam.lr, or
+        # optimizer.lr for a grid model) x this stage's own scale, written on
+        # EVERY entry. A carried optimizer (reparam, or a grid model on the
+        # same grid) and a restored state come back with the lr they last ran
+        # at, so skipping a 1.0 scale kept the lr of the previous stage or of
+        # the checkpoint. Under reparam lr_scale does not apply (FWISpec
+        # rejects a set one).
+        if use_reparam:
+            _base, _scale = spec.reparam.lr, float(stage.inr_lr_scale)
+            _what = "reparam.lr x inr_lr_scale"
+        else:
+            _base, _scale = spec.optimizer.lr, float(stage.lr_scale)
+            _what = "optimizer.lr x lr_scale"
+        _lr = float(_base) * _scale
+        for g in optimizer.param_groups:
+            g["lr"] = _lr
+        if rank == 0:
+            print(f"[freqsel] stage {si}: Adam lr={_lr:g} ({_what} {_scale:g}), "
+                  "eps=1e-8, betas=(0.9, 0.999)", flush=True)
 
         _b = spec.model_bounds.get("vp") if spec.model_bounds else None
         vmin = float(_b.min) if _b is not None and _b.min is not None else None
@@ -1080,8 +1124,9 @@ class FreqselRunnerMixin:
         process — per-stage ``frequency`` sub-spec (comb + coeff_shards) and
         ``dh_m``/``dt_s`` rebuild the comb/targets/solver, while the reparam
         network is carried across bands (its base resampled to the new grid,
-        params + Adam state kept). A single-stage run is bit-identical to the
-        original single-band path.
+        params + Adam state kept), and so is a grid model, its Adam rebuilt
+        only by ``optimizer_reset`` or a grid change. A single-stage run is
+        bit-identical to the original single-band path.
         """
         import json as _json
 

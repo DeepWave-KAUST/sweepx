@@ -90,13 +90,15 @@ source_encoding:
 optimizer: { kind: adam, lr: 1.0e-4 }
 loss: { kind: steady_gcn }    # this mode's only misfit (GCN coherence)
 
-epochs: 240                   # schema requirement; ignored when `stages:` is set
+epochs: 240                   # required: the sum of the stage epochs (checked)
 batchsize: 1                  # ignored: the pool IS the batch
 show_every: 10
 
+# Every band runs at reparam.lr, as the reference run did: under reparam this
+# path scales the network lr by a stage's `inr_lr_scale` only (a stage
+# `lr_scale` is rejected). Add `inr_lr_scale` per stage to lower it by band.
 stages:
   - epochs: 30                  # 3-6 Hz
-    lr_scale: 1.0
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_6hz.npz
       probe_samples: 32000          # MUST equal the shard's --n-p
@@ -109,7 +111,6 @@ stages:
       n_pools: 11
       random_batch: 96            # fresh random 96 nodes per iteration
   - epochs: 30                  # 3-8 Hz
-    lr_scale: 0.85
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_8hz.npz
       probe_samples: 20000          # MUST equal the shard's --n-p
@@ -122,7 +123,6 @@ stages:
       n_pools: 10
       random_batch: 96            # fresh random 96 nodes per iteration
   - epochs: 30                  # 3-10 Hz
-    lr_scale: 0.7
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_10hz.npz
       probe_samples: 18000          # MUST equal the shard's --n-p
@@ -135,7 +135,6 @@ stages:
       n_pools: 8
       random_batch: 120            # fresh random 120 nodes per iteration
   - epochs: 30                  # 3-12 Hz
-    lr_scale: 0.6
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_12hz.npz
       probe_samples: 14000          # MUST equal the shard's --n-p
@@ -148,7 +147,6 @@ stages:
       n_pools: 8
       random_batch: 120            # fresh random 120 nodes per iteration
   - epochs: 30                  # 3-14 Hz
-    lr_scale: 0.5
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_14hz.npz
       probe_samples: 14000          # MUST equal the shard's --n-p
@@ -161,7 +159,6 @@ stages:
       n_pools: 7
       random_batch: 144            # fresh random 144 nodes per iteration
   - epochs: 30                  # 3-16 Hz
-    lr_scale: 0.42
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_16hz.npz
       probe_samples: 12000          # MUST equal the shard's --n-p
@@ -174,7 +171,6 @@ stages:
       n_pools: 7
       random_batch: 144            # fresh random 144 nodes per iteration
   - epochs: 30                  # 3-18 Hz
-    lr_scale: 0.36
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_3_18hz.npz
       probe_samples: 12000          # MUST equal the shard's --n-p
@@ -187,7 +183,6 @@ stages:
       n_pools: 6
       random_batch: 168            # fresh random 168 nodes per iteration
   - epochs: 30                  # 2-20 Hz
-    lr_scale: 0.3
     frequency:
       coeff_shards: $VIKING_HOME/run/shards/coeff_2_20hz.npz
       probe_samples: 10000          # MUST equal the shard's --n-p

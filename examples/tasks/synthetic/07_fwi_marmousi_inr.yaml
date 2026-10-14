@@ -164,7 +164,7 @@ stages:
   - epochs: 50              # no bandpass — broadband finish
     lr_scale: 0.2
 
-epochs: 200                 # required by the schema; ignored when `stages:` is set
+epochs: 200                 # required: the sum of the stage epochs (checked)
 batchsize: 8                # shots drawn per optimizer step (stochastic
                             # mini-batch, not a pass over the survey)
 show_every: 5

@@ -5,7 +5,7 @@ import pytest
 def test_grid_mode_stage_carries_the_previous_model():
     """A grid-parametrised freqsel ladder must start stage N from stage N-1.
 
-    The stage setup rebuilds the Adam state (it is shape-bound) and used to
+    The stage setup rebuilt the Adam state on every entry and used to
     rebuild the MODEL from the pristine init alongside it, which silently made
     every rung but the last a no-op — the misfit fell, then the next stage threw
     the result away. Asserted against the real source: the si>0 grid branch must

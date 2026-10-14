@@ -191,8 +191,8 @@ def _freqsel_spec(tmp_path: Path, stages: list) -> dict:
                                 "ramp_s": 0.3, "n_pools": 1}},
         "optimizer": {"kind": "adam", "lr": 1.0},
         "loss": {"kind": "steady_gcn"},
-        "epochs": 2, "batchsize": 1, "show_every": 100,
-        "stages": stages,
+        "epochs": sum(s["epochs"] for s in stages), "batchsize": 1,
+        "show_every": 100, "stages": stages,
     }
 
 

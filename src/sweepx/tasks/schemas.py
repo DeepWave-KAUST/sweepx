@@ -649,6 +649,42 @@ def _steady_gcn_needs_freqsel(loss: LossSpec, task: str) -> None:
             "evaluate it")
 
 
+def _plan_streaming_on(spec) -> bool:
+    """Whether ``_run_fwi`` hands this FWI spec to the plan-streaming loop.
+
+    The same test, in the same order, as its dispatch: frequency selection
+    first, then ``obs.plan.sampling``.
+    """
+    se = spec.source_encoding
+    if se is not None and se.enabled and se.mode == "frequency_selection":
+        return False
+    plan = spec.obs.plan if spec.obs is not None else None
+    return plan is not None and plan.sampling is not None
+
+
+def _leaf_gradient_features(spec) -> list[tuple[str, str]]:
+    """The settings of an FWI ``spec`` that work on the velocity gradient,
+    each with the value that turns it off.
+
+    The plan-streaming loop skips them under domain decomposition, and with
+    ``reparam.backward_mode: single_step``, which leaves it no velocity
+    gradient. Each is listed only when it asks for something: a block with
+    ``enabled: false`` or a zero weight asks for nothing, so the
+    config_resolved.yaml of a run that left them off still loads.
+    """
+    out = []
+    illum = spec.illumination_precondition
+    if illum is not None and illum.enabled:
+        out.append(("illumination_precondition", "enabled: false"))
+    smooth = spec.smooth_regularization
+    if smooth is not None and float(smooth.weight) > 0.0:
+        out.append(("smooth_regularization", "weight: 0"))
+    freeze = spec.freeze_water_layer
+    if freeze is not None and freeze.enabled:
+        out.append(("freeze_water_layer", "enabled: false"))
+    return out
+
+
 class DataPlanSpec(_Forbid):
     """Pre-FWI data selection: which shots / receivers / time samples to use.
 
@@ -738,7 +774,9 @@ class ReparamHashC2FSpec(_Forbid):
     # masking a fully-allocated grid — saves latent memory (finest levels
     # dominate in 3-D). Reuses base_levels -> final_levels over [warmup,
     # ramp_end] as the grow schedule; ``ramp`` is ignored (growth is
-    # hard-stepped). Requires ``enabled: true``.
+    # hard-stepped). Requires ``enabled: true``. A grown level joins the
+    # optimizer at the lr the network runs at that epoch (reparam.lr x the
+    # stage's scale x the scheduler's factor) and follows it from then on.
     growing: bool = False
 
 
@@ -1100,9 +1138,14 @@ class SourceEncodingSpec(_Forbid):
     de-correlates the cross-talk and keeps the long-run gradient close
     to the per-shot expectation.
 
-    Pairs with :class:`PlanSamplingConfig` on ``obs.plan.sampling``
-    (``shared_shots_per_iter > 0``); has no effect under the per-shot
-    CRG mode.
+    Pairs with :class:`PlanSamplingConfig` on ``obs.plan.sampling``, whose
+    presence selects the plan-streaming loop. With ``enabled: false`` the
+    block has no effect and that loop runs per shot (or per CRG). Its
+    ``min_coverage`` other than 0 is then refused: it used to filter the
+    receiver-first sampler's nodes even with the block off;
+    ``obs.plan.sampling.min_coverage`` is that filter with or without
+    encoding. With the block on, the larger of the two applies, read by
+    the receiver-first sampler only (see ``PlanSamplingConfig.min_coverage``).
     """
 
     enabled: bool = False
@@ -1416,6 +1459,11 @@ class ReparamSpec(_Forbid):
     #     solver+net (the original sweep-tasks behavior). Simplest but
     #     can OOM at large network or large grid because the solver's
     #     wavefield activations are pinned for the network backward.
+    # The plan-streaming loop (obs.plan.sampling): single_step leaves it no
+    # velocity gradient, so it refuses single_step together with
+    # illumination_precondition / smooth_regularization / freeze_water_layer;
+    # under DD (SWEEP_DD_ENABLE=1) it reads neither field and refuses values
+    # other than the defaults when the run starts.
     backward_mode: Literal["two_pass_full", "two_pass_chunked", "single_step"] = "two_pass_full"
     backward_chunk_rows: int = Field(ge=1, default=64)
 
@@ -1453,6 +1501,10 @@ class StageBandpass(_Forbid):
     # the filtered source) and is NOT re-filtered. This skips the per-
     # iteration syn filter in the autograd path and is roughly
     # equivalent to ``"syn"`` if the solver is linear, but cheaper.
+    # The plan-streaming loop (``obs.plan.sampling``) reads neither ``target``
+    # nor ``padtype``: it filters the wavelet at each stage entry and the obs
+    # every iteration with its own FFT Butterworth (no padding) and never the
+    # syn, the default ``"syn"`` notwithstanding; it refuses other values.
     target: Literal["syn", "wavelet"] = "syn"
 
 
@@ -1460,20 +1512,42 @@ class StageSpec(_Forbid):
     """One leg of a multi-stage FWI run (frequency continuation pattern).
 
     Fields beyond ``epochs`` are all optional and override the top-level
-    defaults when present:
+    defaults when present. LSRTM reads only ``epochs``, ``lr_scale`` and
+    ``wavelet`` and refuses the others (``LSRTMSpec``). An FWI path refuses
+    the keys it never reads (``FWISpec``): the conventional path a stage's
+    ``boundary`` and ``frequency``, frequency selection its ``wavelet``,
+    ``nt``, ``batch_size`` and ``bandpass``, and both an ``inr_lr_scale``
+    without ``reparam``. With stages the run is the stages' epochs, so the
+    top-level ``epochs`` must equal their sum.
 
     - ``wavelet``: replace the source signature for this stage
-    - ``lr_scale``: scale the optimizer's initial lr (multiplicative)
+    - ``lr_scale``: scale the optimizer's initial lr (multiplicative). The
+      result is this stage's base lr. The top-level ``scheduler`` is one
+      schedule over the whole run, evaluated on that base at the global
+      epoch, so it continues across stages instead of restarting.
     - ``inr_lr_scale``: scale the reparam network's lr (multiplicative).
-      Only meaningful when :class:`ReparamSpec` is active; ignored otherwise.
-      Lets you slow down the SIREN/hash net on later stages without
-      changing the grid-FWI lr (which is set via ``lr_scale``).
+      Only meaningful when :class:`ReparamSpec` is active; rejected
+      otherwise. Lets you slow down the SIREN/hash net on later stages
+      without changing the grid-FWI lr (which is set via ``lr_scale``).
+      Every param group of the network runs at it, the levels a
+      ``hash.c2f.growing`` grid grows included: a level grown inside a stage
+      joins at the network's lr of that moment.
+      Under ``source_encoding.mode='frequency_selection'`` a stage's lr is
+      ``optimizer.lr x lr_scale``, or ``reparam.lr x inr_lr_scale`` under
+      reparam, where a non-default ``lr_scale`` is rejected; each stage
+      starts at its own lr, never at the previous stage's.
     - ``optimizer_reset``: when ``True``, rebuild the optimizer at stage
       entry — drops accumulated Adam first / second moments. Useful when
       a stage changes regime drastically (e.g. switching from low-freq
       sweep to high-freq inversion) and the old momentum is misleading.
-      Defaults to ``False``; the runner already auto-resets the optimizer
-      when ``dh_m`` changes (because Adam state is shape-bound).
+      Defaults to ``False``: the optimizer and its state carry over from the
+      previous stage, except that a grid model's is rebuilt anyway when this
+      stage's grid (``dh_m``) differs from the previous stage's, because
+      Adam state is shape-bound; a reparam network's carries across a grid
+      change. The rule is the same under
+      ``source_encoding.mode='frequency_selection'``. Neither reset moves
+      the ``scheduler``'s position. Both happen on entering the stage: a run
+      resumed inside it keeps the checkpointed moments.
     - ``dh_m``: rebuild solver + resample vp to this grid spacing. The stage
       grid samples the native model (``grid.dh``) at ``i * dh_m`` from the
       native origin -- the positions geometry snaps to, ``round(x / dh_m)`` --
@@ -1491,7 +1565,8 @@ class StageSpec(_Forbid):
       move the strips to a different home without restating dtype / interval /
       ring buffers. The band cascade needs exactly this: the coarse bands'
       strips fit on the card (fastest home, and no host staging at all) while
-      the fine bands do not and must be staged on the host.
+      the fine bands do not and must be staged on the host. Read only under
+      ``source_encoding.mode='frequency_selection'``.
     - ``frequency``: per-stage frequency-selection sub-spec (comb + coeff
       shards). Only used on the ``source_encoding.mode='frequency_selection'``
       path; overrides the top-level ``source_encoding.frequency`` for this
@@ -1499,7 +1574,9 @@ class StageSpec(_Forbid):
       k_lo/k_hi, probe/steady/slack). Pair with ``dh_m``/``dt_s`` to also
       refine the solver grid per band. The reparam network is carried across
       stages (its base is resampled to the new grid); only the comb / targets
-      / scheduler / solver are rebuilt.
+      / pool scheduler / solver are rebuilt. That path takes a stage's record
+      length (``nt``), batch (``batch_size``) and band (``bandpass``) from
+      this block and models no ``wavelet``, so it rejects those four keys.
     """
 
     epochs: int = Field(ge=1)
@@ -1517,6 +1594,16 @@ class StageSpec(_Forbid):
 
 
 class OptimizerAdam(_Forbid):
+    """``torch.optim.Adam`` with this block's ``lr``, ``eps`` and ``betas``.
+
+    Not under ``source_encoding.mode='frequency_selection'``: that path
+    builds its own Adam at torch's defaults, ``eps=1e-8`` and ``betas=(0.9,
+    0.999)``, takes only ``lr`` from here (``reparam.lr`` under reparam) and
+    rejects any other kind, eps or betas. The ``eps: 1e-22`` a
+    ``config_resolved.yaml`` of such a run records is this schema default,
+    not what ran.
+    """
+
     kind: Literal["adam"] = "adam"
     # Scalar lr, or per-model-name lr (dict keys must match the inverted ModelRef names).
     lr: float | dict[str, float]
@@ -1549,22 +1636,48 @@ Optimizer = Annotated[
 OptimizerSpec = OptimizerAdam
 
 
+# ``scheduler`` is ONE schedule over the whole run. Its epoch ``t`` is global:
+# 0 .. total_epochs - 1 across all stages (total_epochs = the stages' epochs
+# summed, or ``epochs`` without stages). Each stage has a base lr,
+# ``optimizer.lr`` (``reparam.lr`` under reparam) x ``lr_scale`` (x
+# ``inr_lr_scale`` under reparam), and during the stage the lr is the schedule
+# at ``t`` applied to that base. Rebuilding the optimizer at a stage entry (a
+# ``dh_m`` change, ``optimizer_reset``) drops Adam's moments but not the
+# schedule's position, and a resumed run continues it from the checkpointed
+# epoch. The conventional FWI loop and LSRTM apply it this way. The
+# frequency-selection path has none: it rejects any kind but ``constant`` and
+# runs each stage at its base lr.
+
 class SchedulerConstant(_Forbid):
+    """No schedule: each stage runs at its base lr."""
+
     kind: Literal["constant"] = "constant"
 
 
 class SchedulerStep(_Forbid):
+    """``lr = base * gamma ** (t // step_size)``, ``t`` the global epoch."""
+
     kind: Literal["step"] = "step"
     step_size: int = Field(ge=1)
     gamma: float = Field(gt=0, default=0.5)
 
 
 class SchedulerExp(_Forbid):
+    """``lr = base * gamma ** t``, ``t`` the global epoch."""
+
     kind: Literal["exp"] = "exp"
     gamma: float = Field(gt=0, lt=1.0)
 
 
 class SchedulerCosine(_Forbid):
+    """``lr = eta_min + (base - eta_min) * (1 + cos(pi * t / t_max)) / 2``.
+
+    ``t`` is the global epoch. ``t_max`` defaults to the total epochs of all
+    stages, so the default anneals once over the whole run; past ``t_max`` the
+    cosine rises again. ``eta_min`` is an absolute lr (``lr_scale`` does not
+    scale it).
+    """
+
     kind: Literal["cosine"] = "cosine"
     eta_min: float = 0.0
     t_max: int | None = None  # default = total epochs
@@ -1631,15 +1744,31 @@ class PlanSamplingConfig(_Forbid):
     Parameters
     ----------
     min_coverage
-        Drop plan groups whose row count is below this before sampling.
+        Leave plan groups (nodes) with fewer rows than this out of the draw.
         Mirrors legacy ``encoding_min_coverage``. ``0`` = keep all groups.
+        Only the receiver-first sampler applies it, through its shot -> nodes
+        index (an iteration where it falls back to the random sampler draws
+        from every node in the grid). The random shared-shot and per-CRG
+        samplers draw from the in-grid nodes the loop hands them, and
+        sweep-io's samplers ignore ``min_coverage`` when given that set, so a
+        value other than 0 is refused unless ``receiver_first`` is on.
     shared_shots_per_iter
-        Number of physical shots sampled per iter from the intersection of
-        the chosen groups (= the n_shared dimension of the supershot).
-        Must be ``> 0`` to enable shared-shot sampling.
+        At most this many shots per node gather and iteration (the
+        ``n_shared`` dimension of the batch). When the sampler, after
+        ``source_lines_per_group`` / ``max_traces_per_sourceline``, yields
+        more, a random subset of this many is kept before the SEG-Y read;
+        when it yields fewer, all are used and the run prints so once. With
+        source encoding, the per-shot loop and ``receiver_first`` these are
+        the shots every picked node shares (``dedup_mode`` then drops shots
+        that share a grid cell, so an iteration can use fewer); with
+        ``per_crg_independent``, each node's own receivers, one per grid
+        cell. ``None`` (default) keeps them all, as every run did before
+        this field was read. ``1`` is refused: it was the default then and
+        capped nothing, so an older run's config_resolved.yaml records it.
     source_lines_per_group, max_traces_per_sourceline
-        Hierarchical sub-sampling caps inside the shared-shot intersection.
-        ``0`` disables the corresponding cap.
+        Hierarchical sub-sampling caps inside the shared-shot intersection
+        (per node with ``per_crg_independent``). ``0`` disables the
+        corresponding cap.
     num_workers
         Sizes the inner ThreadPoolExecutor that performs the per-iter
         SEG-Y reads (no torch DataLoader is involved). Defaults tuned
@@ -1663,13 +1792,13 @@ class PlanSamplingConfig(_Forbid):
         centre — fixes the periphery under-sampling of partial-coverage OBN
         surveys. A shot_key->nodes reverse index is built once at setup.
     receiver_first_max_retries
-        Re-roll the target shot up to this many times to find one covered by
-        ``>= shared_shots_per_iter`` nodes before falling back to the random
+        Re-roll the target shot up to this many times to find one recorded
+        by at least ``batchsize`` nodes before falling back to the random
         sampler. Only used when ``receiver_first=True``.
     """
 
     min_coverage: int = Field(ge=0, default=0)
-    shared_shots_per_iter: int = Field(ge=1, default=1)
+    shared_shots_per_iter: int | None = Field(ge=1, default=None)
     source_lines_per_group: int = Field(ge=0, default=0)
     max_traces_per_sourceline: int = Field(ge=0, default=0)
     num_workers: int = Field(ge=0, default=4)
@@ -1682,10 +1811,25 @@ class PlanSamplingConfig(_Forbid):
     # True, each iter draws B random nodes and gives EACH its own sub-sampled
     # rows (``sweep_io.seismic_plan.sample_percrg_independent``) instead of the
     # shared-shot intersection. Drops the wide-offset diving-wave bias of the
-    # intersection; requires source encoding OFF (each node is a separate
-    # solve). Ragged rows are zero-padded to (B, max_nrec) and the pad is
-    # masked out of the loss. No effect when source_encoding is enabled.
+    # intersection. Each node is a separate solve, so it is refused with
+    # source_encoding enabled (the supershot sums every node's obs over ONE
+    # shared receiver set), and so is receiver_first, which it never uses: it
+    # draws its nodes at random. Ragged rows are zero-padded to (B, max_nrec)
+    # and the pad is masked out of the loss.
     per_crg_independent: bool = False
+
+    @field_validator("shared_shots_per_iter")
+    @classmethod
+    def _one_was_the_old_default(cls, v):
+        if v == 1:
+            raise ValueError(
+                "shared_shots_per_iter: 1 is refused. Until the plan-streaming "
+                "loop read this field it defaulted to 1 and capped nothing, so "
+                "the config_resolved.yaml of an older run records 1 for a run "
+                "that used every shot the sampler drew; read now, 1 would cap "
+                "every gather at one trace. Write null (or drop the key) to use "
+                "them all, as such a run did, or a cap of 2 or more.")
+        return v
 
 
 class ObsPlanConfig(_Forbid):
@@ -1937,6 +2081,340 @@ class FWISpec(BaseTaskSpec):
         self.loss = self.loss.model_copy(update={"kind": "steady_gcn"})
         return self
 
+    @model_validator(mode="after")
+    def _plan_streaming_keys(self):
+        # The plan-streaming loop (tasks/fwi_plan_streaming.py) never reads
+        # these, so a run that set them went ahead without them. Options are
+        # judged by VALUE -- a config_resolved.yaml spells every one out at its
+        # default and has to load again -- and a block by whether it asks for
+        # anything (a block switched off with enabled: false asks for nothing).
+        if not _plan_streaming_on(self):
+            return self
+        conventional = []
+        if self.scheduler != SchedulerConstant():
+            conventional.append(f"scheduler.kind={self.scheduler.kind!r}")
+        if self.resume:
+            conventional.append("resume=True")
+        if self.resume_from is not None:
+            conventional.append(f"resume_from={self.resume_from!r}")
+        if self.train_shot_batchsize is not None:
+            conventional.append(f"train_shot_batchsize={self.train_shot_batchsize}")
+        if self.save_illumination:
+            conventional.append("save_illumination=True")
+        for name in ("grad_smooth", "diffusion_prior", "local_model_window"):
+            block = getattr(self, name)
+            if block is not None and block.enabled:
+                conventional.append(name)
+        # What shapes the dataset the conventional path materialises from the
+        # plan (plan_materialize); here the sampler draws every iteration's
+        # traces from it.
+        plan = self.obs.plan
+        conventional += [
+            f"obs.plan.{n}={getattr(plan, n)!r}"
+            for n in ("n_receivers_per_shot", "receiver_select", "max_shots",
+                      "min_receivers", "materialize_seed")
+            if getattr(plan, n) != ObsPlanConfig.model_fields[n].get_default()]
+        notes = []
+        if conventional:
+            notes.append(
+                f"To keep {', '.join(conventional)}, drop obs.plan.sampling: "
+                "the conventional path (the plan materialised once) applies "
+                "them.")
+        if self.data_plan is not None:
+            notes.append(
+                "data_plan selects from a static obs tensor; here the "
+                "obs.plan.sampling sampler picks the traces and model_plan "
+                "crops the grid.")
+        if self.modeling_override is not None:
+            notes.append("modeling_override only shapes synthetic obs "
+                         "(obs.synthetic_from).")
+        staged = [f"stages[{i}].boundary"
+                  for i, st in enumerate(self.stages or ()) if st.boundary is not None]
+        if staged:
+            notes.append(
+                "Only source_encoding.mode='frequency_selection' reads a "
+                "stage's boundary: override; set "
+                "backend.cuda_options.memory.boundary for the whole run.")
+        # A source_encoding block switched off asks for nothing, the frequency
+        # block inside it included; a stage's is read by nothing here.
+        encoded = self.source_encoding is not None and self.source_encoding.enabled
+        freq = [f"stages[{i}].frequency"
+                for i, st in enumerate(self.stages or ()) if st.frequency is not None]
+        if encoded and self.source_encoding.frequency is not None:
+            freq.insert(0, "source_encoding.frequency")
+        if freq:
+            notes.append(
+                "Only source_encoding.mode='frequency_selection' reads a "
+                "frequency: block.")
+        sampling = plan.sampling
+        loop = []
+        if (sampling.prefetch_factor
+                != PlanSamplingConfig.model_fields["prefetch_factor"].get_default()):
+            loop.append(f"obs.plan.sampling.prefetch_factor={sampling.prefetch_factor}")
+            notes.append(
+                "The loop prefetches one iteration ahead whatever "
+                "prefetch_factor says; obs.plan.sampling.num_workers sizes "
+                "its read pool.")
+        if encoded and sampling.per_crg_independent:
+            loop.append("obs.plan.sampling.per_crg_independent=True")
+            notes.append(
+                "per_crg_independent is read only with source_encoding off: "
+                "the encoded supershot needs the shared-shot intersection.")
+        per_crg = sampling.per_crg_independent and not encoded
+        if per_crg and sampling.receiver_first:
+            loop.append("obs.plan.sampling.receiver_first=True")
+            notes.append(
+                "per_crg_independent draws its nodes at random and never uses "
+                "the receiver-first sampler.")
+        # min_coverage reaches the receiver-first sampler's node index only:
+        # the random shared-shot and per-CRG samplers are handed the in-grid
+        # nodes, and sweep-io's samplers ignore min_coverage given that set.
+        # A source_encoding block switched off has no effect, its min_coverage
+        # included, which used to reach that index all the same.
+        receiver_first = sampling.receiver_first and not per_crg
+        se = self.source_encoding
+        cover = []
+        if sampling.min_coverage and not receiver_first:
+            cover.append(f"obs.plan.sampling.min_coverage={sampling.min_coverage}")
+        if se is not None and se.min_coverage and not (se.enabled and receiver_first):
+            cover.append(f"source_encoding.min_coverage={se.min_coverage}")
+        if cover:
+            loop += cover
+            if not receiver_first:
+                notes.append(
+                    "min_coverage is applied only by the receiver-first sampler "
+                    "(obs.plan.sampling.receiver_first: true, without "
+                    "per_crg_independent): the random shared-shot and per-CRG "
+                    "samplers draw from every node inside the grid, so earlier "
+                    "runs did not apply it either.")
+            if se is not None and se.min_coverage and not se.enabled:
+                notes.append(
+                    "A source_encoding block switched off has no effect. With "
+                    "receiver_first its min_coverage still filtered that "
+                    "sampler's nodes before; obs.plan.sampling.min_coverage is "
+                    "that filter without encoding.")
+        # From a bandpass the loop takes lo_hz, hi_hz and order: it filters the
+        # wavelet and the observed data with its own FFT Butterworth, whatever
+        # target and padtype say.
+        bands = [("bandpass", self.bandpass)] + [
+            (f"stages[{i}].bandpass", st.bandpass)
+            for i, st in enumerate(self.stages or ())]
+        band = [f"{where}.{n}={getattr(bp, n)!r}"
+                for where, bp in bands if bp is not None
+                for n in ("target", "padtype")
+                if getattr(bp, n) != StageBandpass.model_fields[n].get_default()]
+        if band:
+            loop += band
+            notes.append(
+                "Of a bandpass this path reads lo_hz, hi_hz and order: it "
+                "filters the source wavelet at each stage entry and the "
+                "observed data every iteration with its own zero-phase FFT "
+                "Butterworth, without padding, and never the synthetic, "
+                "whatever target and padtype say (the conventional path's "
+                "target: wavelet).")
+        ignored = (conventional
+                   + [n for n in ("data_plan", "modeling_override")
+                      if getattr(self, n) is not None]
+                   + staged + freq + loop)
+        if ignored:
+            raise ValueError(
+                "fwi: the plan-streaming path (obs.plan.sampling) never reads "
+                f"{', '.join(ignored)}, so they would be ignored. Remove "
+                "them. " + " ".join(notes) + " A config_resolved.yaml records "
+                "every key a run did not set at its default, which still "
+                "loads.")
+        return self
+
+    @model_validator(mode="after")
+    def _plan_streaming_freeze_rows(self):
+        # Apart from _plan_streaming_keys on purpose: the water: block retires
+        # freeze_top_n_rows on every path, and this check goes with it.
+        if _plan_streaming_on(self) and self.freeze_top_n_rows:
+            raise ValueError(
+                f"fwi: freeze_top_n_rows={self.freeze_top_n_rows} is not "
+                "supported on the plan-streaming path (obs.plan.sampling): it "
+                "never reads it, so those rows would be inverted. Freeze the "
+                "water there with freeze_water_layer (a seabed depth map), or "
+                "drop obs.plan.sampling: the conventional path applies it.")
+        return self
+
+    @model_validator(mode="after")
+    def _plan_streaming_single_step(self):
+        # With backward_mode single_step the plan-streaming loop differentiates
+        # through solver and network in one graph: no velocity gradient exists
+        # for these three to work on, and the loop skips them (as the DD loop
+        # does, refused when a DD run starts). The config alone decides this,
+        # so refuse it at load; a block switched off asks for nothing.
+        if (not _plan_streaming_on(self) or self.reparam is None
+                or self.reparam.backward_mode != "single_step"):
+            return self
+        skipped = _leaf_gradient_features(self)
+        if skipped:
+            it = "it" if len(skipped) == 1 else "them"
+            raise ValueError(
+                "fwi: the plan-streaming path (obs.plan.sampling) with "
+                "reparam.backward_mode='single_step' does not support "
+                f"{', '.join(n for n, _ in skipped)}: single_step sends the "
+                "gradient straight to the network, so the loop has no velocity "
+                f"gradient for {it} and skips {it}; the run would go ahead "
+                f"without {it}. Use backward_mode: two_pass_full or "
+                f"two_pass_chunked, which hand {it} that gradient, or turn {it} "
+                "off (" + ", ".join(f"{n}.{off}" for n, off in skipped) + "). "
+                "The config_resolved.yaml of an earlier such run records "
+                f"{it} as set, though that run went without {it}.")
+        return self
+
+    @model_validator(mode="after")
+    def _freqsel_optimizer(self):
+        # The freqsel path builds its own torch Adam at torch's default eps and
+        # betas, runs every stage at a constant lr, and never reads
+        # ``scheduler``, ``optimizer.kind`` / ``eps`` / ``betas`` or, under
+        # reparam, a stage's ``lr_scale``. Reject what it would drop, by the
+        # rule of _freqsel_loss: a kind as written (it is the discriminator,
+        # so a written block always names one), an option by VALUE.
+        freq_on = (self.source_encoding is not None
+                   and self.source_encoding.enabled
+                   and self.source_encoding.mode == "frequency_selection")
+        if not freq_on:
+            return self
+        errors = []
+        if self.scheduler.kind != "constant":
+            errors.append(
+                f"scheduler.kind={self.scheduler.kind!r} would be ignored: "
+                "there is no LR scheduler, every stage runs at a constant lr "
+                "(optimizer.lr x lr_scale, or reparam.lr x inr_lr_scale under "
+                "reparam). Drop the scheduler block or write scheduler: {kind: "
+                "constant}; to lower the lr band by band, set the stages' "
+                "scales.")
+        if self.optimizer.kind != "adam":
+            errors.append(
+                f"optimizer.kind={self.optimizer.kind!r} would be ignored: it "
+                "always runs Adam, at torch's default eps=1e-8 and betas=(0.9, "
+                "0.999). Write optimizer: {kind: adam, lr: ...}.")
+        else:
+            opts = [f"optimizer.{n}={getattr(self.optimizer, n)!r}"
+                    for n in ("eps", "betas")
+                    if getattr(self.optimizer, n)
+                    != OptimizerAdam.model_fields[n].get_default()]
+            if opts:
+                errors.append(
+                    f"{', '.join(opts)} would be ignored: it runs Adam at "
+                    "torch's default eps=1e-8 and betas=(0.9, 0.999) and reads "
+                    "only optimizer.lr. Drop them; the schema default a "
+                    "config_resolved.yaml records (eps: 1e-22) loads, but is "
+                    "not what ran.")
+        if self.reparam is not None:
+            scaled = [f"stages[{i}].lr_scale={s.lr_scale!r}"
+                      for i, s in enumerate(self.stages or ())
+                      if s.lr_scale != StageSpec.model_fields["lr_scale"].default]
+            if scaled:
+                errors.append(
+                    f"{', '.join(scaled)} would be ignored: under reparam each "
+                    "stage runs at reparam.lr x inr_lr_scale, without lr_scale "
+                    "(the conventional path multiplies both). Drop lr_scale to "
+                    "keep what earlier runs of this config did, or move the "
+                    "factor into inr_lr_scale.")
+        if errors:
+            raise ValueError(
+                "fwi: source_encoding.mode='frequency_selection' builds its own "
+                "optimizer, so " + " Also, ".join(errors))
+        return self
+
+    @model_validator(mode="after")
+    def _stage_keys_the_path_reads(self):
+        # The conventional loop (_helpers/stages._prepare_stage) and the
+        # frequency-selection loop each read only some of a stage's keys;
+        # reject a key the path that runs never reads rather than run the
+        # stage without it. By VALUE against the schema default, as for
+        # LSRTM: a config_resolved.yaml spells every key out at its default
+        # and has to load again; for the blocks (default None) that is "the
+        # block is there". The plan-streaming path checks its own stage keys.
+        if not self.stages or _plan_streaming_on(self):
+            return self
+        freq_on = (self.source_encoding is not None
+                   and self.source_encoding.enabled
+                   and self.source_encoding.mode == "frequency_selection")
+        if freq_on:
+            path = "source_encoding.mode='frequency_selection'"
+            instead = dict(_FREQSEL_STAGE_INSTEAD)
+        else:
+            path = ("the conventional path (no frequency selection, no "
+                    "obs.plan.sampling)")
+            instead = dict(_CONVENTIONAL_STAGE_INSTEAD)
+        if self.reparam is None:
+            instead["inr_lr_scale"] = _INR_LR_SCALE_WITHOUT_REPARAM
+        for i, stage in enumerate(self.stages):
+            ignored = [n for n in instead
+                       if getattr(stage, n) != StageSpec.model_fields[n].get_default(
+                           call_default_factory=True)]
+            if not ignored:
+                continue
+            what = [f"a {n} block" if isinstance(getattr(stage, n), BaseModel)
+                    else f"{n}={getattr(stage, n)!r}" for n in ignored]
+            them = "them" if len(ignored) > 1 else "it"
+            raise ValueError(
+                f"fwi: stages[{i}] sets {', '.join(what)}, which {path} never "
+                f"reads, so the stage would run without {them}. Instead -- "
+                + " ".join(f"{n}: {instead[n]}." for n in ignored)
+                + f" An older run's config_resolved.yaml hits this only if its "
+                f"stages set {them}; that run ignored {them} too.")
+        return self
+
+    @model_validator(mode="after")
+    def _epochs_are_the_stages(self):
+        # With stages, the conventional and frequency-selection loops run the
+        # stages' epochs and never read the top-level ``epochs`` the schema
+        # requires. Accept it only as their sum, the number that runs; a
+        # config_resolved.yaml records it as written, so a run's own record
+        # loads again. The plan-streaming path checks its own keys.
+        if not self.stages or _plan_streaming_on(self):
+            return self
+        total = sum(int(s.epochs) for s in self.stages)
+        if int(self.epochs) != total:
+            parts = " + ".join(str(int(s.epochs)) for s in self.stages)
+            raise ValueError(
+                f"fwi: epochs={self.epochs}, but a run with stages runs the "
+                f"stages' epochs, {parts} = {total}, and never reads the "
+                f"top-level epochs. Set epochs: {total}, or change the stages. "
+                "An older run's config_resolved.yaml hits this only if its "
+                "epochs differed from that sum; that run ran the stages' "
+                f"{total} epochs.")
+        return self
+
+    @model_validator(mode="after")
+    def _plan_materialisation_reads_dt_only(self):
+        # obs.plan without sampling materialises the dataset straight from the
+        # plan (plan_materialize) and never applies data_plan to it: of that
+        # block only dt_target_s is read, as the solver dt the plan's traces
+        # are resampled to. Reject the other fields by VALUE against the
+        # schema default, so a config_resolved.yaml (every field written out)
+        # loads again.
+        freq_on = (self.source_encoding is not None
+                   and self.source_encoding.enabled
+                   and self.source_encoding.mode == "frequency_selection")
+        plan = self.obs.plan if self.obs is not None else None
+        if (freq_on or self.data_plan is None or plan is None
+                or plan.sampling is not None):
+            return self
+        ignored = [f"data_plan.{n}={getattr(self.data_plan, n)!r}"
+                   for n, f in DataPlanSpec.model_fields.items()
+                   if n != "dt_target_s"
+                   and getattr(self.data_plan, n) != f.get_default(
+                       call_default_factory=True)]
+        if ignored:
+            raise ValueError(
+                "fwi: obs.plan without sampling materialises the dataset from "
+                "the plan and reads only data_plan.dt_target_s, so "
+                f"{', '.join(ignored)} would be ignored. Select shots, "
+                "receivers and offsets when building the plan (sweep-tasks "
+                "build-plan) or cap them with obs.plan.max_shots / "
+                "n_receivers_per_shot, and keep only dt_target_s in data_plan. "
+                "An older run's config_resolved.yaml hits this only if its "
+                "data_plan set them; that run ignored them too.")
+        return self
+
+    # With ``stages`` the run is the stages' epochs: the conventional and
+    # frequency-selection paths require this to be their sum.
     epochs: int = Field(ge=1)
     batchsize: int = Field(ge=1, default=1)
     train_shot_batchsize: int | None = None  # default = batchsize (no accumulation)
@@ -1955,6 +2433,9 @@ class FWISpec(BaseTaskSpec):
     # ctrl-c during training will save a checkpoint at the next iter
     # boundary, and re-running the same YAML picks up where it left off.
     # When True but the file is absent, the run starts fresh silently.
+    # The checkpoint records its stage (the models are on that stage's grid)
+    # and, under reparam, the network, so a stop anywhere -- inside a dh_m
+    # stage included -- continues as the uninterrupted run would.
     resume: bool = False
     save_illumination: bool = False
 
@@ -1962,6 +2443,9 @@ class FWISpec(BaseTaskSpec):
 
     # Pre-FWI data selection + model cropping (TASK 009).
     # `data_plan` subsets shots/receivers/time before the inversion sees obs.
+    # With `obs.plan` (no sampling) only its `dt_target_s` applies: the
+    # dataset is materialised from the plan, and the other fields are
+    # rejected (select there, or with obs.plan's own caps).
     # `model_plan` crops the velocity model to a region of interest and
     # (by default) drops sources whose physical positions land outside.
     # When omitted, the full dataset / full model is used (current behaviour).
@@ -2000,7 +2484,8 @@ class FWISpec(BaseTaskSpec):
     # Optional zero-phase Butterworth bandpass applied to the wavelet
     # (once at setup) AND to the per-iter encoded obs supershot (via
     # the differentiable :func:`sweep_tasks.preproc.filter.bandpass_torch`).
-    # Used by the OBN CRG path only; the multi-stage 2-D / 3-D path
+    # Used by the OBN CRG path only, which reads lo_hz / hi_hz / order of it
+    # (not target or padtype); the multi-stage 2-D / 3-D path
     # uses :class:`StageBandpass` inside ``stages`` instead.
     bandpass: StageBandpass | None = None
 
@@ -2239,9 +2724,82 @@ class LSRTMSpec(BaseTaskSpec):
         return self
 
     @model_validator(mode="after")
+    def _stage_keys_lsrtm_reads(self):
+        # The LSRTM stage loop reads only epochs, lr_scale and wavelet; reject
+        # every other stage key rather than run the stage without it. Checked
+        # by VALUE against the schema default: a config_resolved.yaml spells
+        # each key out at its default and has to load again. The blocks
+        # (bandpass, frequency, boundary) default to None, so for them this
+        # is "the block is there".
+        for i, stage in enumerate(self.stages or ()):
+            ignored = [n for n, f in StageSpec.model_fields.items()
+                       if n not in _LSRTM_STAGE_KEYS_READ
+                       and getattr(stage, n) != f.get_default(call_default_factory=True)]
+            if not ignored:
+                continue
+            what = [f"a {n} block" if isinstance(getattr(stage, n), BaseModel)
+                    else f"{n}={getattr(stage, n)!r}" for n in ignored]
+            instead = " ".join(
+                f"{n}: {_LSRTM_STAGE_INSTEAD.get(n, 'remove it')}." for n in ignored)
+            them = "them" if len(ignored) > 1 else "it"
+            raise ValueError(
+                f"lsrtm: stages[{i}] sets {', '.join(what)}, which LSRTM does "
+                "not support: an LSRTM stage reads only epochs, lr_scale and "
+                f"wavelet, so the stage would run without {them}. Instead -- "
+                f"{instead} An older run's config_resolved.yaml hits this only "
+                f"if its stages set {them}; that run ignored {them} too.")
+        return self
+
+    @model_validator(mode="after")
     def _no_steady_gcn(self):
         _steady_gcn_needs_freqsel(self.loss, "lsrtm")
         return self
+
+
+# The stage keys the LSRTM loop reads, and what to do instead of each one it
+# does not: one grid, time axis, shot batch, solver and optimizer serve every
+# stage of an LSRTM run.
+_LSRTM_STAGE_KEYS_READ = ("epochs", "lr_scale", "wavelet")
+_LSRTM_STAGE_INSTEAD = {
+    "dh_m": "set grid.dh (every stage runs on the top-level grid)",
+    "dt_s": "set time.dt (every stage runs on the top-level time axis)",
+    "nt": "set time.nt (every stage runs on the top-level time axis)",
+    "batch_size": "set the top-level batchsize",
+    "bandpass": ("remove it; to invert one band, band-limit the source wavelet "
+                 "(wavelet, and modeling_override.wavelet if set, which models "
+                 "the observed data)"),
+    "optimizer_reset": "remove it (LSRTM keeps one optimizer for the whole run)",
+    "inr_lr_scale": ("remove it (it scales a reparam network's lr; LSRTM has "
+                     "none) and use lr_scale"),
+    "boundary": "set backend.cuda_options.memory.boundary (one solver serves every stage)",
+    "frequency": "remove it (frequency selection is an FWI source_encoding mode)",
+}
+
+# The stage keys an FWI path never reads, and what to do instead
+# (FWISpec._stage_keys_the_path_reads). The conventional loop reads every
+# other key; frequency selection reads epochs, dh_m, dt_s, lr_scale (a grid
+# model) or inr_lr_scale (reparam), optimizer_reset, frequency and boundary.
+_CONVENTIONAL_STAGE_INSTEAD = {
+    "boundary": ("set backend.cuda_options.memory.boundary (one backend serves "
+                 "every stage; only source_encoding.mode='frequency_selection' "
+                 "reads a stage's boundary: override)"),
+    "frequency": ("remove it (a stage's frequency: block is the comb of "
+                  "source_encoding.mode='frequency_selection')"),
+}
+_FREQSEL_STAGE_INSTEAD = {
+    "wavelet": ("remove it (no wavelet is modeled: each node emits its comb "
+                "bins, turned on over frequency.ramp_s, and the misfit is blind "
+                "to the source spectrum)"),
+    "nt": ("set steady_samples, slack_samples and probe_samples in its "
+           "frequency: block (the record length is their sum)"),
+    "batch_size": ("set n_pools or random_batch in its frequency: block (the "
+                   "pool is the batch)"),
+    "bandpass": ("set k_lo and k_hi in its frequency: block (the comb is the "
+                 "band; nothing is filtered)"),
+}
+_INR_LR_SCALE_WITHOUT_REPARAM = (
+    "use lr_scale (inr_lr_scale scales a reparam network's lr, and there is no "
+    "reparam: block)")
 
 
 TaskSpec = Annotated[

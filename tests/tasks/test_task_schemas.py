@@ -375,7 +375,7 @@ def test_model_bounds_round_trip(tmp_path):
 
 def test_stages_round_trip(tmp_path):
     template = new_template("fwi")
-    template["epochs"] = 1  # ignored when stages set
+    template["epochs"] = 12  # the stages' sum: what runs
     template["stages"] = [
         {"epochs": 5, "wavelet": {"kind": "ricker", "fm": 3.0}, "lr_scale": 1.0},
         {"epochs": 7, "wavelet": {"kind": "ricker", "fm": 5.0}, "lr_scale": 0.5},

@@ -20,8 +20,8 @@ from sweep_tasks._helpers.model import (
 )
 from sweep_tasks._helpers.optimizer import (
     _apply_stage_lr_scale,
+    _bind_stage_scheduler,
     _build_optimizer,
-    _build_scheduler,
     _remember_initial_lrs,
 )
 from sweep_tasks._helpers.plotting import (
@@ -125,13 +125,14 @@ class LSRTMRunnerMixin:
         total_epochs = (sum(s.epochs for s in spec.stages)
                         if spec.stages else int(spec.epochs))
         optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
-        scheduler = _build_scheduler(spec.scheduler, optimizer, total_epochs)
+        scheduler = None      # bound at each stage entry, as in FWI
         initial_lrs = _remember_initial_lrs(optimizer)
 
         # Resume: same two modes as FWI — see ``_run_fwi`` for semantics.
         losses: list[float] = []
         start_epoch = 0
         resume_src: str | None = None
+        resume_lrs: list | None = None
         if spec.resume_from:
             resume_src = spec.resume_from
             ckpt_dir = Path(spec.output_dir).expanduser() / spec.resume_from
@@ -148,8 +149,7 @@ class LSRTMRunnerMixin:
             ckpt = _dist.broadcast_object(ckpt, dist_info, src=0)
             ref.data.copy_(ckpt["models"]["reflectivity"].to(dev))
             optimizer.load_state_dict(ckpt["optimizer"])
-            if scheduler is not None and ckpt.get("scheduler") is not None:
-                scheduler.load_state_dict(ckpt["scheduler"])
+            resume_lrs = [g["lr"] for g in optimizer.param_groups]
             losses = list(ckpt.get("losses", []))
             start_epoch = int(ckpt["epoch"]) + 1
             if dist_info.is_root:
@@ -185,6 +185,11 @@ class LSRTMRunnerMixin:
             stage_wavelet = (_build_wavelet(stage.wavelet, spec.time)
                              if stage.wavelet is not None else wavelet)
             _apply_stage_lr_scale(optimizer, initial_lrs, stage.lr_scale)
+            # One schedule over the whole run (see _bind_stage_scheduler).
+            scheduler = _bind_stage_scheduler(
+                spec.scheduler, optimizer, total_epochs, epoch_global,
+                resume_lrs=resume_lrs if already_done_in_stage else None)
+            resume_lrs = None
             if dist_info.is_root:
                 print(f"[lsrtm] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")

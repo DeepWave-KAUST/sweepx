@@ -323,7 +323,7 @@ def test_fwi_multi_stage_runs(tmp_path):
             {"epochs": 2, "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0}, "lr_scale": 0.5},
         ],
     )
-    spec_dict["epochs"] = 1  # ignored when stages set
+    spec_dict["epochs"] = 4  # the stages' sum: what runs
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "stages.yaml")))
     assert result.status.state == "success", result.status.error
     assert result.status.summary["num_stages"] == 2
@@ -735,7 +735,7 @@ def test_fwi_stages_per_stage_dh_and_bandpass_runs(tmp_path):
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 1, "batchsize": 3, "show_every": 10,
+        "epochs": 4, "batchsize": 3, "show_every": 10,  # the stages' sum
         "stages": [
             {"epochs": 2, "dh_m": 20.0, "bandpass": {"lo_hz": 1.0, "hi_hz": 6.0}},
             {"epochs": 2, "dh_m": 10.0, "dt_s": 0.001,
