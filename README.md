@@ -1,81 +1,65 @@
 # sweepx
 
-**The `sweep` seismic wave-equation ecosystem — one install, then `import sweep`.**
+**The `sweep` toolkit: seismic I/O, FWI losses, neural reparameterizations, the YAML
+task runner and a natural-language agent, on top of the `sweep` wave-equation engine.**
 
 [![PyPI](https://img.shields.io/pypi/v/sweepx.svg)](https://pypi.org/project/sweepx/)
 [![Python](https://img.shields.io/pypi/pyversions/sweepx.svg)](https://pypi.org/project/sweepx/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-`sweepx` is the umbrella install for [`sweep`](https://github.com/DeepWave-KAUST/sweep) —
-a GPU seismic wave-equation engine (forward modelling, RTM, FWI/LSRTM) — and its
-companion packages. It carries **no code of its own**: `pip install sweepx` pulls
-in the engine and the published companions so you can `import sweep` and go.
+[![Docs](https://img.shields.io/badge/docs-sweepx.deepwave.group-blue)](https://sweepx.deepwave.group/)
 
 ```bash
 pip install sweepx
 ```
 
-## The ecosystem
+That installs the toolkit and the engine it runs on,
+[`sweep-solver`](https://github.com/DeepWave-KAUST/sweep) (`import sweep`), which ships
+prebuilt CUDA cores. Optional extras: `sweepx[segy]`, `[hdf5]`, `[animate]`,
+`[agent-ui]`, `[mcp]`, `[vllm]`, `[all]`.
+[Installation guide](https://sweepx.deepwave.group/getting-started/).
 
-Every piece is a **separate, independently-installable package** (the same layout
-as the [PyLops](https://github.com/PyLops) family). `sweepx` bundles the published
-ones; you can also `pip install` any single package on its own.
+## What is in it
 
-### Published — pulled in by `sweepx`
-
-| Package | `import` | What it does |
+| Module | What it does | Docs |
 |---|---|---|
-| [`sweep-solver`](https://github.com/DeepWave-KAUST/sweep) | `sweep` | Wave-equation **engine**: equations (acoustic / elastic / VTI / TTI / VRZ / SEM), propagators (torch / JAX / CUDA `impl='c'`), operators, boundary-saving, and FWI / LSRTM / RTM building blocks. |
-| [`sweep-tasks`](https://github.com/DeepWave-KAUST/sweep-tasks) | `sweepx.tasks` | Production **FWI / LSRTM runner** — typed YAML task specs, a CLI, multi-GPU runs, field-data pipelines, with preprocessing (`sweepx.tasks.preproc`) and plotting (`sweepx.tasks.viz`) built in. [Docs](https://sweepx.deepwave.group/tasks/) |
-| [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) | `sweepx.loss` | Misfit / loss functions for FWI — two dozen, from L2 to optimal transport. [Docs](https://sweepx.deepwave.group/loss/) |
-| [`sweep-io`](https://github.com/DeepWave-KAUST/sweep-io) | `sweepx.io` | Seismic I/O — SEG-Y, acquisition geometry, data and model plans. [Docs](https://sweepx.deepwave.group/io/) |
-| [`sweep-nn`](https://github.com/DeepWave-KAUST/sweep-nn) | `sweepx.nn` | Neural reparameterizations and priors — INR / hash / SIREN encoders, TV and diffusion priors. [Docs](https://sweepx.deepwave.group/nn/) |
-| [`sweep-agent`](https://github.com/DeepWave-KAUST/sweep-agent) | `sweepx.agent` | Natural-language **control layer** — chat + files → `sweep`, through a local LLM (Ollama / vLLM). Runs forward modelling (acoustic **and** elastic), loads benchmark models, plots — all on the base install. `pip install "sweep-agent[ui]"` adds a web UI. |
+| `sweepx.io` | Seismic I/O — SEG-Y, acquisition geometry, data and model plans. | [IO](https://sweepx.deepwave.group/io/) |
+| `sweepx.loss` | Misfit functions for FWI — two dozen, from L2 to optimal transport. | [Loss](https://sweepx.deepwave.group/loss/) |
+| `sweepx.nn` | Neural reparameterizations and priors — INR / hash / SIREN encoders, TV and diffusion priors. | [NN](https://sweepx.deepwave.group/nn/) |
+| `sweepx.opt` | FWI optimizers — L-BFGS, truncated Newton / Gauss-Newton, Adam, Shampoo / SOAP, preconditioners and bound parameterizations. | [Opt](https://sweepx.deepwave.group/opt/) |
+| `sweepx.tasks` | Production **FWI / LSRTM / RTM runner** — typed YAML task specs, a CLI, multi-GPU runs, field-data pipelines, preprocessing and plotting. | [Tasks](https://sweepx.deepwave.group/tasks/) |
+| `sweepx.agent` | Natural-language **control layer** — chat + files → validated runs, through a local LLM (Ollama / vLLM). | [Agent](https://sweepx.deepwave.group/agent/) |
 
-### Companions — not on PyPI yet
-
-Shipping as they mature; when a companion is published it is added to `sweepx`'s
-dependencies, so you keep the same `pip install sweepx`.
-
-| Package | What it does |
-|---|---|
-| `sweep-tomo` | First-arrival **traveltime tomography** (eikonal + SIRT / FATT). |
-| *(planned)* | `sweep-opt`. |
-
-`sweep-viz` and `sweep-preproc` are no longer separate packages: they are part of
-`sweep-tasks`, as `sweepx.tasks.viz` and `sweepx.tasks.preproc`.
+The modules are layered: `agent` → `tasks` → `io` / `loss` / `nn` / `opt`. A module
+imports only from the layers below it, and the four libraries neither import each other
+nor the engine (checked in CI with import-linter).
 
 ## Quick start
 
-Drive the engine directly:
+```bash
+sweep-tasks run examples/tasks/synthetic/09_forward_constant_box.yaml   # or: sweepx tasks run …
+```
 
 ```python
-import sweep
-from sweep.propagator.torch import PropTorch     # PyTorch propagator
-from sweep import equations, propagator          # native submodules
+import sweep                         # the engine: equations, propagators
+from sweepx.loss import EnvelopeLoss # the toolkit, one module at a time
+from sweepx.tasks import load_task, TaskRunner
 ```
 
 …or in plain language, via the agent (needs a local LLM):
 
 ```bash
-sweep-agent chat
+sweep-agent chat                   # or: sweepx agent chat
 >>> load the Marmousi benchmark model and run a forward — show the shot gather
 ```
 
-## Import name
+## Development
 
-After `pip install sweepx`, **import as `sweep`**, not `sweepx` — same pattern as
-`pip install scikit-learn` → `import sklearn`. The import name `sweep` was already
-taken on PyPI, so the installable is named `sweepx`.
-
-## CUDA backend
-
-`sweep`'s GPU backend (`impl='c'`) ships prebuilt: the `sweep-solver` wheel carries a
-CUDA core for CUDA 12 (V100 and newer) and CUDA 13 (T4 and newer, driver >= 580) and
-loads the one matching your torch. Nothing compiles after `pip install`, with any
-torch version (Python >= 3.10 for `sweepx`); the eager / JAX backends are pure Python.
-Details are in the
-[installation guide](https://sweepx.deepwave.group/solver/getting-started/installation/).
+```bash
+git clone https://github.com/DeepWave-KAUST/sweepx.git && cd sweepx
+pip install -e ".[dev]"
+pytest tests/loss                  # tests/<module>/ for each module
+lint-imports                       # the layering contract
+```
 
 ## License
 

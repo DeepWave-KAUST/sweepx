@@ -1,18 +1,12 @@
 # Installation
 
 ```bash
-pip install sweep-nn
+pip install sweepx
 ```
 
-That needs only PyTorch and NumPy. It also comes with `pip install sweepx`, through
-sweep-tasks.
-
-The [examples](../examples/README.md) drive sweep's compiled wave solver, so they also
-need a CUDA GPU and
-
-```bash
-pip install sweep-solver
-```
+`sweepx.nn` is part of `sweepx`; on its own it needs only PyTorch and NumPy. The
+[examples](../examples/README.md) drive sweep's compiled wave solver (installed with
+`sweepx`), so they also need a CUDA GPU.
 
 Verify the install:
 

@@ -1,7 +1,7 @@
 # iFWI — the model as a network
 
 ```bash
-sweep-tasks run examples/synthetic/07_fwi_marmousi_inr.yaml
+sweep-tasks run examples/tasks/synthetic/07_fwi_marmousi_inr.yaml
 ```
 
 Same physics, same data, different **unknowns**. Instead of 382,441 velocity

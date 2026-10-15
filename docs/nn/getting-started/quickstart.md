@@ -39,6 +39,6 @@ Marmousi, against conventional FWI.
 
 ## Without a wave equation
 
-[`quickstart.py`](https://github.com/DeepWave-KAUST/sweep-nn/blob/main/docs/examples/quickstart.py)
+[`quickstart.py`](https://github.com/DeepWave-KAUST/sweepx/blob/main/docs/nn/examples/quickstart.py)
 fits a SIREN straight to a velocity model, the shortest way to see the API. It uses a GPU
 when there is one and otherwise runs on a CPU in under twenty seconds.

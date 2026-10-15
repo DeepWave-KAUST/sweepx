@@ -4,7 +4,7 @@
 
 `sweep-agent` degrades gracefully around what's installed:
 
-- **Base install (`pip install sweep-agent`)** — the CLI, the ~30-tool registry,
+- **Base install (`pip install sweepx`)** — the CLI, the ~30-tool registry,
   and the core solver. Discovery, inspection, plotting, **forward modelling
   (acoustic + elastic)**, and **benchmark models** all work.
 - **`+ sweep-tasks`** — unlocks the production tier: `build_*_spec`, `run_task`,

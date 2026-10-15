@@ -1,10 +1,10 @@
 # Viking 2-D end-to-end config — one file drives every sweep-tasks step
 # in the wavelet-estimation pipeline. Pair with the README at
-# `sweep-tasks/docs/datasets/viking/README.md`.
+# `docs/tasks/datasets/viking/README.md`.
 #
 # Usage:
 #   export VIKING_HOME=$HOME/viking
-#   cp sweep-tasks/examples/configs/viking.yaml $VIKING_HOME/viking.yaml
+#   sweep-tasks init viking -o $VIKING_HOME/viking.yaml
 #   # edit paths if needed, then:
 #   sweep-tasks build-index        --config $VIKING_HOME/viking.yaml
 #   sweep-tasks build-plan         --config $VIKING_HOME/viking.yaml

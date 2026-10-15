@@ -1,12 +1,12 @@
 # Frequency-selection FWI, 2-D
 
 ```bash
-RUNS=examples/synthetic/sweep_runs
-sweep-tasks run examples/synthetic/11_forward_freqsel_nodes.yaml
+RUNS=examples/tasks/synthetic/sweep_runs
+sweep-tasks run examples/tasks/synthetic/11_forward_freqsel_nodes.yaml
 sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes --n-p 50000 --k-lo 50 --k-hi 150 -o $RUNS/coeff_1_3hz.npz
 sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes --n-p 25000 --k-lo 50 --k-hi 150 -o $RUNS/coeff_2_6hz.npz
 sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes --n-p 17000 --k-lo 68 --k-hi 170 -o $RUNS/coeff_4_10hz.npz
-sweep-tasks run examples/synthetic/12_fwi_marmousi_freqsel.yaml
+sweep-tasks run examples/tasks/synthetic/12_fwi_marmousi_freqsel.yaml
 ```
 
 Three steps rather than one, because this method inverts **pre-extracted

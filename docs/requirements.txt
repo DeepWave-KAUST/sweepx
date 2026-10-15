@@ -1,7 +1,6 @@
 # Docs toolchain for the sweepx umbrella build (mkdocs + multirepo + jupyter).
-# The geophysics packages themselves (torch, sweep-solver, sweep-agent,
-# sweep-tasks) are installed in the workflow — mkdocstrings imports them to
-# render each package's API.
+# The toolkit itself and sweep-solver@dev are installed in the workflow —
+# mkdocstrings imports them to render the API pages.
 mkdocs>=1.6
 mkdocs-material>=9.5
 mkdocs-multirepo-plugin>=0.8

@@ -34,7 +34,7 @@ from sweepx.tasks.yaml_io import (
 )
 
 try:
-    __version__ = _pkg_version("sweep-tasks")
+    __version__ = _pkg_version("sweepx")
 except PackageNotFoundError:  # a source tree with nothing installed
     __version__ = "unknown"
 

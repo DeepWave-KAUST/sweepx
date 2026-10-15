@@ -1,6 +1,6 @@
 # Examples
 
-Every example is one YAML file under `examples/synthetic/`, run with one
+Every example is one YAML file under `examples/tasks/synthetic/`, run with one
 command. The models come from `sweep.datasets` (Marmousi-II is embedded in the
 `sweep` package), so there is nothing to download and no path to set. Each
 page below covers one task: what it teaches, the command, and the result the
@@ -19,7 +19,7 @@ reference run produced, so you can check your own run against something.
 | [Frequency-selection FWI, 3-D](freqsel-3d.md) | 13, 14 | the same pipeline on 3-D Overthrust |
 | [Anisotropic and elastic](multiparameter.md) | 16, 17 | multi-parameter equations: VTI, and P + S in one record |
 | [Introspection](introspect.md) | 15 | ask the installed solver what it can do |
-| [Viking (field data)](../datasets/viking/README.md) | `examples/field/viking/` | real SEG-Y: build-index → wavelet → FWI → RTM |
+| [Viking (field data)](../datasets/viking/README.md) | `examples/tasks/field/viking/` | real SEG-Y: build-index → wavelet → FWI → RTM |
 
 New to task YAMLs? Read [09](forward.md#09-the-smallest-task-there-is) first:
 it annotates every field. On a new machine, run [15](introspect.md) first: it
@@ -34,7 +34,7 @@ pass `--override backend.impl=eager`) and expect roughly 30× the wall time.
 
 Relative paths in a task YAML resolve against the YAML **file**, not your
 shell's working directory, so every run lands in
-`examples/synthetic/sweep_runs/<task_id>/` (gitignored). Pass
+`examples/tasks/synthetic/sweep_runs/<task_id>/` (gitignored). Pass
 `--override output_dir=/somewhere/else` to put it elsewhere.
 
 ## The Marmousi velocity presets

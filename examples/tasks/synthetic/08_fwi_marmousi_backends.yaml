@@ -7,7 +7,7 @@
 # Needs:    nothing (models from `sweep.datasets`).
 #
 # Run:
-#   sweep-tasks run examples/synthetic/08_fwi_marmousi_backends.yaml
+#   sweep-tasks run examples/tasks/synthetic/08_fwi_marmousi_backends.yaml
 #
 # Swap one block at a time and compare wall time and `nvidia-smi` peak memory.
 # Epochs are cut to 10 so a sweep over the variants is quick.

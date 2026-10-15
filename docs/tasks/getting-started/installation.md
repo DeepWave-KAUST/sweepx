@@ -1,16 +1,19 @@
 # Installation
 
 ```bash
-pip install sweep-tasks
+pip install sweepx
 ```
 
-That pulls the solver (`sweep-solver`) and the three packages sweep-tasks builds
-on: `sweep-loss` (misfits), `sweep-io` (SEG-Y, acquisition plans) and
-`sweep-nn` (network reparameterisations and priors). Or install the whole
-ecosystem with the umbrella package:
+`sweepx.tasks` is part of `sweepx`, together with the modules it builds on:
+`sweepx.loss` (misfits), `sweepx.io` (SEG-Y, acquisition plans) and `sweepx.nn`
+(network reparameterisations and priors). The install also pulls the solver
+(`sweep-solver`) and puts the `sweep-tasks` command on your PATH (also reachable
+as `sweepx tasks`).
+
+Field data in SEG-Y needs the `segy` extra:
 
 ```bash
-pip install sweepx
+pip install "sweepx[segy]"
 ```
 
 Verify the install:
@@ -20,7 +23,7 @@ import sweepx.tasks
 print(sweepx.tasks.__version__)
 ```
 
-`sweep-tasks` runs anywhere `sweep` runs — a CPU for small jobs, CUDA for
+`sweepx.tasks` runs anywhere `sweep` runs — a CPU for small jobs, CUDA for
 production. The GPU backend (`backend: {impl: c}`) ships precompiled in the
 `sweep-solver` wheel, so nothing compiles at install or on first use;
 `impl: eager` is pure PyTorch. [Example 15](../examples/introspect.md) lists

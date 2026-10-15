@@ -1,4 +1,4 @@
-# sweep-agent
+# sweepx.agent
 
 **Offline-LLM natural-language control for the [`sweep`](../solver/) stack** — say
 what you want in plain language and a **local** LLM turns it into a validated
@@ -7,7 +7,7 @@ what you want in plain language and a **local** LLM turns it into a validated
 > *"here is `vp_init.npy` and `obs.segy`, run an FWI starting at 10 Hz"* → a local
 > LLM turns that into a validated `sweep` task and runs it.
 
-Installed with `pip install sweep-agent` (also bundled by `pip install sweepx`)
+Part of `sweepx` (`pip install sweepx`)
 → `import sweepx.agent`.
 
 ## How it works
@@ -34,7 +34,7 @@ Tools import the geophysics stack **lazily** — a missing layer returns a clear
 
 ## What works at each layer
 
-| tools | `pip install sweep-agent` | `+ sweep-tasks` |
+| tools | `pip install sweepx` | `+ sweep-tasks` |
 |---|:--:|:--:|
 | `tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ |
 | `plot_*`, `compare_shot_gathers`, `list_equations` | ✅ | ✅ |

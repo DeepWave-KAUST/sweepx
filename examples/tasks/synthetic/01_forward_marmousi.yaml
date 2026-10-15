@@ -6,7 +6,7 @@
 # Produces: output/record.npy + sources.npy + receivers.npy.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+#   sweep-tasks run examples/tasks/synthetic/01_forward_marmousi.yaml
 #
 # Pairs with 02 / 03, which invert this same setup. Grid, wavelet and
 # geometry are kept identical across all three so the synthetic obs is

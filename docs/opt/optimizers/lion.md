@@ -15,7 +15,7 @@ $$
 Compared to Adam, Lion holds **half the per-parameter state** (only `m`,
 no `v`) and matches or exceeds Adam on a wide range of vision and
 language benchmarks. Less is known about its behaviour on physics-based
-inverse problems; sweep-opt ships it for FWI experiments.
+inverse problems; sweepx.opt ships it for FWI experiments.
 
 ## API
 

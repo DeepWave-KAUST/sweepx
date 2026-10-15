@@ -6,7 +6,7 @@
 # Produces: output/record.npy (nshots, nt, nrec, 2) + sources/receivers.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/17_forward_elastic.yaml
+#   sweep-tasks run examples/tasks/synthetic/17_forward_elastic.yaml
 #
 # There is no `pml_type:` below, on purpose. Elastic is solved on a STAGGERED
 # grid, so its PML is the staggered `cpmls` (eight damping profiles, against the

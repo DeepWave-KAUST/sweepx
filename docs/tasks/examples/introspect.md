@@ -1,7 +1,7 @@
 # Introspection
 
 ```bash
-sweep-tasks run examples/synthetic/15_introspect_equations.yaml
+sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml
 ```
 
 `task_type: introspect` asks the **installed** solver which equations it
@@ -41,6 +41,6 @@ alone (`Acoustic`, `Acoustic3D`, `AcousticCurvilinear`):
 So to find out what `Elastic` needs before writing a `models:` block:
 
 ```bash
-sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
+sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml \
     --override action=describe_equation --override target=Elastic
 ```

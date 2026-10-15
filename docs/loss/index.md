@@ -1,8 +1,8 @@
-# sweep-loss
+# sweepx.loss
 
 A PyTorch library of misfit (loss) functions for **Full Waveform Inversion (FWI)**.
 
-`sweep-loss` collects, behind a single ergonomic API, the loss functions that
+`sweepx.loss` collects, behind a single ergonomic API, the loss functions that
 have been proposed in the geophysical FWI literature — from classical
 least-squares to optimal-transport / adaptive matching-filter / envelope /
 phase variants — and exposes every one of them as a `torch.nn.Module` so

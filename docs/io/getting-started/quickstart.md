@@ -24,7 +24,7 @@ node (OBN) data wants. The plan stores, for every trace, which file it is in and
 at which byte offset, so `read_group` seeks straight to the traces and merges adjacent
 reads.
 
-[`examples/segy_to_plan.py`](https://github.com/DeepWave-KAUST/sweep-io/blob/main/examples/segy_to_plan.py)
+[`examples/segy_to_plan.py`](https://github.com/DeepWave-KAUST/sweepx/blob/main/examples/io/segy_to_plan.py)
 runs this on a synthetic file it writes first, so you can try it without data.
 
 ## Read ahead while the GPU works

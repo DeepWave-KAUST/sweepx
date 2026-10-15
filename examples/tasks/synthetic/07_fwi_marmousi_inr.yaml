@@ -7,7 +7,7 @@
 # Produces: output/inverted_vp.npy (the rendered model) + loss.npy.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/07_fwi_marmousi_inr.yaml
+#   sweep-tasks run examples/tasks/synthetic/07_fwi_marmousi_inr.yaml
 #
 # Everything OUTSIDE the `reparam:` block is deliberately the same as 03 —
 # same grid, geometry, wavelet, stage ladder, epochs, batch size. That is the

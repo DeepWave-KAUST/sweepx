@@ -9,14 +9,16 @@ want to work — Python, or plain language.
 pip install sweepx
 ```
 
-That pulls the engine ([sweep-solver](solver/index.md)), the natural-language layer
-([sweep-agent](agent/index.md)) and the YAML task runner ([sweep-tasks](tasks/index.md),
-with [sweep-loss](loss/index.md)). **Import as `sweep`**, not `sweepx` — same pattern as
-`scikit-learn` → `sklearn`:
+That pulls the engine ([sweep-solver](solver/index.md)) and the toolkit built on it:
+the YAML task runner ([`sweepx.tasks`](tasks/index.md)), the losses, networks and I/O it
+uses ([`sweepx.loss`](loss/index.md), [`sweepx.nn`](nn/index.md), [`sweepx.io`](io/index.md))
+and the natural-language layer ([`sweepx.agent`](agent/index.md)). The engine imports as
+`sweep` (the name `sweep` was taken on PyPI, hence `sweep-solver`), the toolkit as `sweepx.<module>`:
 
 ```python
 import sweep
-print(sweep.__version__)
+import sweepx.tasks
+print(sweep.__version__, sweepx.__version__)
 ```
 
 Python 3.10+. The wheel ships a prebuilt CUDA core, so the native-CUDA backend
@@ -61,7 +63,7 @@ loss.backward()          # vp.grad is a plain torch Tensor — feed any optimize
 
 ## …or say it in plain language
 
-[sweep-agent](agent/index.md) turns a sentence into a validated run, driven by a **local**
+[`sweepx.agent`](agent/index.md) turns a sentence into a validated run, driven by a **local**
 LLM (Ollama on a Mac, vLLM on a GPU node):
 
 ```bash
@@ -103,6 +105,12 @@ sweep-agent chat
     ---
 
     SEG-Y to gathers: header index, data plans, prefetched reads, models, geometry.
+
+-   :material-chart-timeline-variant: __[Opt](opt/index.md)__
+
+    ---
+
+    FWI optimizers: L-BFGS, truncated Newton / Gauss-Newton, Adam, Shampoo / SOAP, preconditioners.
 
 -   :material-message-processing-outline: __[Agent](agent/index.md)__
 

@@ -1,7 +1,7 @@
 # FWI, multiscale
 
 ```bash
-sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
+sweep-tasks run examples/tasks/synthetic/03_fwi_marmousi_multiscale.yaml
 ```
 
 Same grid, geometry and wavelet as [01](forward.md) and

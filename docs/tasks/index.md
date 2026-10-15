@@ -1,4 +1,4 @@
-# sweep-tasks
+# sweepx.tasks
 
 The **typed YAML task layer** for [`sweep`](../solver/) — the front door for
 **CLI-** and **LLM-driven** FWI / LSRTM / RTM / forward / wavefield runs.
@@ -9,7 +9,7 @@ an LLM) and have it executed **reproducibly** — one process or `torchrun`
 multi-rank, shot-parallel by default, with `status.json` + `checkpoint.pt` +
 figures written per run.
 
-Installed with `pip install sweep-tasks` (also bundled by `pip install sweepx`)
+Part of `sweepx` (`pip install sweepx`)
 → `import sweepx.tasks`.
 
 ![Marmousi FWI](examples/figures/02_vp_final.png)

@@ -29,7 +29,7 @@ conda activate base
 export MPLCONFIGDIR=/tmp/mpl_viking_rtm_lm
 export PYTHONUNBUFFERED=1
 
-YAML=${SWEEP_STACK_ROOT}/sweep-tasks/examples/tasks/viking_rtm_legacy_match.yaml
+YAML=${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/field/viking/viking_rtm_legacy_match.yaml
 
 cd ${SWEEP_USER_ROOT}/sweep-stack
 torchrun --standalone --nproc_per_node=1 -m sweepx.tasks run "$YAML"

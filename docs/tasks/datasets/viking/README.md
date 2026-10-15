@@ -777,7 +777,7 @@ iteration, exactly like shot mini-batching.
 ### 5b — Run it
 
 ```bash
-cp ${SWEEP_TASKS}/examples/field/viking/viking_freqsel_8band.yaml \
+cp ${SWEEPX}/examples/tasks/field/viking/viking_freqsel_8band.yaml \
    $VIKING_HOME/run/viking_freqsel.yaml
 sweep-tasks run $VIKING_HOME/run/viking_freqsel.yaml
 ```
@@ -857,7 +857,7 @@ sweep-tasks init rtm -o $VIKING_HOME/run/viking_rtm.yaml
 ```
 
 (Or copy the in-repo Viking-specific example
-`${SWEEP_TASKS}/examples/field/viking/viking_rtm_legacy_match.yaml`.)
+`${SWEEPX}/examples/tasks/field/viking/viking_rtm_legacy_match.yaml`.)
 
 Point its `velocity_model.path` at your Step 5 output:
 
@@ -969,7 +969,7 @@ sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
 # (built in memory by init_model.linear_gradient inside the Step 5 YAML)
 
 # === Step 5: freqsel FWI on one GPU (8 bands, ~10 min) =====================
-SWEEP_TASKS=$(python -c "import sweepx.tasks, pathlib; print(pathlib.Path(sweepx.tasks.__file__).parent.parent.parent)")
+SWEEPX=$(python -c "import sweepx, pathlib; print(pathlib.Path(sweepx.__file__).parents[2])")   # the sweepx checkout
 mkdir -p $VIKING_HOME/run/shards
 while read lo hi n_p klo khi; do
   sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
@@ -985,12 +985,12 @@ done <<'BANDS'
 3 18 12000 36 216
 2 20 10000 20 200
 BANDS
-cp ${SWEEP_TASKS}/examples/field/viking/viking_freqsel_8band.yaml $VIKING_HOME/run/viking_freqsel.yaml
+cp ${SWEEPX}/examples/tasks/field/viking/viking_freqsel_8band.yaml $VIKING_HOME/run/viking_freqsel.yaml
 sweep-tasks run $VIKING_HOME/run/viking_freqsel.yaml
 # (multi-GPU on the same box: append --nproc-per-node N)
 
 # === Step 6: RTM ===========================================================
-cp ${SWEEP_TASKS}/examples/field/viking/viking_rtm_legacy_match.yaml $VIKING_HOME/run/viking_rtm.yaml
+cp ${SWEEPX}/examples/tasks/field/viking/viking_rtm_legacy_match.yaml $VIKING_HOME/run/viking_rtm.yaml
 # …edit velocity_model.path + plan_path, then:
 sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
 
@@ -1005,16 +1005,15 @@ sweep-tasks filter-image \
 ## Running on a cluster (optional)
 
 For SLURM / ibex-style clusters the repo ships matching sbatch
-templates under `sweep-tasks/examples/sbatch/`. They reference a
+templates under `examples/tasks/sbatch/`. They reference a
 small set of environment roots — `SWEEP_USER_ROOT`,
-`SWEEP_STACK_ROOT`, `SWEEP_REPOS_ROOT`, `SWEEP_RUNS_ROOT`,
+`SWEEP_REPOS_ROOT`, `SWEEP_RUNS_ROOT`,
 `SWEEP_CONDA_ROOT`, `PROJECT_DATA_ROOT` — that you set in your login
 shell rc before `sbatch`-ing. A working KAUST / ibex layout:
 
 ```bash
 export SWEEP_USER_ROOT=/ibex/user/${USER}
-export SWEEP_STACK_ROOT=${SWEEP_USER_ROOT}/sweep-stack
-export SWEEP_REPOS_ROOT=${SWEEP_USER_ROOT}/repo
+export SWEEP_REPOS_ROOT=${SWEEP_USER_ROOT}/repo           # holds the sweepx checkout
 export SWEEP_RUNS_ROOT=${SWEEP_USER_ROOT}/runs
 export SWEEP_CONDA_ROOT=${SWEEP_USER_ROOT}/miniconda3
 export PROJECT_DATA_ROOT=/ibex/project/<your-allocation>   # holds the raw SEG-Y
@@ -1024,9 +1023,9 @@ Then:
 
 ```bash
 # 4× V100 production FWI (6 stages, ~1 h 16 min wall)
-sbatch ${SWEEP_STACK_ROOT}/sweep-tasks/examples/sbatch/viking_6stage_30hz.sbatch
+sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_6stage_30hz.sbatch
 # 1× V100 RTM
-sbatch ${SWEEP_STACK_ROOT}/sweep-tasks/examples/sbatch/viking_rtm.sbatch
+sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_rtm.sbatch
 ```
 
 If you don't have or need SLURM, just stay with the `sweep-tasks run`
@@ -1083,10 +1082,10 @@ scripts and trying to map field names:
 
 - [`docs/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
   build-plan / run reference (covers all datasets).
-- [`examples/field/viking/*.yaml`](https://github.com/DeepWave-KAUST/sweep-tasks/tree/main/examples/field/viking) — every
+- [`examples/tasks/field/viking/*.yaml`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/field/viking) — every
   Viking task YAML, including the 6-stage and 8-stage FWI ladders
   and the legacy-matching RTM.
-- [`examples/sbatch/viking_*.sbatch`](https://github.com/DeepWave-KAUST/sweep-tasks/tree/main/examples/sbatch) —
+- [`examples/tasks/sbatch/viking_*.sbatch`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/sbatch) —
   matching ibex sbatch templates (cluster users only).
 - `fwi_workflow-dev/docs/datasets/viking/README.md` — legacy reference
   (number-for-number equivalent through Step 6).

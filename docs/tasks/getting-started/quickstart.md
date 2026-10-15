@@ -6,20 +6,20 @@ The models come from `sweep.datasets`, so the example YAMLs are self-contained â
 no `.npy` to prepare, no env vars, no SEG-Y:
 
 ```bash
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
+sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml
 ```
 
 That is a full FWI on Marmousi-II: the observed data are synthesised from the
 true model on the fly, and 200 epochs from a smoothed start take about 30 min
 on one RTX 6000 Ada. The result lands in
-`examples/synthetic/sweep_runs/fwi_marmousi_single/output/inverted_vp.npy`:
+`examples/tasks/synthetic/sweep_runs/fwi_marmousi_single/output/inverted_vp.npy`:
 
 ![inverted vp](../examples/figures/02_vp_final.png)
 
 To see the data rather than invert it, run the forward on its own:
 
 ```bash
-sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+sweep-tasks run examples/tasks/synthetic/01_forward_marmousi.yaml
 ```
 
 The [Examples](../examples/index.md) cover every task type the same way, with

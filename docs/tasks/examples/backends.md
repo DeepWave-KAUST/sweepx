@@ -1,7 +1,7 @@
 # Backends and memory
 
 ```bash
-sweep-tasks run examples/synthetic/08_fwi_marmousi_backends.yaml
+sweep-tasks run examples/tasks/synthetic/08_fwi_marmousi_backends.yaml
 ```
 
 The same FWI as [02](fwi-single.md) cut to 10 epochs, with every `backend:`

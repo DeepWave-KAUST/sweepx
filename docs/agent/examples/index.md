@@ -1,6 +1,6 @@
 # Examples
 
-Prompts that work on the **base install** (`pip install sweep-agent` + a local
+Prompts that work on the **base install** (`pip install sweepx` + a local
 LLM) — no `sweep-tasks`, nothing to download:
 
 ```text
@@ -14,7 +14,7 @@ inspect obs.segy and tell me its geometry
 The same prompts are one-click **demo chips** in the web UI:
 
 ```bash
-pip install "sweep-agent[ui]"
+pip install "sweepx[agent-ui]"
 sweep-agent ui          # → open :7860
 ```
 

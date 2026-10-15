@@ -31,7 +31,7 @@ conda activate base
 export MPLCONFIGDIR=/tmp/mpl_viking_6stage_plan
 export PYTHONUNBUFFERED=1
 
-YAML=${SWEEP_STACK_ROOT}/sweep-tasks/examples/tasks/viking_siren_hash_6stage_30hz_from_plan.yaml
+YAML=${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/field/viking/viking_siren_hash_6stage_30hz_from_plan.yaml
 
 cd ${SWEEP_USER_ROOT}/sweep-stack
 torchrun --standalone --nproc_per_node=4 -m sweepx.tasks run "$YAML"

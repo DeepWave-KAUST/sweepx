@@ -620,7 +620,7 @@ When enabled, the runner adds these files per target to `artifacts`:
 | Wavelet-free encoded FWI | YAML: `source_encoding: {enabled: true, mode: frequency_selection, frequency: {coeff_shards: ...}}` |
 | Hold the water column | YAML: `water: {seabed: seabed.npz, velocity: 1500.0}` |
 | Migrate retired water keys | `sweep-tasks migrate-water old.yaml -o new.yaml` |
-| Ask the build what it can solve | `sweep-tasks run examples/synthetic/15_introspect_equations.yaml` |
+| Ask the build what it can solve | `sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml` |
 | Post-filter a saved RTM npy | `sweep-tasks filter-image runs/.../rtm_image_per_shot_normalised.npy` |
 | Bake the post-filter into the RTM run | Add `imaging.post_filter: {enabled: true}` to the RTM YAML |
 

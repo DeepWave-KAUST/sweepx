@@ -631,6 +631,6 @@ For misfits that need extra parameters (`dt`, `epsilon`, `freq_band`,
 ## How to cite
 
 > Wang, S. (2026). *sweep-loss: a PyTorch library of misfit functions for
-> Full Waveform Inversion.*  https://github.com/DeepWave-KAUST/sweep-loss
+> Full Waveform Inversion.*  https://github.com/DeepWave-KAUST/sweepx
 
 Per-loss citations: see the DOI links above.

@@ -33,9 +33,9 @@ conda activate base
 export MPLCONFIGDIR=/tmp/mpl_viking_rtm
 export PYTHONUNBUFFERED=1
 
-YAML=${SWEEP_REPOS_ROOT}/sweep-tasks/examples/tasks/viking_rtm_finegrid.yaml
+YAML=${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/field/viking/viking_rtm_finegrid.yaml
 
-cd ${SWEEP_REPOS_ROOT}/sweep-tasks
+cd ${SWEEP_REPOS_ROOT}/sweepx
 torchrun --standalone --nproc_per_node=1 -m sweepx.tasks run "$YAML"
 
 echo "============================================================"

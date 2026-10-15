@@ -19,7 +19,7 @@ Both build their models in memory, need no dataset, and run on `impl: eager`.
 ## 16 — VTI anisotropy
 
 ```bash
-sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml
+sweep-tasks run examples/tasks/synthetic/16_forward_anisotropic.yaml
 ```
 
 A wavefront whose velocity depends on the direction it travels — which no
@@ -27,7 +27,7 @@ isotropic example can show. Thomsen's parameters are defined so that zero means
 isotropy, so re-running with `epsilon` and `delta` both 0 is a clean control:
 
 ```bash
-sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml \
+sweep-tasks run examples/tasks/synthetic/16_forward_anisotropic.yaml \
     --override task_id=aniso_iso \
     --override 'models=[{"name":"vp","constant":2500.0,"shape":[200,360]},
                         {"name":"epsilon","constant":0.0,"shape":[200,360]},
@@ -56,7 +56,7 @@ NMO velocity `vp·sqrt(1 + 2δ)`) rather than the horizontal asymptote.
 ## 17 — elastic: P and S in one record
 
 ```bash
-sweep-tasks run examples/synthetic/17_forward_elastic.yaml
+sweep-tasks run examples/tasks/synthetic/17_forward_elastic.yaml
 ```
 
 An explosive source in the elastic equation is equal normal stresses,

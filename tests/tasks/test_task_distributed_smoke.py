@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 
 
 def _write_tiny_models(tmp_path: Path) -> tuple[Path, Path]:

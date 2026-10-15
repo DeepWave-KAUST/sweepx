@@ -151,4 +151,4 @@ __all__ = [
     "w2_loss",
 ]
 
-__version__ = "0.1.0"
+from sweepx import __version__  # one version for the whole toolkit

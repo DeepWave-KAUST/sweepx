@@ -1,21 +1,19 @@
 # Installation
 
 ```bash
-pip install sweep-io
+pip install sweepx
 ```
 
-That needs only NumPy. It also comes with `pip install sweepx`, through sweep-tasks.
-
-The optional dependencies are imported only by the code that needs them:
+`sweepx.io` is part of `sweepx`; on its own it needs only NumPy and SciPy. The
+optional dependencies are imported only by the code that needs them:
 
 | Extra | Adds | For |
 |---|---|---|
 | `segy` | `segyio` | `read_segy` / `write_segy`, whole-file reads and writes |
 | `hdf5` | `h5py` | `.h5` velocity models |
-| `torch` | `torch` | `ShotGatherDataset`, `CRGBatchDataset`, `CUDAPrefetcher` |
 
 ```bash
-pip install "sweep-io[segy,hdf5,torch]"
+pip install "sweepx[segy,hdf5]"
 ```
 
 The byte-offset readers and everything on the index → plan → reader path need none of

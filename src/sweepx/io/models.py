@@ -133,7 +133,7 @@ def _load_h5(path: Path, _opts: dict) -> np.ndarray:
     try:
         import h5py
     except ImportError as e:
-        raise ImportError("HDF5 load requires `pip install sweep-io[hdf5]`.") from e
+        raise ImportError("HDF5 load requires `pip install sweepx[hdf5]`.") from e
     with h5py.File(path, "r") as f:
         if "vp" in f:
             return f["vp"][...]
@@ -150,7 +150,7 @@ def _save_h5(path: Path, arr: np.ndarray, header: dict) -> None:
     try:
         import h5py
     except ImportError as e:
-        raise ImportError("HDF5 save requires `pip install sweep-io[hdf5]`.") from e
+        raise ImportError("HDF5 save requires `pip install sweepx[hdf5]`.") from e
     with h5py.File(path, "w") as f:
         d = f.create_dataset("vp", data=arr)
         for k, v in header.items():

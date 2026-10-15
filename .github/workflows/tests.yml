@@ -1,0 +1,45 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layers:
+    # The layering contract: agent -> tasks -> io | loss | nn, libraries free of
+    # the engine. Static, so it needs no torch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --no-deps -e . && pip install "import-linter>=2.0"
+      - run: lint-imports
+
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [io, loss, nn, opt, tasks, agent]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: CPU torch
+        # sweep-solver leaves torch unpinned; the CPU wheel keeps pip from
+        # pulling the multi-GB CUDA build.
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[test]"
+      - name: pytest tests/${{ matrix.module }}
+        env:
+          OMP_NUM_THREADS: "2"
+        run: pytest tests/${{ matrix.module }} -rfE

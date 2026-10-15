@@ -1,9 +1,10 @@
 """Smoke test that the package imports and fixtures load."""
+import sweepx
 import sweepx.opt
 
 
 def test_package_importable():
-    assert sweepx.opt.__version__ == "0.1.0"
+    assert sweepx.opt.__version__ == sweepx.__version__   # one version for the toolkit
     assert hasattr(sweepx.opt, "optim")
     assert hasattr(sweepx.opt, "precond")
     assert hasattr(sweepx.opt, "parameterization")

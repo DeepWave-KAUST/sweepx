@@ -1,6 +1,6 @@
 # Quick start
 
-`sweep-opt` exposes every optimizer through PyTorch's standard
+`sweepx.opt` exposes every optimizer through PyTorch's standard
 `torch.optim.Optimizer` interface, so the entire library can be adopted by
 swapping a single line.
 
@@ -20,7 +20,7 @@ for epoch in range(cfg["epochs"]):
     optimizer.step()
 ```
 
-To use any first-order sweep-opt optimizer, change only the constructor
+To use any first-order sweepx.opt optimizer, change only the constructor
 (everything Tier-1+ supports a closure-less `step()` for compatibility with
 this exact loop):
 

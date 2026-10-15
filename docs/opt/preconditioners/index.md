@@ -1,6 +1,6 @@
 # Preconditioners
 
-Preconditioners in `sweep-opt` are objects that pre-multiply a gradient
+Preconditioners in `sweepx.opt` are objects that pre-multiply a gradient
 before an optimizer's `step()` consumes it. They share a single contract:
 
 ```python

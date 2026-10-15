@@ -35,7 +35,7 @@ export PYTHONUNBUFFERED=1
 export DUMP_LOSS_INPUTS=${SWEEP_RUNS_ROOT}/viking_dump/loss_inputs_nodedupe.npz
 export DUMP_LOSS_INPUTS_EXIT=1
 
-YAML=${SWEEP_STACK_ROOT}/sweep-tasks/examples/tasks/viking_dump_loss_inputs.yaml
+YAML=${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/field/viking/viking_dump_loss_inputs.yaml
 
 cd ${SWEEP_USER_ROOT}/sweep-stack
 torchrun --standalone --nproc_per_node=1 -m sweepx.tasks run "$YAML" || true

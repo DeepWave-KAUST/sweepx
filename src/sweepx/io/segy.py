@@ -465,7 +465,7 @@ def read_segy(
         import segyio  # type: ignore
     except ImportError as e:
         raise ImportError(
-            "read_segy requires `segyio`. Install with `pip install sweep-io[segy]`."
+            "read_segy requires `segyio`. Install with `pip install sweepx[segy]`."
         ) from e
     with segyio.open(str(path), "r", iline=iline, xline=xline, strict=strict) as f:
         dt = segyio.dt(f) / 1e6
@@ -498,7 +498,7 @@ def write_segy(
         import segyio  # type: ignore
     except ImportError as e:
         raise ImportError(
-            "write_segy requires `segyio`. Install with `pip install sweep-io[segy]`."
+            "write_segy requires `segyio`. Install with `pip install sweepx[segy]`."
         ) from e
     if data.ndim != 2:
         raise ValueError(f"write_segy expects (n_traces, n_samples); got {data.shape}")

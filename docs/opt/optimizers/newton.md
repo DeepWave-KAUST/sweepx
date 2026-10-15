@@ -25,7 +25,7 @@ than direct Newton on ill-posed inverse problems.
 
 ## Calling convention - **closure must NOT call `backward`**
 
-Unlike the rest of sweep-opt's optimizers, `TruncatedNewton` requires the
+Unlike the rest of sweepx.opt's optimizers, `TruncatedNewton` requires the
 intact autograd graph to assemble HVPs, so the user-supplied callable is a
 pure **loss function** (no `backward`):
 

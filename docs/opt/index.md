@@ -1,10 +1,10 @@
-# sweep-opt
+# sweepx.opt
 
 PyTorch optimizers tailored for **Full Waveform Inversion (FWI)** in seismic imaging.
 
 ## What this library is
 
-`sweep-opt` is a curated collection of optimization algorithms exposed through
+`sweepx.opt` is a curated collection of optimization algorithms exposed through
 PyTorch's standard `torch.optim.Optimizer` interface, packaged so that they
 drop into any PyTorch-based FWI workflow with at most one constructor change.
 It pairs naturally with:

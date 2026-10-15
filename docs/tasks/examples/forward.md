@@ -8,7 +8,7 @@ and receivers by hand.
 ## 01 — a Marmousi shot record
 
 ```bash
-sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+sweep-tasks run examples/tasks/synthetic/01_forward_marmousi.yaml
 ```
 
 Propagates an 8 Hz Ricker through `vp_true` with 114 shots at 150 m and a
@@ -37,7 +37,7 @@ Two properties of this acquisition drive the choices in the FWI examples:
 ## 09 — the smallest task there is
 
 ```bash
-sweep-tasks run examples/synthetic/09_forward_constant_box.yaml
+sweep-tasks run examples/tasks/synthetic/09_forward_constant_box.yaml
 ```
 
 One shot through a constant-velocity box. Its point is the YAML, not the
@@ -53,7 +53,7 @@ clean hyperbola means the setup, not the geology, is wrong.
 ## 10 — hand-placed sources and receivers
 
 ```bash
-sweep-tasks run examples/synthetic/10_forward_explicit_geometry.yaml
+sweep-tasks run examples/tasks/synthetic/10_forward_explicit_geometry.yaml
 ```
 
 The same box as 09, with `geometry.kind: explicit` — literal coordinate lists

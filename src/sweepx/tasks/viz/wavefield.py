@@ -56,7 +56,7 @@ def animate_snapshots(
     except ImportError as e:
         raise ImportError(
             "wavefield animation requires imageio: `pip install imageio` "
-            "(or `pip install 'sweep-tasks[animate]'`)."
+            "(or `pip install 'sweepx[animate]'`)."
         ) from e
 
     rendered: list[np.ndarray] = []
@@ -209,7 +209,7 @@ def animate_snapshots_topography(
     except ImportError as e:
         raise ImportError(
             "topography animation requires imageio: `pip install imageio` "
-            "(or `pip install 'sweep-tasks[animate]'`)."
+            "(or `pip install 'sweepx[animate]'`)."
         ) from e
     rendered: list[np.ndarray] = []
     for frame in frames:

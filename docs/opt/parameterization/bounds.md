@@ -51,7 +51,7 @@ for _ in range(cfg["epochs"]):
     opt.step(closure)
 ```
 
-This pattern composes naturally with any sweep-opt optimizer; the
+This pattern composes naturally with any sweepx.opt optimizer; the
 optimizer iterates the unbounded `latent` while the data misfit sees the
 bounded physical model. Gradients flow through `forward` automatically via
 PyTorch autograd.

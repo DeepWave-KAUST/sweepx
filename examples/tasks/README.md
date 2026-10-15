@@ -4,7 +4,7 @@ Everything here is a YAML file run by the CLI. There are no helper scripts to
 read first and nothing to prepare:
 
 ```bash
-sweep-tasks run examples/synthetic/01_forward_marmousi.yaml
+sweep-tasks run examples/tasks/synthetic/01_forward_marmousi.yaml
 ```
 
 ```
@@ -91,7 +91,7 @@ Switch to `impl: eager` to run on CPU and expect roughly 30× the wall time —
 **Multiple GPUs?** Shot-parallel is a flag, not a different file:
 
 ```bash
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
+sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
 ```
 
 ---

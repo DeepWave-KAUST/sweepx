@@ -11,13 +11,13 @@
 # Produces: output/record.npy (1.84 GB) + sources.npy + receivers.npy.
 #
 # Run (in order, from the repo root — see 11 on why $RUNS is what it is):
-#   RUNS=examples/synthetic/sweep_runs
-#   sweep-tasks run examples/synthetic/13_forward_freqsel_nodes_3d.yaml
+#   RUNS=examples/tasks/synthetic/sweep_runs
+#   sweep-tasks run examples/tasks/synthetic/13_forward_freqsel_nodes_3d.yaml
 #   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes_3d \
 #       --n-p 16000 --k-lo 64 --k-hi 128 -o $RUNS/coeff_3d_1_2hz.npz
 #   sweep-tasks extract-coeff $RUNS/forward_freqsel_nodes_3d \
 #       --n-p 8000  --k-lo 64 --k-hi 128 -o $RUNS/coeff_3d_2_4hz.npz
-#   sweep-tasks run examples/synthetic/14_fwi_overthrust_freqsel_3d.yaml
+#   sweep-tasks run examples/tasks/synthetic/14_fwi_overthrust_freqsel_3d.yaml
 #
 # `downsample: 4` takes the 801x801x187 @ 25 m model to 201x201x47 @ 100 m —
 # 20.1 x 20.1 x 4.7 km, 1.9 M cells. That resolution is what caps the band: at

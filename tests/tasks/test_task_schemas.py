@@ -306,9 +306,9 @@ def _example_task_yamls():
     """
     from pathlib import Path as _Path
 
-    repo_root = _Path(__file__).resolve().parents[1]
+    repo_root = _Path(__file__).resolve().parents[2]
     out = []
-    for p in sorted((repo_root / "examples").rglob("*.yaml")):
+    for p in sorted((repo_root / "examples" / "tasks").rglob("*.yaml")):
         try:
             doc = yaml.safe_load(p.read_text())
         except Exception:                                  # noqa: BLE001

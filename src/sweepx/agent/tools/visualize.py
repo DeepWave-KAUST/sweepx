@@ -44,7 +44,7 @@ def _require_imageio():
         import imageio.v2 as imageio
     except ImportError as exc:
         return None, {
-            "error": f"imageio is not importable: {exc}. Install it with `pip install 'sweep-agent[animate]'`."
+            "error": f"imageio is not importable: {exc}. Install it with `pip install 'sweepx[animate]'`."
         }
     return imageio, None
 

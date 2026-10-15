@@ -2,7 +2,7 @@
 
 from sweepx.opt import optim, precond, parameterization, linalg, linesearch
 
-__version__ = "0.1.0"
+from sweepx import __version__  # one version for the whole toolkit
 
 __all__ = [
     "optim",

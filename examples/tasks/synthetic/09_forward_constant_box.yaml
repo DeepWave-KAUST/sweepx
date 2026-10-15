@@ -6,7 +6,7 @@
 # Produces: output/record.npy (1, 500, 172, 1) + sources.npy + receivers.npy.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/09_forward_constant_box.yaml
+#   sweep-tasks run examples/tasks/synthetic/09_forward_constant_box.yaml
 #
 # A constant model has no reflections, so the record is the direct arrival and
 # nothing else — which is exactly what makes it a good first test: anything

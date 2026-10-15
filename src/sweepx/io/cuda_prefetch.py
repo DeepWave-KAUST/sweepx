@@ -28,7 +28,7 @@ try:
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "sweepx.io.cuda_prefetch requires `torch`. "
-        "Install with `pip install sweep-io[torch]`."
+        "Install with `pip install torch`."
     ) from e
 
 import numpy as np

@@ -795,14 +795,14 @@ def test_plan_streaming_stage_grids_hold_the_same_layer(tmp_path, monkeypatch, s
 
 # ------------------------------------------------------------ examples ----
 
-_REPO = Path(__file__).resolve().parents[1]
+_REPO = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 
 
 @pytest.mark.parametrize("rel, old_rule", [
-    ("examples/synthetic/03_fwi_marmousi_multiscale.yaml", "rows:37"),
-    ("examples/synthetic/05_lsrtm_marmousi.yaml", "rows:10"),
-    ("examples/synthetic/12_fwi_marmousi_freqsel.yaml", "value:1500.0"),
-    ("examples/field/viking/viking_freqsel_8band.yaml", "value:1485.6"),
+    ("examples/tasks/synthetic/03_fwi_marmousi_multiscale.yaml", "rows:37"),
+    ("examples/tasks/synthetic/05_lsrtm_marmousi.yaml", "rows:10"),
+    ("examples/tasks/synthetic/12_fwi_marmousi_freqsel.yaml", "value:1500.0"),
+    ("examples/tasks/field/viking/viking_freqsel_8band.yaml", "value:1485.6"),
 ])
 def test_examples_hold_exactly_what_they_held_before(rel, old_rule):
     """The example YAMLs moved to `water:` without changing what they hold:

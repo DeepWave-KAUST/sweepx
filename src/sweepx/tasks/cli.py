@@ -257,7 +257,7 @@ def _cmd_init(args) -> int:
     """``sweep-tasks init`` — emit a starter --config YAML for a dataset.
 
     Templates live under ``src/sweepx/tasks/templates/`` and ship with the
-    package, so they're available after ``pip install sweep-tasks``. Each
+    package, so they're available after ``pip install sweepx``. Each
     template has one section per sweep-tasks subcommand
     (``build_index:``, ``analyze_wavelet:``, ``estimate_wavelet:``, …)
     plus a ``common:`` block, so the resulting file drives the whole

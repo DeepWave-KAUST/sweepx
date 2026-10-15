@@ -23,7 +23,7 @@ Lazy-imported (require optional extras):
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+from sweepx import __version__  # one version for the whole toolkit
 
 from . import (
     crg_build,

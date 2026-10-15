@@ -32,7 +32,7 @@ from test_task_fwi_plan_streaming import (
     _synthetic_stage_spec,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 DRIVER = Path(__file__).resolve().parent / "_plan_stream_ranks.py"
 _E = 2                                            # epochs per stage
 _ENCODED = {"enabled": True, "min_coverage": 0, "sign_seed": 7}

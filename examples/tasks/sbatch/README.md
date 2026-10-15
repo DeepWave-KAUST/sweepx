@@ -1,48 +1,22 @@
-# sweep-tasks SLURM templates
+# SLURM templates (Viking)
 
-Reference sbatch scripts for ibex. Pair each one with the matching YAML
-in `examples/tasks/`.
+Reference sbatch scripts for ibex, one per step of the Viking workflow. Each
+runs a YAML from `examples/tasks/field/viking/` in the sweepx checkout:
 
-## `build_crg_plan_obn3d.sbatch`
+| Template | YAML |
+|---|---|
+| `viking_6stage_30hz.sbatch` | `viking_siren_hash_6stage_30hz.yaml` |
+| `viking_6stage_30hz_from_plan.sbatch` | `viking_siren_hash_6stage_30hz_from_plan.yaml` |
+| `viking_dump_loss_inputs.sbatch` | `viking_dump_loss_inputs.yaml` |
+| `viking_from_plan_smoke.sbatch` | `viking_from_plan_smoke.yaml` |
+| `viking_rtm.sbatch` | `viking_rtm_finegrid.yaml` |
+| `viking_rtm_legacy_match.sbatch` | `viking_rtm_legacy_match.yaml` |
 
-Generate an OBN CRG plan cache (the `crg_fwi_plan_v1` npz consumed
-by `geometry.kind=from_crg_plan` / `obs.kind=crg_plan` in FWI YAMLs).
-
-### Submission
+They read a few environment roots (`SWEEP_USER_ROOT`, `SWEEP_REPOS_ROOT`,
+`SWEEP_RUNS_ROOT`, `SWEEP_CONDA_ROOT`, `PROJECT_DATA_ROOT`) set in your login
+shell; the Viking page (`docs/tasks/datasets/viking/README.md`, "Running on a
+cluster") shows a working ibex layout. Then, for example:
 
 ```bash
-ssh glogin.ibex.kaust.edu.sa
-cd ${SWEEP_RUNS_ROOT}/crg_plan_build
-sbatch ${SWEEP_STACK_ROOT}/sweep-tasks/examples/sbatch/build_crg_plan_obn3d.sbatch
+sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_rtm.sbatch
 ```
-
-### Single-process (smaller dataset, local box)
-
-```bash
-sweep-tasks build-crg-plan \
-    --segy-root <segy-dir> \
-    --glob '*.sgy' \
-    --out <output>.npz \
-    --num-workers 16 \
-    --source-depth-m <SDEPTH_const> \
-    --receiver-z-byte <Z_BYTE_OFFSET> \
-    --receiver-quantize-m 0.5
-```
-
-### Dataset-specific overrides
-
-| Dataset | source-depth-m | source-z-byte | receiver-z-byte | receiver-quantize-m | notes |
-|---|---|---|---|---|---|
-| Viking  | 6.0 (streamer) | n/a | n/a (default ok) | 0.1 | 2-D streamer, no CRG |
-| Volve   | -            | n/a | n/a | -      | 2-D OBC; quantize TBD |
-
-sweep-tasks reuses the legacy per-file scan logic with an in-memory MPI
-gather (simpler than the legacy "sharded-merge" path; it works while the
-merged per-trace arrays fit in rank-0 RAM).
-
-### Output schema (matches legacy)
-
-The output npz has format `crg_fwi_plan_v1` and is interchangeable with
-the legacy build at
-the reference CRG plan npz on disk.
-Validated against the legacy build on a subset of the files.

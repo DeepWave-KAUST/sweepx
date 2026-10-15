@@ -15,7 +15,7 @@ try:
     from torch.utils.data import Dataset
 except ImportError as e:  # pragma: no cover
     raise ImportError(
-        "sweepx.io.datasets requires `torch`. Install with `pip install sweep-io[torch]`."
+        "sweepx.io.datasets requires `torch`. Install with `pip install torch`."
     ) from e
 
 from .geometry import Geometry

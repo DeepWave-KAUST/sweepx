@@ -7,7 +7,7 @@
 # Produces: output/introspect.json
 #
 # Run:
-#   sweep-tasks run examples/synthetic/15_introspect_equations.yaml
+#   sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml
 #
 # This is the first thing to run on a new machine. Every row it prints carries
 # `torch_binding_support` and `torch_binding_available`, i.e. whether the fused
@@ -34,7 +34,7 @@
 #
 # So to find out what `Elastic` needs before writing 16's `models:` block:
 #
-#   sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
+#   sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml \
 #       --override action=describe_equation --override target=Elastic
 #
 # Reference (RTX 6000 Ada, cpu device): 5.6 s, 39 rows on sweep-solver 0.3.5.

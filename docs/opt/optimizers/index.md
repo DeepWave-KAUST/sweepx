@@ -1,6 +1,6 @@
 # Optimizers
 
-This page lists every optimizer shipped by `sweep-opt`, grouped by category
+This page lists every optimizer shipped by `sweepx.opt`, grouped by category
 and tagged by the Tier in which it lands.
 
 | Algorithm | Class | Category | Tier | Closure required? | Bounds | Preconditioner |
@@ -23,7 +23,7 @@ page for the API, theory, and references.
 
 ## Conventions
 
-Every optimizer in `sweep-opt`:
+Every optimizer in `sweepx.opt`:
 
 1. Subclasses `torch.optim.Optimizer`, so it works with any code that already
    uses `torch.optim.Adam`/`SGD`/`LBFGS`.

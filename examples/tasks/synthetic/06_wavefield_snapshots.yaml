@@ -7,7 +7,7 @@
 # Produces: output/record.npy, output/snapshots.npy, output/snapshots.png.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml
+#   sweep-tasks run examples/tasks/synthetic/06_wavefield_snapshots.yaml
 #
 # `snapshots.png` draws the velocity model in greyscale underneath and lays the
 # wavefield on top with a per-pixel transparency taken from its own amplitude,

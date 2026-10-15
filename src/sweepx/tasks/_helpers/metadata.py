@@ -4,11 +4,8 @@ from pathlib import Path
 
 # The packages run_meta.json records: import name -> distribution name.
 _RECORDED_PACKAGES = (
-    ("sweepx.tasks", "sweep-tasks"),
-    ("sweepx.nn", "sweep-nn"),
-    ("sweepx.io", "sweep-io"),
+    ("sweepx", "sweepx"),
     ("sweep", "sweep-solver"),
-    ("sweepx.loss", "sweep-loss"),
     ("torch", "torch"),
     ("numpy", "numpy"),
 )
@@ -536,8 +533,8 @@ def _dump_run_metadata(
       block, read it together with the global block it overrides.
     * ``run_meta.json`` — the misfit the task evaluates (``loss_kind``),
       host, time, CUDA device, conda env path, key
-      package versions (sweep-tasks, sweep-nn, sweep-io, sweep (the
-      solver, sweep-solver), sweep-loss, torch, numpy) of the code that
+      package versions (sweepx, sweep (the solver, sweep-solver), torch,
+      numpy) of the code that
       ran (a source tree's pyproject version, else ``__version__``),
       ``installed_versions_differ`` for a distribution installed in the
       environment that is not that code (a stale install shadowed by a

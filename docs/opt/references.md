@@ -1,7 +1,7 @@
 # References
 
 This page collects the canonical references for every algorithm in
-`sweep-opt`. Each algorithm page also links its own primary reference at the
+`sweepx.opt`. Each algorithm page also links its own primary reference at the
 bottom; they are mirrored here for a single bibliographic snapshot.
 
 ## General optimization texts

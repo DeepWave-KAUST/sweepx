@@ -1,7 +1,7 @@
 # FWI, single-scale
 
 ```bash
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
+sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml
 ```
 
 FWI from `vp_smooth`, the low-pass-filtered true model. It keeps the right
@@ -38,7 +38,7 @@ forward from the saved boundary, so each gradient is about three wavefield
 sweeps. Run it on several GPUs to split the shots:
 
 ```bash
-sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
+sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
 ```
 
 ## `batchsize` is a fraction, not a count

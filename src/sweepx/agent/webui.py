@@ -13,7 +13,7 @@ How it maps onto the existing agent:
   parsed out of the tool result and pushed to a gallery beside the chat.
 
 Run:
-    pip install -e ".[ui]"          # installs gradio
+    pip install "sweepx[agent-ui]"   # installs gradio
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     sweep-agent ui                  # or: python -m sweepx.agent.webui
 """
@@ -480,7 +480,7 @@ def build_app(max_steps: int = 24):
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise SystemExit(
             "gradio is required for the web UI. Install it with:\n"
-            "    pip install -e \".[ui]\"   (from the sweep-agent repo)\n"
+            "    pip install \"sweepx[agent-ui]\"\n"
             f"(import error: {exc})"
         )
 

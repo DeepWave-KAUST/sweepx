@@ -1,8 +1,8 @@
 # RTM and LSRTM
 
 ```bash
-sweep-tasks run examples/synthetic/04_rtm_marmousi.yaml
-sweep-tasks run examples/synthetic/05_lsrtm_marmousi.yaml
+sweep-tasks run examples/tasks/synthetic/04_rtm_marmousi.yaml
+sweep-tasks run examples/tasks/synthetic/05_lsrtm_marmousi.yaml
 ```
 
 The FWI examples solve for velocity. These two hold it fixed at `vp_smooth`

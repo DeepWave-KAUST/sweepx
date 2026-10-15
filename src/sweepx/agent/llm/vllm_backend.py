@@ -143,7 +143,7 @@ class VLLMBackend(BaseLLM):
         except ImportError as exc:
             raise ImportError(
                 "VLLMBackend requires httpx. Install with `pip install httpx` "
-                "(or `pip install sweep-agent[vllm]`)."
+                "(or `pip install sweepx[vllm]`)."
             ) from exc
         # Zero-config: an explicit arg wins, then $SWEEP_AGENT_LLM_URL, else
         # auto-detect a running Ollama/vLLM. Same order for the model, defaulting

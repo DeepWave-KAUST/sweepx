@@ -7,7 +7,7 @@
 # Produces: output/record.npy + sources.npy + receivers.npy.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml
+#   sweep-tasks run examples/tasks/synthetic/16_forward_anisotropic.yaml
 #
 # 01-15 all pin `Acoustic` or `Acoustic3D` — 2 of the 39 equations this build
 # registers (see 15), and 2 of only 3 that take vp alone. Everything else is
@@ -16,7 +16,7 @@
 #   * `models:` must list EVERY model the equation declares, by name, and the
 #     names are not guessable. Ask 15 rather than assume:
 #
-#         sweep-tasks run examples/synthetic/15_introspect_equations.yaml \
+#         sweep-tasks run examples/tasks/synthetic/15_introspect_equations.yaml \
 #             --override action=describe_equation --override target=AcousticVTI
 #
 #     answers [vp, epsilon, delta]. `ViscoAcoustic` wants [vp, Q, omega],
@@ -33,7 +33,7 @@
 # on trust. Thomsen's parameters are defined so that zero means isotropy, so
 # re-running with `epsilon` and `delta` both 0.0 is a clean control:
 #
-#   sweep-tasks run examples/synthetic/16_forward_anisotropic.yaml \
+#   sweep-tasks run examples/tasks/synthetic/16_forward_anisotropic.yaml \
 #       --override task_id=aniso_iso \
 #       --override 'models=[{"name":"vp","constant":2500.0,"shape":[200,360]},
 #                           {"name":"epsilon","constant":0.0,"shape":[200,360]},

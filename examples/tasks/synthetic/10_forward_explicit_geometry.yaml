@@ -8,7 +8,7 @@
 # Produces: output/record.npy (3, 500, 7, 1) + sources.npy + receivers.npy.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/10_forward_explicit_geometry.yaml
+#   sweep-tasks run examples/tasks/synthetic/10_forward_explicit_geometry.yaml
 #
 # Read 09 first — it annotates every field below that is not about geometry.
 # The only difference here is the `geometry:` block.

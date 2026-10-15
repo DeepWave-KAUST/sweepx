@@ -9,7 +9,7 @@
 # Produces: inverted_vp.npy + curves.npz in the task dir.
 #
 # Run 11 first (its header lists the exact extract-coeff commands), then:
-#   sweep-tasks run examples/synthetic/12_fwi_marmousi_freqsel.yaml
+#   sweep-tasks run examples/tasks/synthetic/12_fwi_marmousi_freqsel.yaml
 #
 # Reference result (RTX 6000 Ada, seed 0), 240 iterations, 11.9 min:
 #   RMSE vs true    473.7 (init) -> 429.6 -> 406.5 -> 397.9   (one per rung)

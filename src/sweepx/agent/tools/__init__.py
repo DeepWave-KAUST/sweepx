@@ -36,12 +36,9 @@ def _sweep_tasks_available() -> bool:
     """Whether ``sweepx.tasks`` (the production runner) is importable — cached."""
     global _sweep_tasks_ok
     if _sweep_tasks_ok is None:
-        # A bare directory named "sweepx.tasks" on sys.path — e.g. a task-output
-        # folder in the CWD (`/tmp/sweepx/tasks/…`) — resolves as a *namespace
-        # package* with loader=None. That must NOT count as the real importable
-        # tier, or gating silently switches off and sweepx.tasks-only tools get
-        # offered on a base install (then fail with a cryptic import error). A real
-        # package has a concrete loader.
+        # sweepx.tasks ships in the same distribution as the agent, so this is
+        # True in any install. (In the separate-package days it gated the
+        # tasks-only tools off on a base `sweep-agent` install.)
         spec = importlib.util.find_spec("sweepx.tasks")
         _sweep_tasks_ok = spec is not None and spec.loader is not None
     return _sweep_tasks_ok

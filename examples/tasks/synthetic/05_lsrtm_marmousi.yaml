@@ -7,7 +7,7 @@
 #           snapshot every `show_every` epochs under output/epochs/.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/05_lsrtm_marmousi.yaml
+#   sweep-tasks run examples/tasks/synthetic/05_lsrtm_marmousi.yaml
 #
 # Where it sits between 02 and 04:
 #   * 04 (RTM)   — one adjoint pass. Fast, but the image carries the

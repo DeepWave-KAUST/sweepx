@@ -1,4 +1,4 @@
-# sweep-io
+# sweepx.io
 
 Seismic data and model I/O for full-waveform inversion: SEG-Y readers, a header
 catalog built once over many files, shot- or receiver-grouped data plans, velocity
@@ -7,7 +7,7 @@ works on the current one. It needs only NumPy; `segyio`, `h5py` and `torch` are
 optional and imported only by the code that uses them. There is no dependency on the
 wave solver.
 
-Installed with `pip install sweep-io` (also bundled by `pip install sweepx`)
+Part of `sweepx` (`pip install sweepx`)
 → `import sweepx.io`.
 
 <div class="grid cards" markdown>

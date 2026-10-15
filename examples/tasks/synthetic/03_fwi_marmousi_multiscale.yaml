@@ -6,7 +6,7 @@
 # Produces: output/inverted_vp.npy + per-stage QC.
 #
 # Run:
-#   sweep-tasks run examples/synthetic/03_fwi_marmousi_multiscale.yaml
+#   sweep-tasks run examples/tasks/synthetic/03_fwi_marmousi_multiscale.yaml
 #
 # Same grid / geometry / 8 Hz Ricker as 01 and 02. The difference is the START:
 # `vp_linear` is a 1-D gradient with ZERO lateral structure, so a single

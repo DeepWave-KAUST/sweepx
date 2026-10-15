@@ -1,6 +1,6 @@
 # Data convention
 
-`sweep-opt` is backend-agnostic - it operates on whatever `torch.Tensor`
+`sweepx.opt` is backend-agnostic - it operates on whatever `torch.Tensor`
 parameters you pass to its optimizers, and never touches your data tensors.
 
 That said, the library is designed to compose cleanly with `sweep` and
@@ -22,7 +22,7 @@ Inversion parameters in `sweep`-style FWI are model tensors with grid shape:
 - 2-D: `(nx, nz)` for `vp`, `vs`, `rho`, ...
 - 3-D: `(nx, ny, nz)` ditto.
 
-`sweep-opt` optimizers do not enforce a specific shape; they call
+`sweepx.opt` optimizers do not enforce a specific shape; they call
 `param.flatten()` internally where needed. Bound projection,
 preconditioning, and re-parameterization all preserve the original tensor
 shape so the user code never has to reshape.
@@ -32,5 +32,5 @@ shape so the user code never has to reshape.
 Pseudo-Hessian-style preconditioners need source/receiver illumination maps
 shaped like the model grid. `sweep` exposes these as
 `solver.source_illumination` and `solver.receiver_illumination` after each
-forward pass; sweep-opt's `PseudoHessianPrecond.update(...)` accepts them as
+forward pass; sweepx.opt's `PseudoHessianPrecond.update(...)` accepts them as
 keyword arguments.

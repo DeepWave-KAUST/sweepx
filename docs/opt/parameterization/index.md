@@ -1,6 +1,6 @@
 # Parameterization
 
-`sweep-opt`'s parameterizations let you optimize over a latent variable while
+`sweepx.opt`'s parameterizations let you optimize over a latent variable while
 the FWI solver still sees the physical model.
 
 ```python

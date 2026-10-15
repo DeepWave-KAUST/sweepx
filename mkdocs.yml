@@ -63,11 +63,6 @@ extra:
   # not listed falls back to repo_url/repo_name above (the umbrella).
   section_repos:
     solver: DeepWave-KAUST/sweep
-    tasks: DeepWave-KAUST/sweep-tasks
-    loss: DeepWave-KAUST/sweep-loss
-    nn: DeepWave-KAUST/sweep-nn
-    io: DeepWave-KAUST/sweep-io
-    agent: DeepWave-KAUST/sweep-agent
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/DeepWave-KAUST
@@ -124,11 +119,123 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Solver: '!import https://github.com/DeepWave-KAUST/sweep?branch=dev&docs_dir=docs/*'
-  - Tasks: '!import https://github.com/DeepWave-KAUST/sweep-tasks?branch=main&docs_dir=docs/*'
-  - Loss: '!import https://github.com/DeepWave-KAUST/sweep-loss?branch=master&docs_dir=docs/*'
-  - NN: '!import https://github.com/DeepWave-KAUST/sweep-nn?branch=main&docs_dir=docs/*'
-  - IO: '!import https://github.com/DeepWave-KAUST/sweep-io?branch=main&docs_dir=docs/*'
-  - Agent: '!import https://github.com/DeepWave-KAUST/sweep-agent?branch=main&docs_dir=docs/*'
+  - Tasks:
+    - tasks/index.md
+    - Getting started:
+      - tasks/getting-started/installation.md
+      - tasks/getting-started/quickstart.md
+    - User guide:
+      - tasks/user-guide/index.md
+      - CLI workflow: tasks/cli_workflow.md
+    - Examples:
+      - tasks/examples/index.md
+      - Forward modelling: tasks/examples/forward.md
+      - FWI, single-scale: tasks/examples/fwi-single.md
+      - FWI, multiscale: tasks/examples/fwi-multiscale.md
+      - iFWI: tasks/examples/ifwi.md
+      - RTM and LSRTM: tasks/examples/imaging.md
+      - Wavefield snapshots: tasks/examples/wavefield.md
+      - Backends and memory: tasks/examples/backends.md
+      - Frequency-selection FWI, 2-D: tasks/examples/freqsel-2d.md
+      - Frequency-selection FWI, 3-D: tasks/examples/freqsel-3d.md
+      - Anisotropic and elastic: tasks/examples/multiparameter.md
+      - Introspection: tasks/examples/introspect.md
+      - Viking (field data): tasks/datasets/viking/README.md
+    - API reference:
+      - tasks/api/index.md
+  - Loss:
+    - Home: loss/index.md
+    - Getting started:
+      - Installation: loss/getting_started/installation.md
+      - Quick start: loss/getting_started/quickstart.md
+      - Data convention: loss/getting_started/data_convention.md
+    - Loss functions:
+      - Overview: loss/losses/index.md
+      - L2 (least squares): loss/losses/l2.md
+      - L1 (absolute): loss/losses/l1.md
+      - Huber / pseudo-Huber: loss/losses/huber.md
+      - Hybrid L1/L2 (Bube–Langan): loss/losses/hybrid_l1l2.md
+      - Cauchy / Tukey / Geman–McClure: loss/losses/robust.md
+      - Student-t NLL: loss/losses/student_t.md
+      - Trace-normalised L2 / NCC: loss/losses/correlation.md
+      - Cross-correlation travel-time: loss/losses/traveltime.md
+      - Envelope (Bozdağ / Wu / Chi): loss/losses/envelope.md
+      - Instantaneous phase + Envelope+Phase: loss/losses/inst_phase.md
+      - Exponentiated phase (Yuan 2020): loss/losses/exponentiated_phase.md
+      - Time-Frequency phase (Fichtner-Kristeková): loss/losses/tf_phase.md
+      - Frequency / Laplace domain: loss/losses/frequency.md
+      - Normalised Integration Method (NIM): loss/losses/nim.md
+      - Jensen-Shannon divergence (Yan 2024): loss/losses/jsd.md
+      - Adaptive Waveform Inversion (AWI): loss/losses/awi.md
+      - OT of Matching Filter (Sun-Alkhalifah 2019): loss/losses/otmf.md
+      - Deconvolution (Luo–Sava): loss/losses/deconvolution.md
+      - 1-Wasserstein (Métivier 2016): loss/losses/w1.md
+      - 2-Wasserstein (Engquist–Froese / Yang): loss/losses/w2.md
+      - Sinkhorn / entropic OT: loss/losses/sinkhorn.md
+      - Graph-space OT (Métivier 2018): loss/losses/gsot.md
+      - Soft-DTW (Cuturi-Blondel 2017): loss/losses/soft_dtw.md
+      - Local similarity (Fomel 2007): loss/losses/local_similarity.md
+    - Report (formulas + bibliography): loss/report.md
+    - References: loss/references.md
+  - NN:
+    - nn/index.md
+    - Getting started:
+      - nn/getting-started/installation.md
+      - nn/getting-started/quickstart.md
+    - Examples:
+      - nn/examples/README.md
+      - Pseudo-Hessian, Overthrust: nn/examples/pseudo_hessian_overthrust.ipynb
+      - Hash encoding, Marmousi: nn/examples/hash_encoding_marmousi.ipynb
+    - API reference:
+      - nn/api/index.md
+  - IO:
+    - io/index.md
+    - Getting started:
+      - io/getting-started/installation.md
+      - io/getting-started/quickstart.md
+    - Examples: io/examples.md
+    - API reference:
+      - io/api/index.md
+  - Opt:
+    - Home: opt/index.md
+    - Getting started:
+      - Installation: opt/getting_started/installation.md
+      - Quick start: opt/getting_started/quickstart.md
+      - Data convention: opt/getting_started/data_convention.md
+    - Optimizers:
+      - Overview: opt/optimizers/index.md
+      - Steepest Descent: opt/optimizers/steepest_descent.md
+      - Nonlinear CG (PR+): opt/optimizers/ncg.md
+      - L-BFGS-FWI: opt/optimizers/lbfgs.md
+      - Truncated Newton (HF): opt/optimizers/newton.md
+      - Truncated Gauss-Newton: opt/optimizers/gauss_newton.md
+      - Trust-Region (TTR/ASTR): opt/optimizers/trust_region.md
+      - L-BFGS-B: opt/optimizers/lbfgsb.md
+      - Adam-FWI: opt/optimizers/adam_fwi.md
+      - Lion: opt/optimizers/lion.md
+      - SAM: opt/optimizers/sam.md
+      - Shampoo: opt/optimizers/shampoo.md
+      - SOAP: opt/optimizers/soap.md
+    - Preconditioners:
+      - Overview: opt/preconditioners/index.md
+      - Pseudo-Hessian: opt/preconditioners/pseudo_hessian.md
+      - Depth weighting: opt/preconditioners/depth_weighting.md
+    - Parameterization:
+      - Overview: opt/parameterization/index.md
+      - Bounds (sigmoid / log / perturbation): opt/parameterization/bounds.md
+      - DIP-FWI: opt/parameterization/dip.md
+    - References: opt/references.md
+  - Agent:
+    - agent/index.md
+    - Getting started:
+      - agent/getting-started/installation.md
+      - agent/getting-started/quickstart.md
+    - User guide:
+      - agent/user-guide/index.md
+    - Examples:
+      - agent/examples/index.md
+    - API reference:
+      - agent/api/index.md
 
 markdown_extensions:
   - admonition

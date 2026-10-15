@@ -14,6 +14,6 @@ __all__ = ["Agent", "AgentStep", "BaseLLM", "ChatMessage", "ToolCall", "Tool", "
 try:
     from importlib.metadata import version as _pkg_version
 
-    __version__ = _pkg_version("sweep-agent")
+    __version__ = _pkg_version("sweepx")
 except Exception:  # running from a source tree that isn't installed as a dist
     __version__ = "0.0.0+source"

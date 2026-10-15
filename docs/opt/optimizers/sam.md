@@ -17,7 +17,7 @@ then call the base optimizer's `step()` using $g_{\text{tmp}}$ at the
 
 ```python
 sweepx.opt.optim.SAM(
-    base_optimizer,                 # an Optimizer instance (torch or sweep-opt)
+    base_optimizer,                 # an Optimizer instance (torch or sweepx.opt)
     *,
     rho=0.05,                       # ascent radius
     eps=1e-12,                      # gradient-normalization stabilizer

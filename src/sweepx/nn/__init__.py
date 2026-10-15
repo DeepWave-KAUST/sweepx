@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+from sweepx import __version__  # one version for the whole toolkit
 
 from .reparam import Reparameterizer
 from .siren import SIREN, SirenMLP, SineLayer

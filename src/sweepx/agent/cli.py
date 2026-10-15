@@ -118,7 +118,7 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     import importlib.util
     if importlib.util.find_spec("gradio") is None:
         print('[sweep-agent] the web UI needs gradio — install it with:\n'
-              '    pip install "sweep-agent[ui]"', file=sys.stderr)
+              '    pip install "sweepx[agent-ui]"', file=sys.stderr)
         return 1
     # Resolve the endpoint/model once (explicit flag, then env, then auto-detect)
     # and pin them in the environment so the web UI uses the same ones, and

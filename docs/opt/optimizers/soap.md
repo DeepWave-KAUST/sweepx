@@ -70,7 +70,7 @@ Differences from the official code: `weight_decay` defaults to 0 (FWI
 parameters such as a velocity grid must not be decayed); the factors are kept
 in the parameter dtype, so float64 parameters work (the official code fails
 on them), and only float32/float64 are accepted; `closure` runs with
-gradients enabled; `bounds` is sweep-opt's projection after the step; there
+gradients enabled; `bounds` is sweepx.opt's projection after the step; there
 is no `data_format` option.
 
 ## When to use

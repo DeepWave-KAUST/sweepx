@@ -1,4 +1,4 @@
-# sweep-nn examples
+# sweepx.nn examples
 
 | Example | What it shows | Needs |
 |---|---|---|
@@ -16,7 +16,7 @@ The velocity is `sweepx.nn.VelocityINR`, `vp = vp_init + vp_std · net(z, x)`; t
 equation is sweep's compiled acoustic solver.
 
 ```bash
-pip install sweep-nn sweep-solver jupyterlab
+pip install sweepx sweep-solver jupyterlab
 cd docs/examples                     # the notebooks import ifwi_models.py from here
 jupyter lab
 ```

@@ -1,7 +1,7 @@
 # Wavefield snapshots
 
 ```bash
-sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml
+sweep-tasks run examples/tasks/synthetic/06_wavefield_snapshots.yaml
 ```
 
 `task_type: wavefield` dumps the pressure field at chosen time steps
@@ -35,6 +35,6 @@ polarity-flipped ghost, and the surface multiples behind it. Set it to `false`
 and re-run, and only the direct wavefront is left:
 
 ```bash
-sweep-tasks run examples/synthetic/06_wavefield_snapshots.yaml \
+sweep-tasks run examples/tasks/synthetic/06_wavefield_snapshots.yaml \
     --override task_id=wavefield_nofs --override physics.free_surface=false
 ```

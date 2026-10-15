@@ -1,4 +1,4 @@
-# sweep-nn
+# sweepx.nn
 
 Neural reparameterizations and priors for full-waveform inversion, in plain PyTorch.
 Instead of updating the velocity grid directly, implicit FWI updates the weights of a
@@ -12,11 +12,11 @@ loss.backward()                   # the gradient flows through vp into the weigh
 ```
 
 The network's own smoothness regularizes the inversion, and the model has far fewer
-free parameters than grid cells. `sweep-nn` has no dependency on the wave solver: any
+free parameters than grid cells. `sweepx.nn` has no dependency on the wave solver: any
 differentiable PyTorch solver works, and the examples use
 [sweep](../solver/index.md).
 
-Installed with `pip install sweep-nn` (also bundled by `pip install sweepx`)
+Part of `sweepx` (`pip install sweepx`)
 → `import sweepx.nn`.
 
 <div class="grid cards" markdown>
