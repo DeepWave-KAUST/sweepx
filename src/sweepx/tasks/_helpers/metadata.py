@@ -1,6 +1,103 @@
 """Run-metadata dump: resolved config + runtime json. Verbatim from runner.py."""
 from pathlib import Path
 
+# The packages run_meta.json records: import name -> distribution name.
+_RECORDED_PACKAGES = (
+    ("sweep_tasks", "sweep-tasks"),
+    ("sweep_nn", "sweep-nn"),
+    ("sweep_io", "sweep-io"),
+    ("sweep", "sweep-solver"),
+    ("sweep_loss", "sweep-loss"),
+    ("torch", "torch"),
+    ("numpy", "numpy"),
+)
+
+
+def _toml_load(path: Path) -> dict:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
+def _project_version(here: Path, dist: str) -> str | None:
+    """``[project] version`` of the source tree a module was imported from: the
+    first pyproject.toml at most three levels above ``here`` whose project name
+    is ``dist`` (a static version only). Such a tree, on PYTHONPATH, can differ
+    from the distribution installed under the same name, whose metadata is what
+    the package's ``__version__`` reads."""
+    for d in [here, *here.parents][:4]:
+        f = d / "pyproject.toml"
+        if not f.is_file():
+            continue
+        try:
+            project = _toml_load(f).get("project", {})
+        except Exception:  # noqa: BLE001
+            return None
+        if str(project.get("name", "")).replace("_", "-").lower() != dist:
+            return None
+        v = project.get("version")
+        return str(v) if v else None
+    return None
+
+
+def _package_version(mod_name: str, dist: str) -> tuple[str | None, str | None]:
+    """(the version of the code imported as ``mod_name``, the version of the
+    installed distribution ``dist`` when that is a different one, else None)."""
+    import importlib
+    import importlib.metadata as md
+
+    try:
+        mod = importlib.import_module(mod_name)
+    except Exception:  # noqa: BLE001
+        return None, None
+    try:
+        installed = md.version(dist)
+    except Exception:  # noqa: BLE001
+        installed = None
+    here = Path(getattr(mod, "__file__", "") or "").resolve().parent
+    version = _project_version(here, dist) or getattr(mod, "__version__", None) or installed
+    return version, (installed if installed is not None and installed != version else None)
+
+
+def _git_meta(mod_name: str) -> dict | None:
+    """Path, HEAD SHA, ``git describe --tags --always`` and dirty flag of the
+    git checkout a module was imported from (best-effort; None otherwise)."""
+    import importlib
+    import subprocess
+
+    try:
+        mod = importlib.import_module(mod_name)
+    except Exception:  # noqa: BLE001
+        return None
+    path = Path(getattr(mod, "__file__", "") or "").resolve().parent
+    for _ in range(6):  # walk up looking for .git
+        if (path / ".git").exists():
+            break
+        if path.parent == path:
+            return None
+        path = path.parent
+    else:
+        return None
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(path), *args], stderr=subprocess.DEVNULL,
+        ).decode().strip()
+
+    try:
+        sha = git("rev-parse", "HEAD")
+        dirty = bool(git("status", "--porcelain"))
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        describe = git("describe", "--tags", "--always")
+    except Exception:  # noqa: BLE001
+        describe = None
+    return {"path": str(path), "sha": sha, "describe": describe, "dirty": dirty}
+
 
 def _capture_launch_env() -> dict:
     """Best-effort snapshot of the distributed / DD / launcher environment.
@@ -195,16 +292,19 @@ def _dump_run_metadata(
       block, read it together with the global block it overrides.
     * ``run_meta.json`` — the misfit the task evaluates (``loss_kind``),
       host, time, CUDA device, conda env path, key
-      package versions (sweep-tasks, sweep-nn, sweep-io, sweep,
-      sweep-loss, sweep-preproc, torch, numpy), git SHA / dirty-flag
-      for each editable package (best-effort), plus any caller-supplied
+      package versions (sweep-tasks, sweep-nn, sweep-io, sweep (the
+      solver, sweep-solver), sweep-loss, torch, numpy) of the code that
+      ran (a source tree's pyproject version, else ``__version__``),
+      ``installed_versions_differ`` for a distribution installed in the
+      environment that is not that code (a stale install shadowed by a
+      tree on PYTHONPATH), git SHA / describe / dirty-flag for each
+      package imported from a checkout (best-effort), plus any caller-supplied
       ``extras`` (typically the runner's derived setup quantities like
       ``shape``, ``origin``, ``n_groups``, ``net_params``, ...).
     """
     import json
     import os
     import socket
-    import subprocess
     import sys
     from datetime import datetime, timezone
 
@@ -241,48 +341,15 @@ def _dump_run_metadata(
         )
         print(f"[run-meta] yaml dump failed ({err}); wrote config_resolved.json")
 
-    # ---- 2) Package versions + git SHAs (best-effort).
-    def _pkg_version(name: str) -> str | None:
-        try:
-            mod = __import__(name)
-            return getattr(mod, "__version__", None)
-        except Exception:  # noqa: BLE001
-            return None
-
-    def _git_meta(pkg_name: str) -> dict | None:
-        try:
-            mod = __import__(pkg_name)
-        except Exception:  # noqa: BLE001
-            return None
-        path = Path(getattr(mod, "__file__", "") or "").resolve().parent
-        for _ in range(6):  # walk up looking for .git
-            if (path / ".git").exists():
-                break
-            if path.parent == path:
-                return None
-            path = path.parent
-        else:
-            return None
-        try:
-            sha = subprocess.check_output(
-                ["git", "-C", str(path), "rev-parse", "HEAD"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip()
-            dirty = bool(subprocess.check_output(
-                ["git", "-C", str(path), "status", "--porcelain"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip())
-            return {"path": str(path), "sha": sha, "dirty": dirty}
-        except Exception:  # noqa: BLE001
-            return None
-
-    pkgs = [
-        "sweep_tasks", "sweep_nn", "sweep_io", "sweep",
-        "sweep_loss",
-        "torch", "numpy",
-    ]
-    versions = {n: _pkg_version(n) for n in pkgs}
-    git = {n: _git_meta(n) for n in pkgs if _git_meta(n) is not None}
+    # ---- 2) Package versions + git SHAs (best-effort): the code that ran.
+    found = {n: _package_version(n, dist) for n, dist in _RECORDED_PACKAGES}
+    versions = {n: v for n, (v, _) in found.items()}
+    installed_differ = {n: inst for n, (_, inst) in found.items() if inst is not None}
+    git = {}
+    for n, _ in _RECORDED_PACKAGES:
+        g = _git_meta(n)
+        if g is not None:
+            git[n] = g
 
     # ---- 3) Host + CUDA snapshot.
     cuda_info: dict = {"available": False}
@@ -318,6 +385,7 @@ def _dump_run_metadata(
         "cuda": cuda_info,
         "distributed": launch,
         "package_versions": versions,
+        "installed_versions_differ": installed_differ,
         "git_repos": git,
         "env_vars_of_interest": {
             k: os.environ.get(k) for k in (
