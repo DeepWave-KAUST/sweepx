@@ -3,9 +3,8 @@
 `sweep_opt.optim.SteepestDescent` is the simplest first-order optimizer in the
 library. It exists for two reasons:
 
-1. **Baseline.** Every other optimizer is benchmarked against SD on the
-   Marmousi 2-D acoustic FWI problem - you need to know what "no curvature
-   information" looks like before you can claim a speed-up.
+1. **Baseline.** Compare every other optimizer against SD - you need to know
+   what "no curvature information" looks like before you can claim a speed-up.
 2. **Reusable Wolfe line-search machinery.** The strong-Wolfe routine that
    ships alongside SD is the same routine used by the Nonlinear CG and L-BFGS
    optimizers later.

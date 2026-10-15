@@ -79,11 +79,15 @@ The paper evaluates SOAP only on language-model pre-training, where it beats
 AdamW and Shampoo, with the largest gains at large batch sizes. The defaults
 above are the official ones, tuned for that setting.
 
-On the hash-encoded Marmousi iFWI of `ifwi-pub` (8 shots per step, 200
-iterations) the defaults were not the best: `lr=1e-3, betas=(0.9, 0.999),
-update_freq=1` beat a tuned Adam on every one of 4 seeds, while
-`betas=(0.95, 0.95), update_freq=10` did not, and `lr=3e-3` was too large.
-Tune `lr`, `betas` and `update_freq` per problem.
+These defaults need not transfer to FWI-type problems with small batches;
+tune `lr`, `betas` and `update_freq` per problem (`betas=(0.9, 0.999)` with
+`update_freq=1` is a reasonable start).
+
+The rotation suits the weight matrices of a network. For parameters laid out
+on a spatial grid (a velocity model, a hash-encoding table) it equalises the
+step over spatial wavenumbers and amplifies weakly constrained short
+wavelengths; keep such parameters unrotated (an axis longer than
+`max_precond_dim` is left unrotated, i.e. plain Adam) or use Adam for them.
 
 ## References
 

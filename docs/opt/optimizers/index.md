@@ -39,4 +39,3 @@ Every optimizer in `sweep-opt`:
 
 - [Preconditioners](../preconditioners/index.md)
 - [Parameterization](../parameterization/index.md)
-- [Marmousi report](../report.md) - convergence comparisons on the same problem

@@ -94,9 +94,9 @@ for _ in range(cfg["epochs"]):
 
 ## When to use
 
-L-BFGS is the de-facto standard for FWI. On the Marmousi benchmark it
-typically wins by a comfortable margin over both NCG and Steepest Descent,
-and a pseudo-Hessian preconditioner adds another ~2x speed-up on top.
+L-BFGS is the de-facto standard for FWI: it usually converges much faster
+than NCG and Steepest Descent, and a pseudo-Hessian preconditioner can speed
+it up further.
 
 For ill-posed problems where the Hessian has near-zero eigenvalues, consider
 Truncated Newton (Tier-2) - it can solve the indefinite Newton system more

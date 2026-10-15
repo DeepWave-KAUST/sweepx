@@ -21,7 +21,6 @@ dependencies = [
 [project.optional-dependencies]
 test  = ["pytest>=7", "scipy>=1.8"]
 dev   = ["pytest>=7", "scipy>=1.8", "ruff", "black", "mkdocs", "mkdocs-material"]
-sweep = ["sweep"]
 docs  = ["mkdocs", "mkdocs-material"]
 
 [tool.setuptools.packages.find]

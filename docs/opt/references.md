@@ -122,4 +122,3 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 - [Optimizers](optimizers/index.md)
 - [Preconditioners](preconditioners/index.md)
 - [Parameterization](parameterization/index.md)
-- [Marmousi report](report.md)

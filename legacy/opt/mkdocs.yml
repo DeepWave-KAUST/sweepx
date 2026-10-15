@@ -89,5 +89,4 @@ nav:
       - Overview: parameterization/index.md
       - Bounds (sigmoid / log / perturbation): parameterization/bounds.md
       - DIP-FWI: parameterization/dip.md
-  - Marmousi report: report.md
   - References: references.md

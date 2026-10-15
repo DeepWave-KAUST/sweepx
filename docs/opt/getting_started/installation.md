@@ -16,7 +16,6 @@ pip install -e .
 pip install -e .[test]    # adds pytest + scipy (used by some unit tests)
 pip install -e .[docs]    # adds mkdocs + mkdocs-material
 pip install -e .[dev]     # docs + test + ruff + black
-pip install -e .[sweep]   # adds the sweep propagator (only needed by examples/marmousi/)
 ```
 
 ## Verifying the install

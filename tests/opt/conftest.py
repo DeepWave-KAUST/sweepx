@@ -1,8 +1,7 @@
 """Shared fixtures for sweep-opt unit tests.
 
 These intentionally use small CPU tensors so the suite runs quickly and
-hardware-independent. GPU-only / FWI-on-Marmousi checks live under
-examples/marmousi/ instead.
+hardware-independent.
 """
 from __future__ import annotations
 

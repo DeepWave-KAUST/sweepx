@@ -10,15 +10,16 @@ drop into any PyTorch-based FWI workflow with at most one constructor change.
 It pairs naturally with:
 
 - [`sweep`](https://github.com/DeepWave-KAUST/sweep) - the seismic forward
-  propagator the Marmousi benchmark uses (consumed via the optional
-  `[sweep]` extra; the library itself is backend-agnostic).
-- [`fwiloss`](https://github.com/DeepWave-KAUST/sweep-loss) - misfit/loss functions for FWI
-  (L2, Huber, envelope, instantaneous-phase, planned Wasserstein/AWI/NIM).
+  propagator (the library itself is backend-agnostic).
+- [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) - misfit (loss)
+  functions for FWI.
+
+All three are part of [`sweepx`](https://github.com/DeepWave-KAUST/sweepx).
 
 ## What ships when
 
 The library is built out commit-by-commit, with one optimizer per commit and a
-mkdocs page + an entry in the [Marmousi report](report.md) for each.
+mkdocs page for each.
 
 | Tier | Adds | Commits |
 |---|---|---|

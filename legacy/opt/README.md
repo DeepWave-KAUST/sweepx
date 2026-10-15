@@ -45,7 +45,6 @@ opt.step(closure)
 ```bash
 pip install -e .                 # core (torch, numpy)
 pip install -e .[dev]            # + pytest, ruff, black, mkdocs
-pip install -e .[sweep]          # + sweep (needed only by examples/marmousi/)
 ```
 
 ## Documentation
@@ -59,12 +58,13 @@ mkdocs serve   # http://127.0.0.1:8000
 ```
 
 Each algorithm has its own page under `docs/optimizers/`,
-`docs/preconditioners/`, or `docs/parameterization/`. Convergence comparisons on
-the 2-D acoustic Marmousi benchmark live in [`docs/report.md`](docs/report.md).
+`docs/preconditioners/`, or `docs/parameterization/`.
 
 ## Companion libraries
 
-- [`sweep`](https://github.com/DeepWave-KAUST/sweep) - the seismic forward propagator
-  this library benchmarks against. Consumed via the optional `[sweep]` extra.
-- [`fwiloss`](https://github.com/DeepWave-KAUST/sweep-loss) - misfit (loss) functions for FWI
-  (L2, Huber, envelope, Wasserstein, AWI, ...). Pair with any sweep-opt optimizer.
+`sweep-opt` is part of [`sweepx`](https://github.com/DeepWave-KAUST/sweepx):
+
+- [`sweep`](https://github.com/DeepWave-KAUST/sweep) - the seismic forward propagator.
+  `sweep-opt` does not depend on it; any autograd FWI loop works.
+- [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) - misfit (loss) functions
+  for FWI. Pair with any sweep-opt optimizer.

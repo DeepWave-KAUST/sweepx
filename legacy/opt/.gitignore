@@ -26,10 +26,6 @@ htmlcov/
 # mkdocs build output
 /site/
 
-# benchmark artifacts
-examples/marmousi/outputs/
-examples/marmousi/outputs_*/
-
 # data / figures
 *.npy
 *.npz
