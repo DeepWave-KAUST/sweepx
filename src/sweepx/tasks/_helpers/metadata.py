@@ -1,4 +1,5 @@
 """Run-metadata dump: resolved config + runtime json. Verbatim from runner.py."""
+import re
 from pathlib import Path
 
 # The packages run_meta.json records: import name -> distribution name.
@@ -97,6 +98,248 @@ def _git_meta(mod_name: str) -> dict | None:
     except Exception:  # noqa: BLE001
         describe = None
     return {"path": str(path), "sha": sha, "describe": describe, "dirty": dirty}
+
+
+# What a run dir needs to stay readable once it is archived (moved away from
+# the folder it was launched from): the YAML as written, the labels it was run
+# under, the inputs it read (where they really were, and a fingerprint to find
+# them again), the batch script and logs of its job, the uncommitted code
+# changes it ran with, and a manifest of what it wrote. All best-effort.
+
+LABEL_PREFIX = "SWEEP_LABEL_"
+QUICK_HASH_BYTES = 1 << 20      # head and tail read for an input's fingerprint
+MAX_INPUTS = 200
+MAX_DIFF_BYTES = 5 << 20
+MAX_MANIFEST_FILES = 20_000
+# config keys that name where a run writes, not what it reads
+_OUTPUT_KEYS = {"output_dir", "disk_dir"}
+# a variable named like a credential (SWEEP_AGENT_LLM_API_KEY, ...) is recorded
+# as set, never with its value -- in run_meta.json and in the copied batch script
+_SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|COOKIE", re.I)
+_SECRET_ASSIGN = re.compile(
+    r"^(\s*(?:export\s+)?\w*(?:KEY|TOKEN|SECRET|PASSW|CREDENTIAL|COOKIE)\w*=).+$", re.I | re.M)
+REDACTED = "<redacted>"
+
+
+def _labels_from_env(environ=None) -> dict:
+    """``SWEEP_LABEL_<KEY>=value`` -> ``{"<key>": value}``: free labels a
+    launcher sets for the run (``SWEEP_LABEL_LINE`` = the experiment line,
+    ``SWEEP_LABEL_PROJECT``, ``SWEEP_LABEL_CAMPAIGN``, ...)."""
+    import os
+
+    env = os.environ if environ is None else environ
+    return {k[len(LABEL_PREFIX):].lower(): v for k, v in sorted(env.items())
+            if k.startswith(LABEL_PREFIX) and len(k) > len(LABEL_PREFIX) and v}
+
+
+def _env_of_interest(environ=None) -> dict:
+    import os
+
+    env = os.environ if environ is None else environ
+    keys = ["FWI_SEGY_ROOT", "PYTORCH_CUDA_ALLOC_CONF", "CUDA_VISIBLE_DEVICES",
+            "OMP_NUM_THREADS", "MKL_NUM_THREADS", "PYTHONPATH", "CONDA_DEFAULT_ENV",
+            "VIRTUAL_ENV"]
+    keys += sorted(k for k in env if k.startswith("SWEEP_") and not k.startswith(LABEL_PREFIX))
+    return {k: (None if env.get(k) is None else REDACTED if _SECRET_NAME.search(k)
+                else str(env.get(k))[:4096]) for k in keys}
+
+
+def _quick_hash(path: Path) -> str | None:
+    """sha256 of the size and the first / last MiB: cheap to take on a
+    multi-GB file, enough to tell copies of an input apart."""
+    import hashlib
+
+    try:
+        size = path.stat().st_size
+        h = hashlib.sha256(str(size).encode())
+        with open(path, "rb") as fh:
+            h.update(fh.read(QUICK_HASH_BYTES))
+            if size > QUICK_HASH_BYTES:
+                fh.seek(max(size - QUICK_HASH_BYTES, QUICK_HASH_BYTES))
+                h.update(fh.read(QUICK_HASH_BYTES))
+        return h.hexdigest()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _input_files(cfg, task_dir=None) -> list[dict]:
+    """The absolute paths in the resolved config that exist: where they
+    really are (links resolved), and for files their size, mtime and quick
+    hash. Where the run writes (``output_dir``, ``disk_dir``, anything in its
+    own run dir) is not an input; another run's output it starts from is."""
+    import os
+
+    own = os.path.realpath(task_dir) if task_dir is not None else None
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def walk(v, key: str) -> None:
+        if len(found) >= MAX_INPUTS:
+            return
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if str(k) not in _OUTPUT_KEYS:
+                    walk(x, f"{key}.{k}" if key else str(k))
+        elif isinstance(v, (list, tuple)):
+            for i, x in enumerate(v):
+                walk(x, f"{key}[{i}]")
+        elif isinstance(v, str) and v.startswith("/") and "\n" not in v and len(v) < 4096:
+            if v in seen:
+                return
+            p = Path(v)
+            try:
+                if not p.exists():
+                    return
+                st = p.stat()
+                real = os.path.realpath(v)
+            except OSError:
+                return
+            if own and (real == own or real.startswith(own + os.sep)):
+                return
+            seen.add(v)
+            entry = {"key": key, "path": v, "realpath": real}
+            if p.is_dir():
+                entry["is_dir"] = True
+            else:
+                entry.update(size=st.st_size, mtime=st.st_mtime, quick_sha256=_quick_hash(p))
+            found.append(entry)
+
+    walk(cfg, "")
+    return found
+
+
+def _copy_task_source(source: dict | None, task_dir: Path) -> dict | None:
+    """``task_source.yaml``: the task file as written (comments kept), and
+    what the run applied on top of it (``--override``)."""
+    import hashlib
+
+    if not source or not source.get("path"):
+        return None
+    src = Path(source["path"])
+    info = {"path": str(src), "overrides": list(source.get("overrides") or []),
+            "copied_to": None, "sha256": None}
+    try:
+        data = src.read_bytes()
+        (task_dir / "task_source.yaml").write_bytes(data)
+        info.update(copied_to="task_source.yaml", sha256=hashlib.sha256(data).hexdigest())
+    except Exception as err:  # noqa: BLE001
+        info["error"] = repr(err)
+    return info
+
+
+def _slurm_job(task_dir: Path, environ=None) -> dict | None:
+    """The Slurm job this run is in: where it was submitted from, its batch
+    script (copied to ``launch/slurm_<job id>.sh``, a resumed run keeps every
+    job's) and its log paths, from ``scontrol`` (best-effort, a few seconds at
+    most). Values assigned to credential-like names in the script are redacted."""
+    import os
+    import re
+    import subprocess
+
+    env = os.environ if environ is None else environ
+    job = env.get("SLURM_JOB_ID")
+    if not job:
+        return None
+    info: dict = {k.replace("SLURM_", "").lower(): env[k] for k in (
+        "SLURM_JOB_ID", "SLURM_ARRAY_JOB_ID", "SLURM_ARRAY_TASK_ID", "SLURM_JOB_NAME",
+        "SLURM_SUBMIT_DIR", "SLURM_SUBMIT_HOST", "SLURM_CLUSTER_NAME", "SLURM_JOB_ACCOUNT",
+        "SLURM_JOB_QOS", "SLURM_JOB_PARTITION", "SLURM_JOB_NODELIST") if env.get(k)}
+    name = f"slurm_{re.sub(r'[^0-9A-Za-z_.-]', '_', job)}.sh"
+    try:
+        r = subprocess.run(["scontrol", "write", "batch_script", job, "-"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            text, n = _SECRET_ASSIGN.subn(rf"\g<1>{REDACTED}", r.stdout)
+            (task_dir / "launch").mkdir(exist_ok=True)
+            (task_dir / "launch" / name).write_text(text)
+            info["batch_script"] = f"launch/{name}"
+            if n:
+                info["batch_script_redacted"] = n
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        r = subprocess.run(["scontrol", "-o", "show", "job", job], capture_output=True,
+                           text=True, timeout=10)
+        if r.returncode == 0:
+            for key in ("StdOut", "StdErr", "WorkDir", "Command"):
+                m = re.search(rf"(?:^|\s){key}=(\S+)", r.stdout)
+                if m:
+                    info[key.lower()] = m.group(1)
+    except Exception:  # noqa: BLE001
+        pass
+    return info
+
+
+# What a launch takes once: a later dump in the same process (FWI re-dumps with
+# runtime extras) reuses it; a resumed run is a new process and takes its own,
+# and lists the launches before it.
+_ONCE: dict[str, dict] = {}
+
+
+def _previous_launches(prev: dict) -> list[dict]:
+    """The launches that wrote this run dir before (a resumed or re-run
+    task_id), oldest first, from the run_meta.json the last one left."""
+    if not prev:
+        return []
+    earlier = [x for x in (prev.get("previous_launches") or []) if isinstance(x, dict)]
+    return earlier + [{k: prev.get(k) for k in ("started_at", "host", "argv", "source", "scheduler")}]
+
+
+def _write_dirty_diffs(git: dict, task_dir: Path) -> None:
+    """``provenance/<pkg>.diff`` for every checkout with uncommitted changes:
+    ``git diff HEAD`` plus the untracked files' names (capped), so the code
+    that ran can be rebuilt from its commit."""
+    import subprocess
+
+    for pkg, g in git.items():
+        if not g or not g.get("dirty"):
+            continue
+        try:
+            def run(*args: str) -> bytes:
+                return subprocess.run(["git", "-C", g["path"], *args], capture_output=True,
+                                      timeout=30).stdout
+            diff = run("diff", "HEAD", "--binary")
+            untracked = run("ls-files", "--others", "--exclude-standard").decode(errors="replace")
+            text = diff[:MAX_DIFF_BYTES]
+            if len(diff) > MAX_DIFF_BYTES:
+                text += f"\n# ... diff truncated at {MAX_DIFF_BYTES} of {len(diff)} bytes\n".encode()
+            if untracked.strip():
+                text += ("\n# untracked files:\n" + "".join(f"#   {u}\n" for u in untracked.splitlines())).encode()
+            out = task_dir / "provenance" / f"{pkg}.diff"
+            out.parent.mkdir(exist_ok=True)
+            out.write_bytes(text)
+            g["diff_file"] = f"provenance/{pkg}.diff"
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _write_manifest(task_dir: Path) -> None:
+    """``manifest.json``: every file the run dir holds at the end (relative
+    path, size), to check a copy of it is whole."""
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    files, total, truncated = [], 0, False
+    for dirpath, dirnames, filenames in os.walk(task_dir):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, task_dir)
+            if rel == "manifest.json":
+                continue
+            try:
+                size = os.lstat(full).st_size
+            except OSError:
+                continue
+            total += size
+            if len(files) < MAX_MANIFEST_FILES:
+                files.append({"path": rel, "size": size})
+            else:
+                truncated = True
+    doc = {"written_at": datetime.now(timezone.utc).isoformat(), "n_files": len(files),
+           "total_bytes": total, "truncated": truncated, "files": files}
+    (task_dir / "manifest.json").write_text(json.dumps(doc, indent=1))
 
 
 def _capture_launch_env() -> dict:
@@ -278,6 +521,7 @@ def _dump_run_metadata(
     task_dir,
     *,
     extras: dict | None = None,
+    source: dict | None = None,
 ) -> None:
     """Write the resolved YAML + a runtime metadata json to ``task_dir``.
 
@@ -298,7 +542,13 @@ def _dump_run_metadata(
       ``installed_versions_differ`` for a distribution installed in the
       environment that is not that code (a stale install shadowed by a
       tree on PYTHONPATH), git SHA / describe / dirty-flag for each
-      package imported from a checkout (best-effort), plus any caller-supplied
+      package imported from a checkout (best-effort; a dirty one's changes in
+      ``provenance/<pkg>.diff``), ``labels`` from ``SWEEP_LABEL_*``, the
+      ``inputs`` the config names (real path, size, quick hash), the
+      ``scheduler`` job (Slurm: submit dir, log paths, the batch script in
+      ``launch/``), the ``previous_launches`` of a resumed run, ``source``
+      (the task file, copied verbatim to ``task_source.yaml``, and the
+      overrides applied), plus any caller-supplied
       ``extras`` (typically the runner's derived setup quantities like
       ``shape``, ``origin``, ``n_groups``, ``net_params``, ...).
     """
@@ -350,6 +600,24 @@ def _dump_run_metadata(
         g = _git_meta(n)
         if g is not None:
             git[n] = g
+    _write_dirty_diffs(git, task_dir)
+    once = _ONCE.get(str(task_dir.resolve()))
+    if once is None:
+        try:
+            prev = json.loads((task_dir / "run_meta.json").read_text())
+        except Exception:  # noqa: BLE001
+            prev = {}
+        try:
+            inputs = _input_files(cfg, task_dir)
+        except Exception:  # noqa: BLE001
+            inputs = []
+        once = _ONCE[str(task_dir.resolve())] = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "source": None, "scheduler": _slurm_job(task_dir), "inputs": inputs,
+            "previous_launches": _previous_launches(prev),
+        }
+    if source:
+        once["source"] = _copy_task_source(source, task_dir)
 
     # ---- 3) Host + CUDA snapshot.
     cuda_info: dict = {"available": False}
@@ -375,24 +643,26 @@ def _dump_run_metadata(
         "task_id": getattr(spec, "task_id", None),
         "task_type": getattr(spec, "task_type", None),
         "loss_kind": _effective_loss_kind(spec),
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": once["started_at"],
         "host": socket.gethostname(),
         "user": os.environ.get("USER"),
         "cwd": os.getcwd(),
         "python": sys.version.split()[0],
         "conda_prefix": os.environ.get("CONDA_PREFIX"),
+        "python_executable": sys.executable,
         "argv": list(sys.argv),
+        "run_dir": str(task_dir.resolve()),
+        "labels": _labels_from_env(),
+        "source": once["source"],
+        "scheduler": once["scheduler"],
+        "previous_launches": once["previous_launches"],
+        "inputs": once["inputs"],
         "cuda": cuda_info,
         "distributed": launch,
         "package_versions": versions,
         "installed_versions_differ": installed_differ,
         "git_repos": git,
-        "env_vars_of_interest": {
-            k: os.environ.get(k) for k in (
-                "FWI_SEGY_ROOT", "PYTORCH_CUDA_ALLOC_CONF", "CUDA_VISIBLE_DEVICES",
-                "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-            )
-        },
+        "env_vars_of_interest": _env_of_interest(),
     }
     if extras:
         meta["runtime"] = extras

@@ -227,7 +227,8 @@ def _cmd_run(args) -> int:
         )
     else:
         spec = load_task(args.task_file)
-    result = TaskRunner().run(spec)
+    source = {"path": str(Path(args.task_file).resolve()), "overrides": overrides}
+    result = TaskRunner().run(spec, source=source)
     print(f"\nTask: {result.status.task_id} | state={result.status.state}")
     print(f"Directory: {result.task_dir}")
     if result.status.state == "failed":
