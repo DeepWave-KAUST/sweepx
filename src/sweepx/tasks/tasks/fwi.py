@@ -237,7 +237,7 @@ class FWIRunnerMixin:
         # FWI path. The CRG plan-streaming path (`_run_fwi_plan_streaming`) already
         # writes these; mirror it here so every FWI run dir is self-documenting
         # (config_resolved.yaml + run_meta.json: host/CUDA/env/git). rank-0 only.
-        if dist_info.local_rank == 0:
+        if dist_info.is_root:
             try:
                 _dump_run_metadata(spec, task_dir)
                 print(f"[run-meta] wrote {task_dir/'config_resolved.yaml'} "

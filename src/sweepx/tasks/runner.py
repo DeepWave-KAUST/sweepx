@@ -39,7 +39,8 @@ from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
 from sweep_tasks.tasks.rtm import RTMRunnerMixin
 from sweep_tasks.tasks.fwi import FWIRunnerMixin
 from sweep_tasks.tasks.fwi_plan_streaming import PlanStreamingFWIMixin
-from sweep_tasks._helpers.metadata import _dump_run_metadata
+from sweep_tasks._helpers.logtee import tee_run_logs
+from sweep_tasks._helpers.metadata import _dump_run_metadata, _write_manifest
 
 
 # ---------- result + status containers -----------------------------------
@@ -53,6 +54,8 @@ class TaskStatus:
     finished_at: str | None = None
     error: str | None = None
     artifacts: list[str] = field(default_factory=list)
+    # the artifacts relative to the run dir: still right once it is moved
+    artifacts_rel: list[str] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,11 +67,24 @@ class TaskStatus:
             "finished_at": self.finished_at,
             "error": self.error,
             "artifacts": self.artifacts,
+            "artifacts_rel": self.artifacts_rel,
             "summary": self.summary,
         }
 
     def write(self, path: Path) -> None:
         path.write_text(json.dumps(self.to_dict(), indent=2, default=str))
+
+
+def _relative_artifacts(paths: list[str], task_dir: Path) -> list[str]:
+    import os
+
+    root = str(Path(task_dir).resolve())
+    out = []
+    for p in paths:
+        rp = os.path.realpath(p)
+        if rp == root or rp.startswith(root + os.sep):
+            out.append(os.path.relpath(rp, root))
+    return out
 
 
 @dataclass
@@ -90,7 +106,10 @@ class TaskRunner(
 ):
     """Synchronous local task runner. One-shot: instantiate and call .run(spec)."""
 
-    def run(self, spec: TaskSpec) -> TaskResult:
+    def run(self, spec: TaskSpec, *, source: dict | None = None) -> TaskResult:
+        """``source``: where the spec came from -- ``{"path": <task file>,
+        "overrides": [...]}`` (the CLI passes it); the file is kept in the run
+        dir as ``task_source.yaml``."""
         from sweep_tasks.runtime import distributed as _dist
 
         dist_info = _dist.init_distributed_if_needed()
@@ -111,6 +130,20 @@ class TaskRunner(
             (task_dir / "output").mkdir(exist_ok=True)
             (task_dir / "logs").mkdir(exist_ok=True)
         _dist.barrier(dist_info)
+        # the run's stdout / stderr also go to <run>/logs/ (see _helpers/logtee.py);
+        # the manifest is taken last, once those are closed
+        try:
+            with tee_run_logs(task_dir / "logs", getattr(dist_info, "rank", 0) or 0):
+                return self._run_in(spec, task_dir, task_id, dist_info, source)
+        finally:
+            if dist_info.is_root:
+                try:
+                    _write_manifest(task_dir)
+                except Exception as merr:  # noqa: BLE001
+                    print(f"[runner] failed to write manifest.json: {merr!r}")
+
+    def _run_in(self, spec: TaskSpec, task_dir: Path, task_id: str, dist_info, source: dict | None) -> TaskResult:
+        from sweep_tasks.runtime import distributed as _dist
 
         status = TaskStatus(
             task_id=task_id,
@@ -126,7 +159,7 @@ class TaskRunner(
             # before the task-specific dump. FWI paths re-dump later with
             # runtime extras (shape/origin/net_params/…), enriching this.
             try:
-                _dump_run_metadata(spec, task_dir)
+                _dump_run_metadata(spec, task_dir, source=source)
             except Exception as _meta_err:  # noqa: BLE001  (never let meta break the run)
                 print(f"[run-meta] early config dump failed: {_meta_err}")
 
@@ -152,6 +185,7 @@ class TaskRunner(
             artifacts, summary = runner_fn(spec, task_dir)
             status.state = "success"
             status.artifacts = [str(p) for p in artifacts]
+            status.artifacts_rel = _relative_artifacts(status.artifacts, task_dir)
             status.summary = summary
         except Exception as e:  # noqa: BLE001  (we want to surface any failure)
             import traceback as _tb

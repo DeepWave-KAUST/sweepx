@@ -67,13 +67,31 @@ Each run directory is self-describing:
 ```
 sweep_runs/<task_id>/
   config_resolved.yaml     every default filled in — the exact spec that ran
-  run_meta.json            host, CUDA, package versions, git state
+  task_source.yaml         the task file as written (comments kept)
+  run_meta.json            host, CUDA, package versions of the code that ran,
+                           git state, labels, inputs, the Slurm job
+  status.json              state, times, artifacts (also relative to the run dir)
+  manifest.json            every file of the run dir at the end, with its size
+  logs/                    the run's stdout / stderr
+  launch/slurm_<job>.sh    the batch script of each Slurm job (a resumed run keeps all)
+  provenance/<pkg>.diff    uncommitted changes of a dirty checkout
   output/initial_vp.npy    the resolved STARTING model
   output/inverted_vp.npy   the result
   output/loss.npy          misfit per epoch
   output/epochs/           per-`show_every` model snapshots
   qc/                      vp, vp_diff, shot_gather, loss_curve figures
 ```
+
+The run dir keeps what it takes to read it once it is moved away from where
+it was launched (archived): the task file, the logs, the batch script, where
+each input really was (links resolved) with its size and a fingerprint, and
+the labels it ran under -- set `SWEEP_LABEL_<KEY>=value` in the environment
+(e.g. `SWEEP_LABEL_LINE=<experiment line>`, `SWEEP_LABEL_PROJECT=<project>`)
+and `run_meta.json` records them as `labels: {line: ..., project: ...}`.
+A resumed run appends to `logs/` and lists the launches before it in
+`previous_launches`. A variable named like a credential (`*KEY*`, `*TOKEN*`,
+`*SECRET*`, `*PASSW*`) is recorded as set, not with its value, also in the
+copied batch script. `SWEEP_RUN_LOG=0` stops the copy of stdout / stderr to `logs/`.
 
 `output/initial_vp.npy` matters when the start is built in memory
 (`dataset:` or `linear_gradient:`): there is no input file to point at

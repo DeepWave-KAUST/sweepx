@@ -1585,9 +1585,10 @@ class PlanStreamingFWIMixin:
                 "show_every": int(spec.show_every),
                 "setup_wall_s": float(time.perf_counter() - _t_setup0),
             }
-            _dump_run_metadata(spec, task_dir, extras=_runtime_extras)
-            print(f"[run-meta] wrote {task_dir/'config_resolved.yaml'} "
-                  f"+ {task_dir/'run_meta.json'}")
+            if dist_info.is_root:
+                _dump_run_metadata(spec, task_dir, extras=_runtime_extras)
+                print(f"[run-meta] wrote {task_dir/'config_resolved.yaml'} "
+                      f"+ {task_dir/'run_meta.json'}")
         except Exception as meta_err:  # noqa: BLE001
             print(f"[run-meta] dump skipped: {meta_err}")
 
