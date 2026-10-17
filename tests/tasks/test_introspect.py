@@ -33,7 +33,12 @@ from sweep_tasks._helpers.model import (
 from sweep_tasks._helpers.solver_build import _cfl_check
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
 from sweep_tasks.schemas import ModelRef, TaskSpec
-from sweep_tasks.yaml_io import RESOLVED_PATH_KEYS, _resolve_paths, resolve_paths
+from sweep_tasks.yaml_io import (
+    RESOLVED_PATH_KEYS,
+    RESOLVED_WATER_PATH_KEYS,
+    _resolve_paths,
+    resolve_paths,
+)
 
 ROW_KEYS = {
     "name", "ndim", "summary", "is_facade", "models", "fields",
@@ -257,6 +262,20 @@ def test_resolved_keys_are_exactly_the_published_set(tmp_path, monkeypatch):
     assert out["path"] == "/demo/root/vp.npy"
     assert out["npy_path"] == "/abs/obs.npy"
     assert out["output_dir"] == 7                       # non-strings pass through
+
+
+def test_water_files_resolve_only_inside_the_water_block(tmp_path):
+    assert RESOLVED_WATER_PATH_KEYS == {"seabed", "mask"}
+    doc = {"water": {"seabed": "sb.npz", "mask": "m.npy", "velocity": 1500.0},
+           "stages": [{"water": {"seabed": 120.0}}],
+           "seabed": "x", "reparam": {"mask": "y"}}
+    out = resolve_paths(doc, tmp_path)
+    base = tmp_path.resolve()
+    assert out["water"] == {"seabed": str(base / "sb.npz"), "mask": str(base / "m.npy"),
+                            "velocity": 1500.0}
+    assert out["stages"][0]["water"] == {"seabed": 120.0}   # a flat depth stays a number
+    assert out["seabed"] == "x" and out["reparam"] == {"mask": "y"}   # ordinary words elsewhere
+    assert out == _resolve_paths(doc, base)
 
 
 def test_resolve_paths_refuses_a_non_mapping(tmp_path):
