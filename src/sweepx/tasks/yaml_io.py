@@ -22,20 +22,27 @@ _task_adapter: TypeAdapter[TaskSpec] = TypeAdapter(TaskSpec)
 # Keys whose string value is resolved against the YAML's directory, at any
 # depth. Matched by KEY NAME, not by schema field: every other path-like field
 # (``loss.data_mask_path``, ``physics.topography``, ``geometry.plan_path``, ...)
-# is read relative to the working directory of the process that runs the task.
+# is read relative to the working directory of the process that runs the task,
+# except the files of a ``water:`` block (RESOLVED_WATER_PATH_KEYS).
 RESOLVED_PATH_KEYS: frozenset[str] = frozenset({
     "path", "npy_path", "disk_dir", "output_dir",
     "sources_file", "receivers_file", "coeff_shards",
 })
+
+# Keys resolved like RESOLVED_PATH_KEYS, but only inside a mapping held by a
+# key named ``water`` (the WaterSpec block): ``seabed`` and ``mask`` are
+# ordinary words elsewhere. A numeric ``seabed`` (flat depth) stays a number.
+RESOLVED_WATER_PATH_KEYS: frozenset[str] = frozenset({"seabed", "mask"})
 
 
 def resolve_paths(raw: dict, base_dir: str | Path) -> dict:
     """Return a copy of a raw task dict with its path keys made absolute.
 
     The exact rule :func:`load_task` / :func:`load_task_from_dict` apply before
-    validation: for every key in :data:`RESOLVED_PATH_KEYS`, a string value has
-    ``$VAR`` / ``${VAR}`` expanded and, if still relative, is joined to
-    ``base_dir`` and resolved. Nothing else is touched; ``raw`` is not
+    validation: for every key in :data:`RESOLVED_PATH_KEYS`, and for every key
+    in :data:`RESOLVED_WATER_PATH_KEYS` inside a ``water:`` mapping, a string
+    value has ``$VAR`` / ``${VAR}`` expanded and, if still relative, is joined
+    to ``base_dir`` and resolved. Nothing else is touched; ``raw`` is not
     modified.
     """
     if not isinstance(raw, dict):
@@ -85,7 +92,7 @@ def _resolve_water(v: Any, base: Path) -> Any:
     are ordinary words, and only inside ``water:`` are they files."""
     if not isinstance(v, dict):
         return v
-    return {k: (_resolve_one(x, base) if k in {"seabed", "mask"} else x)
+    return {k: (_resolve_one(x, base) if k in RESOLVED_WATER_PATH_KEYS else x)
             for k, x in v.items()}
 
 
