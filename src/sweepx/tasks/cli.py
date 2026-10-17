@@ -333,6 +333,12 @@ def _cmd_new(args) -> int:
     from sweep_tasks import new_template
     from sweep_tasks.yaml_io import _FILE_TEMPLATES, _read_bundled_template
 
+    if args.task_type == "wavefield" and args.backend == "c":
+        print("error: --backend c is not available for a wavefield task: "
+              "snapshot capture is eager-only; use --backend eager (the "
+              "default).")
+        return 2
+
     if args.task_type in _FILE_TEMPLATES:
         # Emit the annotated reference verbatim — the SAME file `sweep-tasks
         # init` ships — so every field mode and how to switch it stays visible
@@ -1876,6 +1882,23 @@ def main(argv: list[str] | None = None) -> int:
                     help="YAML file with a `plot_wavelet_steps:` section to "
                          "source default values from. CLI flags override YAML.")
 
+    # `sweep-tasks migrate-water OLD.yaml [-o NEW.yaml]`
+    mw = subparsers.add_parser(
+        "migrate-water",
+        help="Rewrite a task YAML's retired water keys as one `water:` block",
+        description=(
+            "Rewrite freeze_top_n_rows / freeze_water_layer / reparam."
+            "mask_water_layer / water_vp_m_s / seabed_depth_path / "
+            "water_reset_each_stage into the top-level `water:` block where the "
+            "translation is unambiguous, print the diff, and refuse -- with the "
+            "reason -- where it is not (e.g. a water layer that was read off "
+            "velocities needs a seabed or mask file you provide). Without -o "
+            "nothing is written."))
+    mw.add_argument("task_file", help="the task YAML to migrate")
+    mw.add_argument("-o", "--output", default=None, metavar="NEW.yaml",
+                    help="write the migrated YAML here (and any mask file "
+                         "next to it); may equal task_file")
+
     # `sweep-tasks tasks {list,status,logs}`
     tasks_parser = subparsers.add_parser("tasks", help="Inspect previously run tasks")
     tasks_sub = tasks_parser.add_subparsers(dest="tasks_command")
@@ -1935,6 +1958,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_convert_farfield(args)
     if args.command == "plot-wavelet-steps":
         return _cmd_plot_wavelet_steps(args)
+    if args.command == "migrate-water":
+        from sweep_tasks.migrate_water import main_migrate
+
+        return main_migrate(args.task_file, args.output)
     if args.command == "tasks":
         if args.tasks_command == "list":
             return _cmd_tasks_list(args)

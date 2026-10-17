@@ -3,7 +3,11 @@ from pathlib import Path
 import numpy as np
 from sweep_tasks.schemas import LSRTMSpec, PhysicsSpec
 from sweep_tasks._helpers.bounds import _apply_bounds
-from sweep_tasks._helpers.bounds import _zero_top_rows
+from sweep_tasks._helpers.water import (
+    WaterRegion,
+    stamp_water_,
+    zero_water_grad_,
+)
 from sweep_tasks.runtime.checkpoint import (
     load_run_checkpoint as _load_checkpoint,
     save_run_checkpoint as _save_checkpoint,
@@ -38,6 +42,7 @@ from sweep_tasks._helpers.stages import _normalise_stage_list
 from sweep_tasks._helpers.stop import _GracefulStopper
 from sweep_tasks._helpers.util import _apply_seed
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweep_tasks.progress import optimizer_lr, progress_for
 
 
 class LSRTMRunnerMixin:
@@ -122,6 +127,18 @@ class LSRTMRunnerMixin:
         inv_by_name = {"reflectivity": ref}
         required_names = ["reflectivity"]
 
+        # `water:` holds the water's reflectivity at zero (mode pin: gradient
+        # zeroed, value re-stamped after every step) or resets it to zero at
+        # every stage entry (reset_each_stage). LSRTM runs on one grid.
+        water = WaterRegion.from_task(spec, shape, float(spec.grid.dh))
+        water_mask = (torch.from_numpy(
+            water.mask_on_grid(shape, float(spec.grid.dh))).to(dev)
+            if water is not None else None)
+        pin_mask = water_mask if (water is not None and water.pin) else None
+        if water is not None and dist_info.is_root:
+            print(f"[lsrtm] water: {water.describe()} -> reflectivity held at 0 "
+                  f"in {int(water_mask.sum())} cells")
+
         total_epochs = (sum(s.epochs for s in spec.stages)
                         if spec.stages else int(spec.epochs))
         optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
@@ -163,6 +180,10 @@ class LSRTMRunnerMixin:
             bounds_by_name["reflectivity"] = spec.reflectivity_bounds
 
         stages = _normalise_stage_list(spec)
+        progress = progress_for(self)
+        progress.event("start", task_type="lsrtm", total_epochs=total_epochs,
+                       n_stages=len(stages), start_epoch=start_epoch,
+                       resumed_from=resume_src)
         out_dir = task_dir / "output"
         snapshots_dir = out_dir / "epochs"
         if dist_info.is_root:
@@ -190,27 +211,37 @@ class LSRTMRunnerMixin:
                 spec.scheduler, optimizer, total_epochs, epoch_global,
                 resume_lrs=resume_lrs if already_done_in_stage else None)
             resume_lrs = None
+            stamp_water_(ref, water_mask, 0.0)
             if dist_info.is_root:
                 print(f"[lsrtm] stage {stage_idx} ({remaining}/{stage.epochs} epochs) "
                       f"lr_scale={stage.lr_scale} wavelet_overridden={stage.wavelet is not None}")
+            progress.event("stage", stage=stage_idx, epochs=stage.epochs,
+                           remaining=remaining, first_epoch=epoch_global,
+                           lr_scale=stage.lr_scale)
             for _ in range(remaining):
                 loss_value = self._lsrtm_train_step(
                     spec, lsrtm_solver, stage_wavelet, sources, receivers,
                     vp, ref, obs, optimizer, nshots, dev,
-                    dist_info=dist_info,
+                    dist_info=dist_info, water_mask=pin_mask,
                 )
                 losses.append(loss_value)
+                # the lr this step used, read before the scheduler moves it
+                step_lr = optimizer_lr(optimizer)
                 if scheduler is not None:
                     scheduler.step()
                 _apply_bounds(inv_by_name, bounds_by_name)
+                stamp_water_(ref, pin_mask, 0.0)
                 if dist_info.is_root:
                     print(f"[lsrtm] stage {stage_idx} epoch {epoch_global:04d} loss={loss_value:.6e}")
+                progress.event("iter", stage=stage_idx, epoch=epoch_global,
+                               loss=loss_value, lr=step_lr)
 
                 snapshot_now = (epoch_global % spec.show_every == 0
                                 or epoch_global == total_epochs - 1)
                 if snapshot_now and dist_info.is_root:
-                    np.save(snapshots_dir / f"reflectivity_epoch_{epoch_global:04d}.npy",
-                            ref.detach().cpu().numpy())
+                    snap_path = snapshots_dir / f"reflectivity_epoch_{epoch_global:04d}.npy"
+                    np.save(snap_path, ref.detach().cpu().numpy())
+                    progress.snapshot(epoch_global, snap_path, name="reflectivity")
                     if spec.save_illumination:
                         _save_illumination(lsrtm_solver, snapshots_dir, epoch_global)
 
@@ -268,7 +299,7 @@ class LSRTMRunnerMixin:
 
     def _lsrtm_train_step(self, spec, lsrtm_solver, wavelet, sources, receivers,
                           vp, ref, obs, optimizer, nshots, dev,
-                          *, dist_info=None) -> float:
+                          *, dist_info=None, water_mask=None) -> float:
         import torch
 
         from sweep_tasks.runtime import distributed as _dist
@@ -310,7 +341,7 @@ class LSRTMRunnerMixin:
                     loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
                     (loss_t / global_norm).backward()
                     acc_loss += float(loss_t.detach().cpu())
-                _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+                zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
             result = optimizer.step(_closure)
             return float(result) if result is not None else 0.0
@@ -324,7 +355,7 @@ class LSRTMRunnerMixin:
             loss_t = _loss_sum(syn, obs_chunk, spec.loss, _mask_chunk(data_mask, chunk, dev))
             (loss_t / global_norm).backward()
             acc_loss_local += float(loss_t.detach().cpu())
-        _zero_top_rows(inv_in_order, spec.freeze_top_n_rows)
+        zero_water_grad_(inv_in_order, water_mask)
         _dist.all_reduce_grad_sum(inv_in_order, dist_info)
         optimizer.step()
         acc_loss_global = _dist.all_reduce_scalar_sum(acc_loss_local, dist_info)

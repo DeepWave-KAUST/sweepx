@@ -31,6 +31,7 @@ from sweep_tasks._helpers.stages import (
 )
 from sweep_tasks._helpers.util import _apply_seed
 from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweep_tasks.progress import progress_for
 
 
 class RTMRunnerMixin:
@@ -266,6 +267,14 @@ class RTMRunnerMixin:
             print(f"[rtm] shape={shape} nshots={nshots} shots_per_batch={shots_per_batch} "
                   f"n_batches={len(all_batches)} world_size={dist_info.world_size} "
                   f"normalize_by_illumination={imaging.normalize_by_illumination}")
+        # Rank 0 writes the log and counts its own share of the batches
+        # (round-robin, so every rank's share is within one batch of it).
+        progress = progress_for(self)
+        progress.event("start", task_type="rtm", total_epochs=None,
+                       n_stages=None, nshots=int(nshots),
+                       n_batches=len(all_batches),
+                       world_size=dist_info.world_size)
+        n_failed = 0
 
         # ---- 4) Per-batch local-window context (optional) --------------------
         local_window_ctx = None
@@ -410,6 +419,10 @@ class RTMRunnerMixin:
                 print(f"[rtm] batch {global_batch_index} failed: "
                       f"{type(berr).__name__}: {berr}")
                 _tb.print_exc()
+                n_failed += 1
+            progress.event("progress", done=local_idx + 1,
+                           total=len(local_batches), unit="batch",
+                           failed=n_failed)
 
             # Periodic live QC re-render (rank 0 only — uses local accumulators
             # which differ between ranks, but the user just wants something to

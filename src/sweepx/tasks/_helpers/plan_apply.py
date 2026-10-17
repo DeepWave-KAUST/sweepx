@@ -70,6 +70,40 @@ def _apply_model_plan_to_fwi(
     return cropped_by_name, gg.sources.astype(np.int64), gg.receivers.astype(np.int64), keep_mask
 
 
+def _model_plan_crop_box(spec, native_shape, dh: float):
+    """The cell window ``(starts, stops)`` ``_apply_model_plan_to_fwi`` cuts.
+
+    Read off ``sweep_io.plan.apply_model_plan`` itself -- it crops a
+    broadcast index ramp per axis exactly like it crops every model -- so the
+    window cannot drift from the models'. ``None`` without a model_plan.
+    """
+    if spec.model_plan is None:
+        return None
+    from sweep_io.plan import ModelPlan, apply_model_plan
+
+    plan = spec.model_plan
+    dp = ModelPlan(
+        x_window_m=plan.x_window_m, y_window_m=plan.y_window_m,
+        z_window_m=plan.z_window_m,
+        drop_outside_sources=plan.drop_outside_sources,
+        drop_outside_receivers=plan.drop_outside_receivers,
+    )
+    shape = tuple(int(n) for n in native_shape)
+    starts, stops = [], []
+    for ax, n in enumerate(shape):
+        view = [1] * len(shape)
+        view[ax] = n
+        ramp = np.broadcast_to(
+            np.arange(n, dtype=np.float32).reshape(view), shape)
+        out, _, _ = apply_model_plan(dp, ramp, dh=(float(dh),) * len(shape))
+        if out.size == 0:
+            raise ValueError(f"model_plan crop is empty on axis {ax}")
+        first = int(out[(0,) * len(shape)])
+        starts.append(first)
+        stops.append(first + int(out.shape[ax]))
+    return tuple(starts), tuple(stops)
+
+
 def _apply_data_plan_to_fwi(
     spec, sources_idx, receivers_idx, obs, dh: float, dt: float, nt: int, dev
 ):

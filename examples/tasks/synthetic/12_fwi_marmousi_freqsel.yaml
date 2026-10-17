@@ -158,13 +158,15 @@ stages:
       ramp_s: 0.5
       n_pools: 1
 
-# No `freeze_top_n_rows:` — this path pins the water differently, and the schema
-# rejects the key rather than ignoring it. Every cell of the starting model that
-# sits at EXACTLY the water velocity (1500 m/s, or `reparam.water_vp_m_s`) has
-# its gradient zeroed and its value held. The `linear_gradient` start above
-# stamps rows 0-36 at 1500.0, so the water column is pinned automatically — and
-# so is row 37, where the ramp happens to begin at exactly 1500.0 too. One
-# 12.5 m cell of seabed, worth knowing about.
+# The water column, held at 1500 m/s as in 03: Marmousi's seabed is flat at
+# 462.5 m (rows 0-36). `buffer_cells: 1` holds one more row, 37, the first
+# rock row: the reference run above held it too -- this path used to pin every
+# starting-model cell at exactly 1500 m/s, and the 1-D ramp starts there. Drop
+# the buffer to invert row 37 (and expect the reference numbers to move).
+water:
+  seabed: 462.5
+  buffer_cells: 1
+  velocity: 1500.0
 
 epochs: 240                 # required: the sum of the stage epochs (checked)
 batchsize: 1                # ignored: the pool IS the batch

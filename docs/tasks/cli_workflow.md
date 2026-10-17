@@ -157,7 +157,7 @@ exist anymore. See `src/sweep_tasks/templates/fwi.yaml` for the canonical
 shape. That loop refuses, when the YAML loads, the keys it never reads
 (`scheduler`, `resume` / `resume_from`, `train_shot_batchsize`,
 `save_illumination`, `grad_smooth`, `diffusion_prior`, `local_model_window`,
-`data_plan`, `modeling_override`, `freeze_top_n_rows`, a stage's `boundary:`
+`data_plan`, `modeling_override`, a stage's `boundary:`
 or `frequency:`, `source_encoding.frequency`, the static-dataset keys
 `obs.plan.n_receivers_per_shot` / `receiver_select` / `max_shots` /
 `min_receivers` / `materialize_seed`, `sampling.prefetch_factor`,
@@ -165,12 +165,12 @@ or `frequency:`, `source_encoding.frequency`, the static-dataset keys
 with `per_crg_independent`, a `bandpass` `target` / `padtype` other than the
 default, and a `min_coverage` it would not apply) instead of running without
 them. Under domain decomposition (`SWEEP_DD_ENABLE=1`) it also refuses, when
-the run starts, `illumination_precondition`, `smooth_regularization` and
-`freeze_water_layer`, which the DD loop skips (`reparam.mask_water_layer`
-works there), and a `reparam.backward_mode` / `backward_chunk_rows` other than
+the run starts, `illumination_precondition` and `smooth_regularization`,
+which the DD loop skips (`water:` works there), and a `reparam.backward_mode` /
+`backward_chunk_rows` other than
 the default: DD pushes each tile's gradient through the network in z-slabs of
 `SWEEP_DD_RENDER_CHUNK` rows. Without DD, `reparam.backward_mode:
-single_step` leaves no velocity gradient for those three blocks, so it is
+single_step` leaves no velocity gradient for those two blocks, so it is
 refused with them when the YAML loads.
 
 What the sampler draws each iteration: `batchsize` nodes (virtual sources),
@@ -257,6 +257,48 @@ Submit with the usual sbatch:
 ssh glogin.ibex.kaust.edu.sa
 sbatch your_fwi.sbatch
 ```
+
+### The water layer (`water:`)
+
+A marine model's water column has a known velocity, so the inversion should
+not touch it. Every inversion path (conventional, frequency selection, plan
+streaming, reparam / INR, LSRTM) reads the water from ONE top-level block:
+
+```yaml
+water:
+  seabed: /path/seabed.npz   # npz key "seabed_depth": metres below z = 0,
+                             # (nx,) or (ny, nx); a number = a flat seabed
+  # mask: /path/water.npy    # OR: bool on the starting model's grid, True = water
+  velocity: 1485.6           # what the water holds (default 1500)
+  buffer_cells: 0            # native cells below the seabed held too (seabed only)
+  mode: pin                  # or reset_each_stage
+```
+
+* **Where** is exactly one of `seabed` / `mask`, and never a velocity rule.
+  Every grid the run uses — a stage with its own `dh_m`, a `model_plan` crop,
+  a DD-padded tile grid — builds its own mask from it, so the same physical
+  layer is held on all of them: a seabed through
+  `bathymetry.water_mask_from_seabed_depth` on the grid's own columns (a cell
+  is water when its centre lies above `seabed + buffer`, the buffer a depth of
+  native cells), a mask by taking the native cell nearest to each stage cell.
+  To turn a starting model into a seabed file once, as an explicit step, use
+  `bathymetry.derive_seabed_depth_from_vp` + `save_seabed_depth_npz`.
+* **`mode: pin`** holds `velocity` for the whole run: the starting model is
+  stamped with it, its gradient is zeroed, and a grid model is stamped again
+  after every step; a reparam network renders `velocity` there.
+  **`mode: reset_each_stage`** stamps it (re-bakes a network's base) at every
+  stage entry and lets the water invert freely within the stage.
+* LSRTM holds the water's reflectivity at zero instead; `velocity` does not
+  apply there.
+
+It replaces `freeze_top_n_rows`, `freeze_water_layer` and
+`reparam.mask_water_layer` / `water_vp_m_s` / `seabed_depth_path` /
+`water_reset_each_stage`. Those keys are rejected at any non-default value,
+with the `water:` block that replaces them in the error; at their defaults —
+which is how an older run's `config_resolved.yaml` spells them — they still
+load. `sweep-tasks migrate-water old.yaml -o new.yaml` rewrites a task YAML
+where the translation is unambiguous, prints the diff, and refuses (saying
+why) where it is not.
 
 ## End-to-end example (Viking 2-D)
 
@@ -415,9 +457,11 @@ Two things that cost real runs to learn:
   only 250 m — λ/6. A continuous-wave field in a leaky box builds standing
   waves, and unlike a transient that does *not* cancel between a transient obs
   and a steady-state syn.
-* **`freeze_top_n_rows` is rejected in this mode**, not ignored. The water is
-  pinned by VALUE instead: every cell whose starting value is exactly the water
-  velocity (1500 m/s, or `reparam.water_vp_m_s`) has its gradient zeroed.
+* **The water is what `water:` says, nothing else.** This mode used to pin
+  every starting-model cell at exactly 1500 m/s without being asked — water
+  or not. A start with such cells and no `water:` block is now refused at run
+  start: give the water (`seabed` or `mask`), or write `water: false` to
+  invert those cells freely.
 
 The optimizer is fixed as well: Adam at torch's defaults (`eps` 1e-8, `betas`
 (0.9, 0.999)) with no scheduler, each stage at `optimizer.lr × lr_scale`, or
@@ -574,6 +618,8 @@ When enabled, the runner adds these files per target to `artifacts`:
 | Run FWI on a plan | `sweep-tasks run fwi.yaml` (with `geometry.kind=from_plan` + `obs.plan.plan_path`) |
 | Extract freqsel coefficients | `sweep-tasks extract-coeff <forward_run_dir> --n-p 24000 --k-lo 24 --k-hi 72 -o coeff.npz` |
 | Wavelet-free encoded FWI | YAML: `source_encoding: {enabled: true, mode: frequency_selection, frequency: {coeff_shards: ...}}` |
+| Hold the water column | YAML: `water: {seabed: seabed.npz, velocity: 1500.0}` |
+| Migrate retired water keys | `sweep-tasks migrate-water old.yaml -o new.yaml` |
 | Ask the build what it can solve | `sweep-tasks run examples/synthetic/15_introspect_equations.yaml` |
 | Post-filter a saved RTM npy | `sweep-tasks filter-image runs/.../rtm_image_per_shot_normalised.npy` |
 | Bake the post-filter into the RTM run | Add `imaging.post_filter: {enabled: true}` to the RTM YAML |

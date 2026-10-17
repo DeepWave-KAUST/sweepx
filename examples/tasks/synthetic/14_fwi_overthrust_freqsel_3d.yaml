@@ -102,7 +102,8 @@ init_model:
     vmax: 5600.0            # and the base runs to 6000
                             # (no `water_rows` — this is a land model, and the
                             #  field defaults to 0, so the ramp spans the whole
-                            #  column. 12 pins a water layer with it.)
+                            #  column. 12 builds a water layer with it, and
+                            #  holds it with a `water:` block.)
 
 source_encoding:
   enabled: true

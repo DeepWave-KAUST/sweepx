@@ -58,7 +58,6 @@ _KEYS = [
     ("local_model_window", True, [None, False, {"enabled": False}]),
     ("data_plan", {"shot_stride": 2}, [None]),
     ("modeling_override", {"wavelet": {"kind": "ricker", "fm": 3.0}}, [None]),
-    ("freeze_top_n_rows", 3, [0]),
 ]
 
 
@@ -219,8 +218,6 @@ def test_plan_streaming_per_crg_never_uses_receiver_first():
 _LEAF = {
     "illumination_precondition": ({"enabled": True}, {"enabled": False}),
     "smooth_regularization": ({"weight": 1.0e-3}, {"weight": 0.0}),
-    "freeze_water_layer": ({"enabled": True, "seabed_depth_path": "sb.npy"},
-                           {"enabled": False}),
 }
 _SINGLE_STEP = {"kind": "velocity_inr", "backward_mode": "single_step"}
 

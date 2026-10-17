@@ -48,6 +48,14 @@ init_model:                   # 1-D cold start, built in memory — Step 4 of th
     water_rows: 28            # 350 m, constant along the line
     water_vp: 1485.6          # measured from the direct arrival, not 1500
 
+# The water column the network renders at 1485.6 m/s instead of inverting:
+# the flat 350 m of the start (rows 0-27), within 1-3 cells of the seabed
+# measured from the seabed reflection (343-372 m). A per-trace seabed .npz
+# (sweep_tasks.bathymetry) would follow the real bathymetry instead.
+water:
+  seabed: 350.0
+  velocity: 1485.6
+
 reparam:
   kind: velocity_inr
   hidden_features: 128
@@ -59,8 +67,6 @@ reparam:
   coord_max: 1.0
   vp_mean: 0.0
   vp_std: 500.0
-  mask_water_layer: true
-  water_vp_m_s: 1485.6
   save_net: true
   lr: 1.0e-4
   hash:

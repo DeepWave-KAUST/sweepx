@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from sweep_tasks.schemas import ModelRef, PhysicsSpec
+from sweep_tasks.introspect import CFL_RAISE, CFL_WARN, cfl_number
 from sweep_tasks._helpers.geometry import _build_geometry_2d
 from sweep_tasks._helpers.model import (
     _get_equation_class,
@@ -45,18 +46,20 @@ def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, s
     return wavelet, sources, receivers, True
 
 
-def _cfl_check(vmax_m_s: float, dh_m: float, dt_s: float, *, threshold: float = 0.85) -> None:
+def _cfl_check(vmax_m_s: float, dh_m: float, dt_s: float, *, threshold: float = CFL_WARN) -> None:
     """Warn / raise if the FD time step violates the Courant condition.
 
     For 8th-order acoustic FD in 2D the practical safe range is roughly
     ``vmax * dt / dh ≤ 0.5–0.6``. We warn at 0.85 and raise above 1.0
-    because anything above 1.0 will produce NaNs on the first step.
+    because anything above 1.0 will produce NaNs on the first step. The
+    number and both limits live in :mod:`sweep_tasks.introspect`, so tools
+    that pre-check a spec apply this same rule.
     """
-    cfl = float(vmax_m_s) * float(dt_s) / float(dh_m)
-    if cfl > 1.0:
+    cfl = cfl_number(vmax_m_s, dh_m, dt_s)
+    if cfl > CFL_RAISE:
         raise ValueError(
             f"CFL violation: vmax({vmax_m_s:.0f}) * dt({dt_s}) / dh({dh_m}) = "
-            f"{cfl:.3f} > 1.0 — the forward propagator will produce NaNs. "
+            f"{cfl:.3f} > {CFL_RAISE} — the forward propagator will produce NaNs. "
             f"Lower `time.dt` (try {0.6 * dh_m / vmax_m_s:.4f}s) or coarsen "
             f"`grid.dh`."
         )

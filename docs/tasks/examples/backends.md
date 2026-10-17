@@ -38,5 +38,7 @@ choice: at 60,500 time steps, `full` needs about 50 GB where `boundary` needs
 
 `impl: eager` runs the same equation in plain PyTorch — on a CPU, or on a GPU
 without the fused kernels — at a large cost in speed. The file also shows
-`torch.compile` for the eager path. Run [15](introspect.md) to see which
-equations have the fused `c` kernels in your build.
+`torch.compile` for the eager path. It is also the only backend that captures
+wavefield snapshots, so a [wavefield task](wavefield.md) must use it. Run
+[15](introspect.md) to see which equations have the fused `c` kernels in your
+build.

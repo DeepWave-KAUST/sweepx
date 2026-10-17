@@ -16,6 +16,7 @@ Discriminated unions are used for sub-structures that admit several shapes:
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
@@ -162,9 +163,10 @@ class LinearGradientSpec(_Forbid):
     YAML stays self-contained.
 
     ``water_rows`` top rows are held at ``water_vp``; the remaining rows ramp
-    linearly from ``vmin`` to ``vmax``. Pair it with ``freeze_top_n_rows`` to
-    keep the inversion from touching the water column, whose velocity is a
-    known constant rather than something to solve for.
+    linearly from ``vmin`` to ``vmax``. These rows only build the starting
+    model -- they do not tell the inversion where the water is. To keep the
+    inversion off the water column, whose velocity is a known constant rather
+    than something to solve for, give it in ``water:`` (:class:`WaterSpec`).
     """
 
     vmin: float = Field(gt=0)
@@ -307,7 +309,10 @@ Wavelet = Annotated[
 # ----- geometry ----------------------------------------------------------
 
 class LineSet(_Forbid):
-    """A 2D line of source/receiver points: x = arange(start, stop, step), z = depth."""
+    """A 2D line of source/receiver points: x = arange(start, stop, step), z = depth.
+
+    Points come out in sweep's (x, z) grid-index order.
+    """
 
     step: int = Field(ge=1)
     depth: int = Field(ge=0)
@@ -337,7 +342,8 @@ class AxisSpan(_Forbid):
 
 class GridSet(_Forbid):
     """A 3-D rectangular patch of points: the ``x`` × ``y`` outer product at a
-    single depth. Points come out in (x, y, z) order, x fastest-varying."""
+    single depth. Each point is (x, y, z); the points are enumerated x-major,
+    y fastest-varying."""
 
     x: AxisSpan
     y: AxisSpan
@@ -365,6 +371,11 @@ class ExplicitGeometry(_Forbid):
     `sources` is `(nshots, ndim)`. `receivers` is either `(nrec, ndim)` (shared
     across all shots) or `(nshots, nrec, ndim)` (per-shot). The runner
     promotes the shared form to per-shot at use time.
+
+    Each point is a list of GRID INDICES in sweep's order: ``[x, z]`` on a
+    2-D grid, ``[x, y, z]`` on a 3-D one — the order ``kind: line`` / ``grid``
+    produce. They reach the solver as given, unreordered. (The MODEL arrays are
+    the other way round, ``(nz, nx)`` / ``(nz, ny, nx)``.)
     """
 
     kind: Literal["explicit"] = "explicit"
@@ -402,6 +413,9 @@ class FromFileGeometry(_Forbid):
     Expected shapes:
       sources_file   -> (nshots, ndim)            int64
       receivers_file -> (nrec, ndim) shared   OR  (nshots, nrec, ndim) per-shot
+
+    The last axis is grid indices in sweep's order, (x, z) in 2-D and
+    (x, y, z) in 3-D, the same as :class:`ExplicitGeometry`.
     """
 
     kind: Literal["from_file"] = "from_file"
@@ -485,10 +499,14 @@ class FromPlanGeometry(_Forbid):
     # Optional per-axis grid spacing in metres. When None (default) the
     # runner uses ``spec.grid.dh`` for every axis. Set on anisotropic
     # grids (e.g. ``(dz=25, dy=75, dx=75)``).
+    # NOTE: these three per-axis tuples (dh_xyz_m, grid_origin_xyz_m,
+    # auto_origin_pad_cells) follow the MODEL axis order (z, y, x), despite
+    # the ``_xyz_`` in two of the names. Source / receiver POINTS are (x, y, z).
     dh_xyz_m: tuple[float, float, float] | None = None
-    # The UTM coordinate that maps to grid index 0 on each axis. When
-    # None (default), the runner picks the bounding box of the rotated
-    # source + receiver positions with optional padding.
+    # The coordinate (metres, in the rotated model frame) that maps to grid
+    # index 0 on each axis, ordered (z, y, x). When None (default), the runner
+    # picks the bounding box of the rotated source + receiver positions with
+    # optional padding.
     grid_origin_xyz_m: tuple[float, float, float] | None = None
     # Padding around the snap origin in cells (z, y, x). Used only when
     # ``grid_origin_xyz_m`` is None.
@@ -679,9 +697,9 @@ def _leaf_gradient_features(spec) -> list[tuple[str, str]]:
     smooth = spec.smooth_regularization
     if smooth is not None and float(smooth.weight) > 0.0:
         out.append(("smooth_regularization", "weight: 0"))
-    freeze = spec.freeze_water_layer
-    if freeze is not None and freeze.enabled:
-        out.append(("freeze_water_layer", "enabled: false"))
+    # `water:` is not one of them: a network's render pin holds the water
+    # (padded to the DD grid, inside the single_step graph), and a grid model
+    # is re-stamped after every step.
     return out
 
 
@@ -990,31 +1008,215 @@ class GradSmoothSpec(_Forbid):
     mask_taper_rows: int = 0
 
 
-class FreezeWaterLayerSpec(_Forbid):
-    """Mask the FWI gradient above the seabed (water column).
+class WaterSpec(_Forbid):
+    """The water layer, given once for every inversion path.
 
-    Reads a per-trace seabed-depth map (``(nx,)`` for 2-D or ``(ny, nx)``
-    for 3-D) from ``seabed_depth_path``, builds the mask once at task
-    setup, and multiplies it into the vp gradient after backward. See
-    :class:`sweep_nn.SeabedFreezeMask`.
+    WHERE the water is comes from exactly one of:
 
-    The npz must contain a single array under the key ``seabed_depth``,
-    in meters from grid index z=0. Use ``buffer_cells`` to freeze a few
-    extra rows below the seabed when the source wavelet's rise time
-    leaks across the interface.
+    * ``seabed`` -- an ``.npz`` with key ``"seabed_depth"``: the seabed depth
+      per trace in metres below ``z = 0`` (the top of the native model grid),
+      shape ``(nx,)`` for a 2-D model or ``(ny, nx)`` for 3-D, spanning the
+      model's lateral extent at any resolution (first and last samples on the
+      model's first and last columns). A plain number is a flat seabed at
+      that depth, which keeps a synthetic task YAML self-contained. Every grid
+      builds its own mask from it with
+      :func:`sweep_tasks.bathymetry.water_mask_from_seabed_depth`, on that
+      grid's own columns: a cell is water when its centre lies above
+      ``seabed + buffer``.
+    * ``mask`` -- a ``.npy`` boolean (or 0/1) array of the NATIVE model grid
+      (``grid.dh``, the starting model's shape), True = water. A grid with
+      another spacing gives each of its cells the value of the native cell
+      nearest to that cell's position (``i * dh`` from the native origin; a tie
+      goes to the cell with the larger index).
+
+    The water is never inferred from velocities: no "cells at 1500 m/s", no
+    thresholds. :func:`sweep_tasks.bathymetry.derive_seabed_depth_from_vp`
+    turns a starting model into a seabed file once, as an explicit step.
+
+    ``mode``:
+
+    * ``pin`` (default): the water holds ``velocity`` for the whole run, on
+      every stage -- the starting model is stamped with it, its gradient is
+      zeroed, and a grid model is stamped again after every optimizer step; a
+      reparam network renders ``velocity`` there. Any other model a grid
+      inversion updates (vs, rho, ...) keeps its starting value in the water.
+    * ``reset_each_stage``: the water is set to ``velocity`` at the start of
+      every stage and inverted freely within the stage (a reparam network
+      re-bakes its base there so its first render of the stage is
+      ``velocity``).
+
+    ``buffer_cells`` extends a seabed downward by that many cells of the
+    native grid, converted to a depth (``buffer_cells * grid.dh``) so every
+    stage grid marks the same physical layer. Seabed only: bake a buffer into
+    a mask file instead.
+
+    LSRTM inverts reflectivity, not velocity: there the water's reflectivity
+    is held at zero (``pin``) or reset to zero at every stage, and
+    ``velocity`` does not apply.
+
+    ``water: false`` says "this model has no water layer". Only the
+    frequency-selection path needs it: older versions pinned every cell of
+    its starting model at exactly 1500 m/s without being asked, so that path
+    refuses to start on such a model unless the water is given or ``false``.
     """
 
-    enabled: bool = False
-    seabed_depth_path: Path | None = None
+    seabed: float | Path | None = None
+    mask: Path | None = None
+    velocity: float = Field(gt=0, default=1500.0, allow_inf_nan=False)
     buffer_cells: int = Field(ge=0, default=0)
+    mode: Literal["pin", "reset_each_stage"] = "pin"
 
     @model_validator(mode="after")
-    def _path_required_when_enabled(self):
-        if self.enabled and self.seabed_depth_path is None:
+    def _one_source(self):
+        if (self.seabed is None) == (self.mask is None):
             raise ValueError(
-                "FreezeWaterLayerSpec: seabed_depth_path is required when enabled=True"
-            )
+                "water: give exactly one of `seabed` (an .npz with key "
+                "'seabed_depth') or `mask` (a boolean .npy of the native grid); "
+                f"got seabed={self.seabed!r}, mask={self.mask!r}")
+        if self.buffer_cells and self.mask is not None:
+            raise ValueError(
+                "water.buffer_cells extends a seabed downward; with `mask` it "
+                "has nothing to extend -- bake the buffer into the mask file")
+        if isinstance(self.seabed, float) and not (
+                math.isfinite(self.seabed) and self.seabed >= 0.0):
+            raise ValueError(
+                f"water.seabed={self.seabed}: a flat seabed is a finite depth "
+                ">= 0 in metres")
         return self
+
+
+def water_of(spec) -> "WaterSpec | None":
+    """The task's :class:`WaterSpec`, or ``None`` (``water`` unset or false)."""
+    w = getattr(spec, "water", None)
+    return w if isinstance(w, WaterSpec) else None
+
+
+_RESOLVED_NOTE = (
+    "A config_resolved.yaml from an older run records these keys at their "
+    "defaults, which still load.")
+
+
+def _is_unset(v, default) -> bool:
+    if v is None:
+        return True
+    if isinstance(default, bool):
+        return isinstance(v, (bool, int)) and not v
+    try:
+        return float(v) == float(default)
+    except (TypeError, ValueError):
+        return False
+
+
+def _retired_top_level_water_keys(data, task: str):
+    """Drop ``freeze_top_n_rows`` / ``freeze_water_layer`` at their old
+    defaults (the shape an older run's config_resolved.yaml spells them in);
+    reject any other value with the ``water:`` block that replaces it."""
+    if not isinstance(data, dict):
+        return data
+    keys = [k for k in ("freeze_top_n_rows", "freeze_water_layer") if k in data]
+    if not keys:
+        return data
+    data = dict(data)
+    errors = []
+    n = data.pop("freeze_top_n_rows", None)
+    if not _is_unset(n, 0):
+        try:
+            last = f"0..{int(n) - 1}"
+        except (TypeError, ValueError):
+            last = f"0..{n}-1"
+        if task == "lsrtm":
+            how = ("    water:\n      mask: <boolean .npy of the native grid, "
+                   f"rows {last} True>\n"
+                   "LSRTM holds the water's reflectivity at zero there "
+                   "(water.velocity does not apply).")
+        else:
+            how = ("    water:\n      mask: <boolean .npy of the native grid, "
+                   f"rows {last} True>\n      velocity: <their velocity>\n"
+                   "mode `pin` (the default) also stamps `velocity` into those "
+                   "rows; freeze_top_n_rows kept whatever the starting model "
+                   "held there.")
+        errors.append(
+            f"`freeze_top_n_rows: {n}` was retired -- the water layer is given "
+            "once, in a top-level `water:` block, on every inversion path. "
+            f"The same {n} native rows are\n{how}\n"
+            "`sweep-tasks migrate-water <task.yaml>` writes that mask when the "
+            "starting model holds one value in those rows.")
+    fwl = data.pop("freeze_water_layer", None)
+    if fwl is not None:
+        if not isinstance(fwl, dict):
+            errors.append("`freeze_water_layer` was retired; give the water "
+                          "layer in `water:` (see sweep_tasks.schemas.WaterSpec).")
+        elif fwl.get("enabled", False):
+            sb = fwl.get("seabed_depth_path")
+            buf = fwl.get("buffer_cells", 0) or 0
+            errors.append(
+                "`freeze_water_layer` was retired; its seabed goes in the "
+                "top-level `water:` block:\n"
+                f"    water:\n      seabed: {sb}\n"
+                + (f"      buffer_cells: {buf}\n" if buf else "")
+                + "      velocity: <water velocity>\n"
+                "mode `pin` (the default) also stamps `velocity` into the water "
+                "of the starting model. Unlike freeze_water_layer, `water:` is "
+                "honoured by the conventional (static-obs) path as well -- it "
+                "used to ignore the key -- and every path builds the mask with "
+                "bathymetry.water_mask_from_seabed_depth (cell centre above the "
+                "seabed), where plan-streaming rounded down to "
+                "floor(depth / dz). The seabed must be an .npz with key "
+                "'seabed_depth' (bathymetry.save_seabed_depth_npz).")
+    if errors:
+        raise ValueError(f"{task}: " + "\n".join(errors) + "\n" + _RESOLVED_NOTE)
+    return data
+
+
+_REPARAM_WATER_DEFAULTS = (("mask_water_layer", False), ("water_vp_m_s", 1500.0),
+                           ("seabed_depth_path", None),
+                           ("water_reset_each_stage", False))
+
+
+def _retired_reparam_water_keys(data):
+    """Same for ``reparam.mask_water_layer`` / ``water_vp_m_s`` /
+    ``seabed_depth_path`` / ``water_reset_each_stage``."""
+    if not isinstance(data, dict):
+        return data
+    if not any(k in data for k, _ in _REPARAM_WATER_DEFAULTS):
+        return data
+    data = dict(data)
+    vals = {k: data.pop(k, d) for k, d in _REPARAM_WATER_DEFAULTS}
+    bad = [k for k, d in _REPARAM_WATER_DEFAULTS if not _is_unset(vals[k], d)]
+    if not bad:
+        return data
+    v = vals["water_vp_m_s"]
+    vel = f"      velocity: {v}\n" if not _is_unset(v, 1500.0) else ""
+    reset = ("      mode: reset_each_stage\n"
+             if not _is_unset(vals["water_reset_each_stage"], False) else "")
+    sb = vals["seabed_depth_path"]
+    if not _is_unset(vals["mask_water_layer"], False) and sb is not None:
+        how = (f"The same pin is the top-level block\n    water:\n      seabed: {sb}\n"
+               f"{vel}{reset}"
+               "(the conventional path used to ignore seabed_depth_path and pin "
+               "the cells at exactly water_vp_m_s instead; it reads the seabed "
+               "now).")
+    elif not _is_unset(vals["mask_water_layer"], False) or reset:
+        how = ("Without seabed_depth_path this pinned (or reset) every cell of "
+               "the starting model at exactly water_vp_m_s; the water is no "
+               "longer read off velocities. Give it explicitly in the top-level "
+               "block\n    water:\n      seabed: <.npz, key 'seabed_depth'>   "
+               "# or  mask: <boolean .npy of the native grid>\n"
+               f"{vel}{reset}")
+    elif sb is not None:
+        how = ("seabed_depth_path did nothing without mask_water_layer. To pin "
+               f"the water, write\n    water:\n      seabed: {sb}\n{vel}"
+               "otherwise drop the key.")
+    else:
+        how = ("water_vp_m_s set the velocity the frequency-selection path "
+               "pinned (every starting-model cell at exactly that value) and "
+               "the VRZ Gardner water threshold; both now come from "
+               f"`water.velocity` (water: {{seabed|mask: ..., velocity: {v}}}).")
+    raise ValueError(
+        "reparam: " + ", ".join(f"{k}={vals[k]!r}" for k in bad) + " -- the "
+        "reparam water keys were retired; the water layer is given once, in a "
+        "top-level `water:` block, on every inversion path. "
+        + how.rstrip("\n") + "\n" + _RESOLVED_NOTE)
 
 
 class FreqSelectionSpec(_Forbid):
@@ -1319,9 +1521,10 @@ class FreeParamSpec(_Forbid):
 
     ``std`` is the per-parameter "scale": the channel's effective learning rate
     is ``reparam.lr * std``, so pick it for the parameter's magnitude (vp ~ 500,
-    impedance z ~ 2). ``water_value`` pins the water column of THIS channel when
-    the reparam's water mask is active (e.g. vp -> 1500, Gardner-water z -> 1.5);
-    leave it null to skip the pin for this channel.
+    impedance z ~ 2). ``water_value`` is the value THIS channel holds in the
+    water layer of ``water:`` (e.g. Gardner-water z -> 1.5); leave it null to
+    leave the channel free there. The vp channel always holds
+    ``water.velocity``, so its ``water_value`` is null or that same value.
     """
 
     name: str
@@ -1347,6 +1550,12 @@ class ReparamSpec(_Forbid):
     """
 
     kind: Literal["velocity_inr"] = "velocity_inr"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_water_keys(cls, data):
+        return _retired_reparam_water_keys(data)
+
     # Multi-parameter reparam: predict SEVERAL solver-model parameters jointly
     # from ONE shared-trunk network (sweep_nn.MultiParamINR), one output channel
     # per entry (channel 0 = vp = primary). When None (default) the reparam is
@@ -1391,41 +1600,9 @@ class ReparamSpec(_Forbid):
     direct_velocity: bool = False
     coord_min: float = 0.0
     coord_max: float = 1.0
-    # Pin the water column to a fixed velocity at render time. When
-    # ``mask_water_layer`` is True the runner builds a 3-D boolean mask
-    # and passes it to :class:`sweep_nn.VelocityINR`. The SIREN cannot
-    # disturb those voxels — useful because SIREN's natural init has
-    # ~std=0.08 raw output, so with ``vp_std=500`` the water layer
-    # would otherwise sit at 1500±40 m/s of init noise from epoch 0.
-    #
-    # Mask construction: when ``seabed_depth_path`` is set (preferred),
-    # the runner loads a 2-D ``seabed_depth`` array (same npz format
-    # as :class:`FreezeWaterLayerSpec.seabed_depth_path` — key
-    # ``"seabed_depth"``, depths in meters from z=0), crops it to the
-    # post-model_plan window, and broadcasts via ``z*dh < depth[y,x]``
-    # to a 3-D bool mask. This is the geologically-correct path —
-    # per-column bathymetry, robust to smoothed init models that
-    # don't have float-exact 1500 m/s in the water column.
-    #
-    # Fallback when ``seabed_depth_path`` is None: the runner infers
-    # the mask via ``init_vp == water_vp_m_s``. Only works when the
-    # init was stamped to exactly the water velocity.
-    mask_water_layer: bool = False
-    water_vp_m_s: float = Field(gt=0, default=1500.0)
-    seabed_depth_path: Path | None = None
-    # Water-layer handling across multiscale stages. When False (default) and
-    # ``mask_water_layer`` is True, the water column is PINNED to ``water_vp_m_s``
-    # for the whole run (render-time ``where(mask, water_vp, vp)``). When True,
-    # the water is instead RESET to ``water_vp_m_s`` at the START of each stage
-    # (band) and then inverted FREELY within the stage — the runner clears the
-    # render-time pin and re-bakes the base in the water region so the first
-    # render of the stage equals ``water_vp_m_s`` (``base[water] += water_vp -
-    # render[water]``), after which the INR delta there evolves unconstrained.
-    # Prevents water drift from ACCUMULATING across bands (the failure mode of
-    # never-masked water) while still letting each band's data shape the water /
-    # near-seabed. Requires ``mask_water_layer=True`` (to define the water region
-    # via seabed_depth_path). Reparam mode only.
-    water_reset_each_stage: bool = False
+    # The water layer (pin / reset each stage) is NOT configured here: it is
+    # the task's top-level ``water:`` block (WaterSpec), the same one every
+    # inversion path reads. The network renders ``water.velocity`` there.
     hash: ReparamHashSpec = Field(default_factory=ReparamHashSpec)
     fourier: ReparamFourierSpec = Field(default_factory=ReparamFourierSpec)
     # Anisotropic lateral downsampling of the INR render: evaluate the
@@ -1461,7 +1638,7 @@ class ReparamSpec(_Forbid):
     #     wavefield activations are pinned for the network backward.
     # The plan-streaming loop (obs.plan.sampling): single_step leaves it no
     # velocity gradient, so it refuses single_step together with
-    # illumination_precondition / smooth_regularization / freeze_water_layer;
+    # illumination_precondition / smooth_regularization;
     # under DD (SWEEP_DD_ENABLE=1) it reads neither field and refuses values
     # other than the defaults when the run starts.
     backward_mode: Literal["two_pass_full", "two_pass_chunked", "single_step"] = "two_pass_full"
@@ -1553,8 +1730,8 @@ class StageSpec(_Forbid):
       native origin -- the positions geometry snaps to, ``round(x / dh_m)`` --
       and spans the whole native extent: ``ceil((n - 1) * grid.dh / dh_m) + 1``
       points per axis, the last one taking the native edge value when the
-      extent is not a whole number of cells. Masks, seabed maps,
-      ``freeze_top_n_rows`` (same depth, not same row count) and the reparam
+      extent is not a whole number of cells. The ``water:`` layer (the same
+      physical layer, rebuilt on each stage grid), other masks and the reparam
       network's coordinates follow the same grid.
     - ``dt_s`` / ``nt``: rebuild solver at a different time grid
     - ``batch_size``: per-stage shot batch (overrides FWISpec.batchsize)
@@ -1994,6 +2171,49 @@ class WavefieldSpec(BaseTaskSpec):
     snapshot_times: list[int] = Field(min_length=1)
     plot: bool = True
 
+    @model_validator(mode="after")
+    def _validate_wavefield(self):
+        # Snapshot capture (return_wavefield + snapshot_times) exists on the
+        # eager backend only. The C propagator takes no `snapshot_times` and
+        # failed with an unexpected-keyword TypeError after the models were
+        # already built — say what to change here instead.
+        if self.backend.impl == "c":
+            raise ValueError(
+                "wavefield task: backend.impl='c' cannot capture snapshots — "
+                "snapshot capture is eager-only; set backend: {impl: eager}. "
+                "(forward / fwi / rtm / lsrtm tasks can keep impl: c.)"
+            )
+        # Eager chunk checkpointing keeps only the chunk boundaries and
+        # recomputes the rest, so it has no interior field to hand back; sweep
+        # refuses return_wavefield with it, again after the models are built.
+        if self.backend.use_ckpt:
+            raise ValueError(
+                "wavefield task: backend.use_ckpt=true cannot return snapshots "
+                "(checkpointing discards the interior field); set "
+                "backend.use_ckpt: false."
+            )
+        nt = self.time.nt
+        out_of_range = [t for t in self.snapshot_times if not 0 <= t < nt]
+        if out_of_range:
+            raise ValueError(
+                f"wavefield task: snapshot_times {out_of_range} are outside "
+                f"[0, {nt - 1}] (time.nt={nt}). They are time-step INDICES, "
+                f"not seconds; use values below nt or raise time.nt."
+            )
+        # The solver returns snapshots sorted and de-duplicated, so an
+        # unsorted or repeated list put snapshots.npy[i] and the figure title
+        # "t-step snapshot_times[i]" on different time steps.
+        times = list(self.snapshot_times)
+        if any(b <= a for a, b in zip(times, times[1:])):
+            raise ValueError(
+                f"wavefield task: snapshot_times {times} must be strictly "
+                f"increasing with no repeats (e.g. {sorted(set(times))}): the "
+                f"solver returns snapshots in increasing time order, so "
+                f"snapshots.npy and the plot titles would not line up with "
+                f"the list as written."
+            )
+        return self
+
 
 class FWISpec(BaseTaskSpec):
     task_type: Literal["fwi"] = "fwi"
@@ -2033,17 +2253,34 @@ class FWISpec(BaseTaskSpec):
                     f"fwi: field(s) {missing} are required (they are "
                     "optional only under source_encoding.mode="
                     "'frequency_selection')")
-        elif self.freeze_top_n_rows:
-            # The freqsel loop pins the water by VALUE (every cell of the
-            # starting model at exactly water_vp gets a zeroed gradient), not
-            # by row count, so honouring this key would take a second
-            # mechanism. Reject it rather than silently drop it.
-            raise ValueError(
-                "fwi: freeze_top_n_rows is not supported under "
-                "source_encoding.mode='frequency_selection'. That path pins "
-                "every cell whose STARTING value is exactly the water "
-                "velocity (1500 m/s, or reparam.water_vp_m_s) — set the water "
-                "column to that value in init_model instead.")
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_water_keys(cls, data):
+        return _retired_top_level_water_keys(data, "fwi")
+
+    @model_validator(mode="after")
+    def _water_values_need_water(self):
+        # A channel's water_value is only read where `water:` says the water
+        # is; without the block it would be dropped silently.
+        w = water_of(self)
+        fps = (self.reparam.free_params if self.reparam is not None else None) or ()
+        for i, fp in enumerate(fps):
+            if fp.water_value is None:
+                continue
+            if w is None:
+                raise ValueError(
+                    f"fwi: reparam.free_params[{i}] ({fp.name!r}) sets "
+                    f"water_value={fp.water_value} but the task has no "
+                    "`water:` block to say where the water is; add one, or "
+                    "drop water_value")
+            if fp.name == "vp" and float(fp.water_value) != float(w.velocity):
+                raise ValueError(
+                    f"fwi: reparam.free_params[{i}] (vp) water_value="
+                    f"{fp.water_value} disagrees with water.velocity="
+                    f"{w.velocity}; vp holds water.velocity in the water, so "
+                    "drop the vp entry's water_value")
         return self
 
     @model_validator(mode="after")
@@ -2226,23 +2463,10 @@ class FWISpec(BaseTaskSpec):
         return self
 
     @model_validator(mode="after")
-    def _plan_streaming_freeze_rows(self):
-        # Apart from _plan_streaming_keys on purpose: the water: block retires
-        # freeze_top_n_rows on every path, and this check goes with it.
-        if _plan_streaming_on(self) and self.freeze_top_n_rows:
-            raise ValueError(
-                f"fwi: freeze_top_n_rows={self.freeze_top_n_rows} is not "
-                "supported on the plan-streaming path (obs.plan.sampling): it "
-                "never reads it, so those rows would be inverted. Freeze the "
-                "water there with freeze_water_layer (a seabed depth map), or "
-                "drop obs.plan.sampling: the conventional path applies it.")
-        return self
-
-    @model_validator(mode="after")
     def _plan_streaming_single_step(self):
         # With backward_mode single_step the plan-streaming loop differentiates
         # through solver and network in one graph: no velocity gradient exists
-        # for these three to work on, and the loop skips them (as the DD loop
+        # for these to work on, and the loop skips them (as the DD loop
         # does, refused when a DD run starts). The config alone decides this,
         # so refuse it at load; a block switched off asks for nothing.
         if (not _plan_streaming_on(self) or self.reparam is None
@@ -2422,9 +2646,10 @@ class FWISpec(BaseTaskSpec):
 
     # Phase-1 patch fields:
     model_bounds: dict[str, ModelBounds] = Field(default_factory=dict)
-    # Rows of the native grid (grid.dh). A stage with its own dh_m freezes the
-    # same depth, 0 .. (n - 1) * grid.dh, in its own rows.
-    freeze_top_n_rows: int = Field(ge=0, default=0)
+    # The water layer, for every inversion path below (conventional, frequency
+    # selection, plan streaming, reparam): see WaterSpec. ``false`` = this
+    # model has no water layer.
+    water: WaterSpec | Literal[False] | None = None
     stages: list[StageSpec] | None = None
     resume_from: str | None = None  # task_id under output_dir to resume from
     # Auto-resume from the *same* task_dir's checkpoint.pt when it exists
@@ -2512,11 +2737,6 @@ class FWISpec(BaseTaskSpec):
     # Turns an oscillatory single-band traveltime kernel into a smooth,
     # low-wavenumber background update. Grid-mode only.
     grad_smooth: GradSmoothSpec | None = None
-
-    # Optional water-column / seabed gradient freeze mask. See
-    # :class:`FreezeWaterLayerSpec`. Built once at setup, applied to
-    # the vp gradient after illumination preconditioning.
-    freeze_water_layer: FreezeWaterLayerSpec | None = None
 
     @field_validator("local_model_window", mode="before")
     @classmethod
@@ -2707,7 +2927,10 @@ class LSRTMSpec(BaseTaskSpec):
 
     # Phase-1 patch fields (the inverted parameter is reflectivity, a single tensor):
     reflectivity_bounds: ModelBounds | None = None
-    freeze_top_n_rows: int = Field(ge=0, default=0)
+    # Where the water is (WaterSpec). LSRTM holds the water's reflectivity at
+    # zero (mode pin) or resets it to zero at every stage; water.velocity
+    # does not apply.
+    water: WaterSpec | Literal[False] | None = None
     stages: list[StageSpec] | None = None
     resume_from: str | None = None
     # See ``FWISpec.resume`` for semantics: auto-resume from the same
@@ -2721,6 +2944,21 @@ class LSRTMSpec(BaseTaskSpec):
     def _validate_stages(self):
         if self.stages is not None and len(self.stages) == 0:
             raise ValueError("LSRTMSpec.stages must be non-empty when set.")
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_water_keys(cls, data):
+        return _retired_top_level_water_keys(data, "lsrtm")
+
+    @model_validator(mode="after")
+    def _water_velocity_unused(self):
+        w = water_of(self)
+        if w is not None and w.velocity != WaterSpec.model_fields["velocity"].default:
+            raise ValueError(
+                "lsrtm: the inverted field is reflectivity, which `water:` holds "
+                "at zero in the water (or resets to zero each stage), so "
+                f"water.velocity={w.velocity} does not apply; drop it")
         return self
 
     @model_validator(mode="after")

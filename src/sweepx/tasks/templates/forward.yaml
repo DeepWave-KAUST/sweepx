@@ -55,9 +55,10 @@ geometry:
   receivers: {step: 1,  depth: 18}
 # ── ALTERNATIVES ──
 # geometry:
-#   kind: explicit                  # hard-coded lists ([z, x] per point)
-#   sources:   [[1, 100], [1, 500]]
-#   receivers: [[18, 0], [18, 1], [18, 2]]
+#   kind: explicit                  # hard-coded lists of GRID INDICES, one
+#                                   # [x, z] per point ([x, y, z] in 3-D)
+#   sources:   [[100, 1], [500, 1]]
+#   receivers: [[0, 18], [1, 18], [2, 18]]
 # geometry: {kind: from_file, sources_file: /p/s.npy, receivers_file: /p/r.npy}
 # geometry:
 #   kind: from_segy_headers         # read a SEG-Y file's trace headers
@@ -70,6 +71,7 @@ geometry:
 #   dedupe: true
 #   dedup_method: nearest           # "nearest" | "first"
 #   # 3-D: rotation_metadata / dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells
+#   # (the last three per-axis, ordered (z, y, x) like the model array)
 
 # ═══ Wave-equation physics ════════════════════════════════════════════════════
 

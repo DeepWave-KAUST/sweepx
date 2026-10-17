@@ -1,0 +1,111 @@
+# ====================================================================
+# Run environment — CAPTURED at runtime; NOT part of the spec.
+# (YAML comment, ignored on reload; machine-readable copy in
+#  run_meta.json['distributed'].) Needed to reproduce a multi-GPU run.
+# --------------------------------------------------------------------
+# Single-process run (no torch.distributed / DD).
+# ====================================================================
+task_id: lsrtm
+output_dir: /runs
+seed: 0
+device: cpu
+task_type: lsrtm
+grid:
+  dh: 12.5
+  shape: null
+time:
+  dt: 0.001
+  nt: 2000
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 0.2
+  scale: 1.0
+geometry:
+  kind: line
+  sources:
+    step: 12
+    depth: 1
+    start: 0
+    stop: null
+  receivers:
+    step: 1
+    depth: 18
+    start: 0
+    stop: null
+physics:
+  equation: AcousticLSRTM
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: null
+  source_type:
+  - h1
+  receiver_type:
+  - h1
+  topography: null
+backend:
+  impl: eager
+  eager_options: null
+  cuda_options: null
+  use_ckpt: false
+  ckpt_chunks: 100
+background_model:
+  name: vp
+  path: /demo/bg_vp.npy
+  constant: null
+  shape: null
+  dataset: null
+  dataset_field: null
+  preset: null
+  downsample: null
+  linear_gradient: null
+  smooth_sigma_cells: null
+true_model:
+  name: vp
+  path: /demo/true_vp.npy
+  constant: null
+  shape: null
+  dataset: null
+  dataset_field: null
+  preset: null
+  downsample: null
+  linear_gradient: null
+  smooth_sigma_cells: null
+optimizer:
+  kind: adam
+  lr: 1.0
+  eps: 1.0e-22
+  betas:
+  - 0.9
+  - 0.999
+scheduler:
+  kind: constant
+loss:
+  kind: mse
+  huber_delta: 1.0
+  cc_max_lag_samples: 0
+  cc_beta: 30.0
+  time_mute_samples: 0
+  time_mute_late_samples: 0
+  trace_cosine_demean: true
+  trace_cosine_eps: 1.0e-08
+  data_mask_path: null
+  data_mask_window_mode: false
+  diving_window_db: null
+  diving_pre_s: 0.3
+  diving_minwin_s: 0.5
+  diving_taper_s: 0.16
+  diving_water_vel: 1500.0
+  diving_obs_delay_s: 0.0
+epochs: 5
+batchsize: 1
+train_shot_batchsize: null
+show_every: 10
+reflectivity_bounds: null
+freeze_top_n_rows: 0
+stages: null
+resume_from: null
+resume: false
+save_illumination: false
+modeling_override: null
