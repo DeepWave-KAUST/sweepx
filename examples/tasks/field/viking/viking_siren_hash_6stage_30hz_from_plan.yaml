@@ -1,0 +1,129 @@
+# Viking 2-D streamer FWI — 6-stage SIREN + multi-resolution hash, 2-5 → 2-30 Hz.
+# Identical to viking_siren_hash_6stage_30hz.yaml (the benchmark YAML) EXCEPT
+# geometry and obs are now sourced from a SeismicPlan npz (the new unified
+# CLI workflow) instead of scanning SEG-Y headers in-process every run.
+#
+# Pre-requires:
+#   sweep-tasks build-index --segy-root ${PROJECT_DATA_ROOT}/results/field_data/viking/raw \
+#       --glob 'seismic.segy' --out ${SWEEP_RUNS_ROOT}/viking_unified/viking_index.npz
+#   sweep-tasks build-plan  --index .../viking_index.npz --grouping csg \
+#       --out ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz
+#
+# Acceptance: final_loss within ±5 % of the benchmark (0.1735) and
+# loss_decreased=true. See benchmark/README.md for the headline numbers.
+
+task_type: fwi
+output_dir: ${SWEEP_RUNS_ROOT}/viking_sweep_6stage_from_plan
+task_id: viking_siren_hash_6stage_from_plan_v1
+seed: 2026
+device: auto
+
+grid:
+  dh: 12.5
+  shape: [401, 2305]
+time:
+  dt: 0.001
+  nt: 6000
+
+wavelet:
+  kind: siren_pipeline_npz
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/wavelets/siren_pipeline/estimated_wavelet.npz
+  scale: 1.0
+
+# >>> unified plan path (replaces from_segy_headers + obs.segy in the benchmark) <<<
+geometry:
+  kind: from_plan
+  plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz
+  dedupe: true
+
+obs:
+  plan:
+    plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz
+    cache_all: true   # Viking obs ~700 MB; loads into RAM once, no per-iter reads
+
+physics:
+  equation: Acoustic
+  spatial_order: 6
+  abcn: 20
+  free_surface: true
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+backend:
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+init_model:
+  name: vp
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/models/viking_initial_model_12.5m.npy
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16
+scheduler:
+  kind: constant
+
+loss:
+  kind: trace_cosine
+  trace_cosine_demean: true
+
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+reparam:
+  kind: velocity_inr
+  hidden_features: 128
+  hidden_layers: 2
+  first_omega0: 10.0
+  hidden_omega0: 10.0
+  use_bias: false
+  vp_mean: 0.0
+  vp_std: 400.0
+  direct_velocity: false
+  lr: 1.0e-4
+  backward_mode: two_pass_full
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 1
+    log2_size: 18
+    base_resolution: 16
+    finest_resolution: 512
+
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0
+  padding_z_m: 0.0
+  full_depth: true
+  min_width_m: 0.0
+
+epochs: 300
+batchsize: 48
+train_shot_batchsize: 1
+show_every: 10
+
+stages:
+  - {epochs: 50, batch_size: 48,  dh_m: 75.0,   dt_s: 0.004,  nt: 1500, bandpass: {lo_hz: 2.0, hi_hz: 5.0,  order: 4, target: syn}}
+  - {epochs: 50, batch_size: 64,  dh_m: 37.5,   dt_s: 0.002,  nt: 3000, bandpass: {lo_hz: 2.0, hi_hz: 10.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 80,  dh_m: 25.0,   dt_s: 0.0015, nt: 4000, bandpass: {lo_hz: 2.0, hi_hz: 15.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 96,  dh_m: 18.75,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 20.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 112, dh_m: 15.0,   dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 25.0, order: 4, target: syn}}
+  - {epochs: 50, batch_size: 128, dh_m: 12.5,   dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0, order: 4, target: syn}}
+
+qc:
+  every_n_epochs: 10
+  vp_png: true
+  vp_diff_png: true
+  gradient_png: false
+  shot_gather: true
+  shot_gather_n_shots: 2
+  loss_curve: true

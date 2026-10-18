@@ -1,0 +1,193 @@
+# Viking 2-D end-to-end config — one file drives every sweep-tasks step
+# in the wavelet-estimation pipeline. Pair with the README at
+# `sweep-tasks/docs/datasets/viking/README.md`.
+#
+# Generate with:
+#   sweep-tasks init -o $VIKING_HOME/viking.yaml
+#
+# Use with:
+#   export VIKING_HOME=$HOME/viking
+#   sweep-tasks build-index        --config $VIKING_HOME/viking.yaml
+#   sweep-tasks build-plan         --config $VIKING_HOME/viking.yaml
+#   sweep-tasks analyze-wavelet    --config $VIKING_HOME/viking.yaml
+#   sweep-tasks estimate-wavelet   --config $VIKING_HOME/viking.yaml
+#   sweep-tasks convert-farfield   --config $VIKING_HOME/viking.yaml
+#   sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
+#
+# Precedence (lowest → highest): argparse default → `common:` → per-step
+# section → CLI flag. Override any single value at the shell, e.g.:
+#
+#   sweep-tasks analyze-wavelet --config viking.yaml --shot-stop 50
+#
+# `$VAR` / `${VAR}` in string values is expanded against the current
+# environment at load time.
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 1 — `sweep-tasks build-index`
+# Scan SEG-Y trace headers → per-trace catalog npz (no sample data).
+# Run once per dataset; the same index serves any number of plans.
+# ═══════════════════════════════════════════════════════════════════════
+build_index:
+  # Directory containing the SEG-Y files to scan.
+  segy_root:        ${VIKING_HOME}/raw
+  # Glob (relative to segy_root) selecting the files to index. Use
+  # `--files-from` on the CLI for irregular bundles.
+  glob:             'seismic.segy'
+  # Output SEGYIndex npz path.
+  out:              ${VIKING_HOME}/run/viking_index.npz
+  # Parallel header-scan worker threads. Bump to whatever your machine has.
+  # The MPI form (`-n N`) is only useful for surveys spanning many files.
+  num_workers:      8
+  # Constant source-depth override (m). Use when the SEG-Y depth byte is
+  # unreliable (Viking ships zeros). 6 m = canonical airgun array depth.
+  source_depth_m:   6.0
+  # Constant receiver-depth override (m). 10 m = canonical streamer depth.
+  receiver_depth_m: 10.0
+  # Print one line per scanned file.
+  progress:         true
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 2 — `sweep-tasks build-plan`
+# SEGYIndex + filter args → SeismicPlan npz (declares exactly which trace
+# bytes downstream steps will read). Cheap to rebuild.
+# ═══════════════════════════════════════════════════════════════════════
+build_plan:
+  # Input index from Step 1.
+  index:    ${VIKING_HOME}/run/viking_index.npz
+  # csg = common-shot gather; crg = common-receiver (OBN); supershot =
+  # source-encoded supershot. 2-D streamer like Viking always uses csg.
+  grouping: csg
+  # Output plan npz path.
+  out:      ${VIKING_HOME}/run/viking_csg_plan.npz
+  # Free-text tag stored in plan.build_meta — handy when building multiple
+  # plans from one index.
+  label:    viking_full_csg
+  # Optional filters — uncomment to use:
+  # shot_ids:               "3,200,400,600,800,1003"   # FFID whitelist
+  # offset_min_m:           50.0                       # drop near offsets
+  # offset_max_m:           3000.0                     # drop far offsets
+  # max_traces_per_group:   60                         # random cap rows/shot
+
+# ═══════════════════════════════════════════════════════════════════════
+# Shared defaults — every section below inherits keys from here as fallback.
+# Saves repeating the plan path 5×.
+# ═══════════════════════════════════════════════════════════════════════
+common:
+  # SeismicPlan used by every step that reads SEG-Y traces.
+  plan: ${VIKING_HOME}/run/viking_csg_plan.npz
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 3a — `sweep-tasks analyze-wavelet`
+# Per-shot rank-1 direct-wave wavelet → polarity-align → robust average.
+# CPU-only, ~15 s on Viking 1001 shots.
+# ═══════════════════════════════════════════════════════════════════════
+analyze_wavelet:
+  # Output directory (will contain analysis/, average/, summary.json).
+  out_dir:                     ${VIKING_HOME}/run/wavelet/direct_batch
+  # 1-based inclusive shot ordinal range to process (within the plan).
+  shot_start:                  1
+  shot_stop:                   1001
+  shot_stride:                 1
+  # How many nearest-offset receivers per shot to use for the rank-1 fit.
+  # 4 = Viking canonical; more receivers → more redundancy, slower.
+  nearest_receivers:           4
+  # Direct-wave water velocity (m/s). Canonical 1500 for marine.
+  water_velocity_m_s:          1500
+  # Time window around the predicted direct arrival (s) used for the
+  # rank-1 wavelet fit. Negative numbers reach BEFORE the predicted
+  # arrival (noise / lead-in samples).
+  rel_t_min_s:                 -0.05
+  rel_t_max_s:                 0.30
+  # Rank-1 alternation iterations per shot. 20–25 is plenty.
+  iterations:                  25
+  # Quality filter 1: drop shots whose residual-RMS / observed-RMS ratio
+  # inside the direct-arrival window exceeds this. 0.5 keeps reasonable
+  # data, drops noisy shots.
+  min_residual_ratio:          0.5
+  # Quality filter 2: drop shots whose polarity-aligned shape correlation
+  # to the preliminary mean is below this threshold.
+  min_shape_corr_to_average:   0.95
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 3b — `sweep-tasks estimate-wavelet`
+# SIREN LBFGS prefit to the rank-1 average + sweep wave-equation
+# refinement. 1 GPU production: ~15–30 min on V100.
+# ═══════════════════════════════════════════════════════════════════════
+estimate_wavelet:
+  # Output directory (will contain estimated_wavelet.npz + 4 QC PNGs).
+  out_dir:                     ${VIKING_HOME}/run/wavelet/siren_pipeline
+  # Step 3a output — used as the LBFGS prefit target AND the optional
+  # prior anchor in the wave-equation main loop.
+  initial_wavelet:             ${VIKING_HOME}/run/wavelet/direct_batch/average/average_direct_wavelet.npz
+  # Same shot range / receiver count as 3a; the inversion uses these as
+  # its diagnostic batch.
+  shot_start:                  1
+  shot_stop:                   1001
+  nearest_receivers:           4
+  # Forward-model duration (s). Must be ≥ the deepest reflector you
+  # want to honor in the wavelet match.
+  tmax_s:                      6.0
+  # Constant-velocity 1-D forward grid (pure water at velocity_m_s,
+  # roughly (model_depth_m + z_padding_m) × (x_extent + 2*x_padding_m)).
+  velocity_m_s:                1500
+  dx_m:                        12.5
+  dz_m:                        12.5
+  x_padding_m:                 500
+  z_padding_m:                 500
+  model_depth_m:               360         # ≈ Viking sea-floor depth
+  # cuda = sweep CUDA C kernels (production); eager = pure-torch
+  # autograd (slow but GPU-architecture-independent fallback).
+  backend:                     cuda
+  # siren = MLP-parameterized wavelet (recommended for stability);
+  # discrete = direct sample-space optimization of length-nt vector.
+  mode:                        siren
+  # Pass-band of the wave-equation match loss. 3-30 Hz = Viking signal
+  # band. Outside this band the obs is dominated by noise.
+  filter_lowcut_hz:            3
+  filter_highcut_hz:           30
+  filter_order:                4
+  # Adam epochs of the main wave-equation refinement.
+  epochs:                      100
+  lr:                          1.0e-3
+  # mse / trace_cosine. trace_cosine normalizes per trace and is robust
+  # to the residual obs-amplitude calibration.
+  loss_type:                   trace_cosine
+  # LBFGS outer iterations of the prefit (MSE against initial_wavelet).
+  # Prefit converges in 5–10 outer steps; 10 is plenty.
+  prefit_steps:                10
+  prefit_lr:                   1.0e-3
+  # Weight on the MSE prior anchoring SIREN to initial_wavelet during the
+  # main loop. 0.05 = light anchor (production with 1001 shots). For
+  # small batches (≤ 20 shots) raise to 1–5 to prevent Adam from cycle-
+  # skipping into a non-physical time-shift basin.
+  initial_wavelet_prior_weight: 0.05
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 3c — `sweep-tasks convert-farfield` (optional QC reference)
+# Convert the manufacturer-supplied ASCII far-field signature into a
+# sweep-compatible npz. Not used by FWI itself — useful for visual
+# comparison against the data-driven 3b output.
+# ═══════════════════════════════════════════════════════════════════════
+convert_farfield:
+  # ASCII text file, one sample per line.
+  input:  ${VIKING_HOME}/raw/Farfield.dat
+  # Output npz path.
+  output: ${VIKING_HOME}/run/wavelet/farfield/farfield_wavelet.npz
+  # Sample interval of the source ASCII (4 ms for Viking's FarField.dat).
+  dt_s:   0.004
+  # Optional post-processing — uncomment to use:
+  # zero_initial_samples: 5        # zero the first N samples
+  # taper_start_s:        1.5      # cosine taper start (s)
+  # taper_end_s:          2.0      # cosine taper end (s)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Step 3d — `sweep-tasks plot-wavelet-steps` (4-panel pipeline QC)
+# Renders rank-1 average → SIREN prefit → wave-equation refinement →
+# post-processed final, side-by-side in time and frequency.
+# ═══════════════════════════════════════════════════════════════════════
+plot_wavelet_steps:
+  # Directory holding initial_wavelet_target.npz / prefit_siren_wavelet.npz
+  # / estimated_wavelet.npz (i.e. estimate_wavelet.out_dir from Step 3b).
+  pipeline_dir: ${VIKING_HOME}/run/wavelet/siren_pipeline
+  # Upper-bound on the frequency axis of the spectrum panels (Hz).
+  max_freq_hz:  80

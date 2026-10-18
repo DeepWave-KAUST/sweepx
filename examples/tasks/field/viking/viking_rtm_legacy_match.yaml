@@ -1,0 +1,122 @@
+# Viking 2-D RTM — legacy-matching configuration.
+# Mirrors the canonical Viking imaging command from
+#   ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/docs/datasets/viking/README.md (Step 06):
+#     fwi imaging \
+#       -o velocity_model=runs/viking/fwi_2d/models/velocity_iter_0400.npy \
+#       -o model_dh=12.5 \
+#       -o max_abs_offset=3000 \
+#       -o tmax=6.0 \
+#       -o shots_per_batch=1 \
+#       -o filter_lowcut_hz=3 \
+#       -o filter_highcut_hz=25 \
+#       -o live_update_every=10 \
+#       -o no_save_per_shot_outputs=true
+#
+# Pre-requires:
+#   sweep-tasks build-plan ... --offset-max-m 3000
+#     → ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_3km.npz
+#   Viking FWI benchmark final vp (already on disk):
+#     ${SWEEP_RUNS_ROOT}/viking_sweep_6stage/viking_siren_hash_6stage_v1/
+#       output/inverted_vp.npy
+
+task_type: rtm
+output_dir: ${SWEEP_RUNS_ROOT}/viking_rtm_legacy_match
+task_id: viking_rtm_v1
+seed: 0
+device: auto
+
+grid:
+  dh: 12.5
+  shape: [401, 2305]
+time:
+  dt: 0.001
+  nt: 6000           # 6 s tmax @ dt=0.001 = 6000 (= legacy tmax_s=6.0)
+
+wavelet:
+  kind: siren_pipeline_npz
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/wavelets/siren_pipeline/estimated_wavelet.npz
+  scale: 1.0
+
+geometry:
+  kind: from_plan
+  plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_3km.npz
+  dedupe: true
+
+obs:
+  plan:
+    plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_3km.npz
+    cache_all: true     # 110110 trace × 1500 nt × 4 = ~660 MB; fits in RAM easily
+
+physics:
+  equation: Acoustic
+  spatial_order: 6
+  abcn: 20
+  free_surface: true
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+backend:
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+# Velocity to image — the production FWI output from the benchmark run.
+velocity_model:
+  name: vp
+  path: ${SWEEP_RUNS_ROOT}/viking_sweep_6stage/viking_siren_hash_6stage_v1/output/inverted_vp.npy
+
+# Loss used to derive the gradient image. Legacy default is mse → match it.
+loss:
+  kind: mse
+  trace_cosine_demean: true
+
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0
+  padding_z_m: 0.0
+  full_depth: true
+  min_width_m: 0.0
+
+imaging:
+  shots_per_batch: 1                 # legacy: shots_per_batch=1
+  filter_lowcut_hz: 3.0              # legacy: 3 Hz
+  filter_highcut_hz: 25.0            # legacy: 25 Hz
+  filter_order: 4
+  filter_padtype: odd
+  # 'syn' mirrors legacy: bandpass obs (one-shot) AND syn (per-batch).
+  # Flip to 'wavelet' for a cheaper alternative that pre-filters the source
+  # and skips the per-batch syn filter (numerically equivalent for a linear
+  # wave eqn; legacy chose syn-mode so we do the same for direct comparison).
+  filter_target: syn
+  illumination_epsilon: 1.0e-6
+  normalize_by_illumination: true
+  save_per_shot: false               # legacy: no_save_per_shot_outputs=true
+  live_update_every_batches: 10      # legacy: live_update_every=10
+  loss_kind: mse                     # legacy default loss_type=mse
+  trace_cosine_demean: true
+  # Optional: depth-tapered z-axis low-cut filter applied to every saved
+  # imaging product after the RTM finishes (port of legacy
+  # 07_filter_imaging.py defaults). Comment out the entire block to skip;
+  # the same algorithm is also exposed standalone as
+  #   sweep-tasks filter-image <input.npy>
+  # for re-running with different knobs without redoing the RTM.
+  post_filter:
+    enabled: true
+    wavelength_m: 300.0              # legacy: lowpass_wavelength_m
+    depth_m: 600.0                   # legacy: filter_full_depth_m
+    taper_m: 400.0                   # legacy: taper_m
+    clip_percentile: 1.0
+    display_scale: 1.0
+    cmap: sweep_image                # bundled sweep_viz LUT (dark-red ↔ white ↔ black); 'seismic' for legacy red/blue
+    targets: all                     # filters all 6 products (raw + global-norm + per-shot-norm)
+    save_png: true

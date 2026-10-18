@@ -1,0 +1,33 @@
+# =============================================================================
+# sweep-tasks — INTROSPECT template (annotated reference)
+#
+#   sweep-tasks init introspect -o whats_available.yaml
+#   sweep-tasks run whats_available.yaml
+#
+# Introspect answers "what can this build of sweep actually do?" — which
+# equations exist, and what each one needs as models and produces as fields.
+# It runs no propagator and needs no data, so it is the first thing to run on
+# a new machine to confirm the solver imported and the CUDA extension is live.
+#
+# Output lands in <output_dir>/<task_id>/output/introspect.json.
+# =============================================================================
+
+task_type: introspect
+output_dir: ./sweep_runs
+# task_id: whats_available        # default: <task_type>-<timestamp>
+device: auto
+
+# ---- what to ask ------------------------------------------------------------
+# list_equations           every equation this build registers. Start here.
+# describe_equation        the models, fields and options of ONE equation
+#                          -> set `target`
+# describe_model           one model of one equation (units, role, defaults)
+#                          -> set `target` + `field_or_model`
+# describe_field           one wavefield component of one equation
+#                          -> set `target` + `field_or_model`
+# list_supported_bindings  which compiled backends this build has available
+action: list_equations
+
+# target: Acoustic              # equation name, for the describe_* actions
+# field_or_model: vp            # model or field name, for describe_model /
+                                # describe_field

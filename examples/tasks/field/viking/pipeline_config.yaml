@@ -1,0 +1,89 @@
+# Viking 2-D end-to-end config — one file drives every sweep-tasks step
+# in the wavelet-estimation pipeline. Pair with the README at
+# `sweep-tasks/docs/datasets/viking/README.md`.
+#
+# Usage:
+#   export VIKING_HOME=$HOME/viking
+#   cp sweep-tasks/examples/configs/viking.yaml $VIKING_HOME/viking.yaml
+#   # edit paths if needed, then:
+#   sweep-tasks build-index        --config $VIKING_HOME/viking.yaml
+#   sweep-tasks build-plan         --config $VIKING_HOME/viking.yaml
+#   sweep-tasks analyze-wavelet    --config $VIKING_HOME/viking.yaml
+#   sweep-tasks estimate-wavelet   --config $VIKING_HOME/viking.yaml
+#   sweep-tasks convert-farfield   --config $VIKING_HOME/viking.yaml
+#   sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
+#
+# Precedence (lowest → highest): argparse default → `common:` → per-step
+# section → CLI flag. So you can override any single value at the shell:
+#
+#   sweep-tasks analyze-wavelet --config viking.yaml --shot-stop 50
+#
+# Environment variables ($VAR / ${VAR}) in string values are expanded at
+# load time.
+
+build_index:
+  segy_root:        ${VIKING_HOME}/raw
+  glob:             'seismic.segy'
+  out:              ${VIKING_HOME}/run/viking_index.npz
+  num_workers:      8
+  source_depth_m:   6.0
+  receiver_depth_m: 10.0
+  progress:         true
+
+build_plan:
+  index:    ${VIKING_HOME}/run/viking_index.npz
+  grouping: csg
+  out:      ${VIKING_HOME}/run/viking_csg_plan.npz
+  label:    viking_full_csg
+
+# `common:` provides shared defaults across every section below — saves
+# repeating the plan path five times.
+common:
+  plan: ${VIKING_HOME}/run/viking_csg_plan.npz
+
+analyze_wavelet:
+  out_dir:                     ${VIKING_HOME}/run/wavelet/direct_batch
+  shot_start:                  1
+  shot_stop:                   1001
+  shot_stride:                 1
+  nearest_receivers:           4
+  water_velocity_m_s:          1500
+  rel_t_min_s:                 -0.05
+  rel_t_max_s:                 0.30
+  iterations:                  25
+  min_residual_ratio:          0.5
+  min_shape_corr_to_average:   0.95
+
+estimate_wavelet:
+  out_dir:                     ${VIKING_HOME}/run/wavelet/siren_pipeline
+  initial_wavelet:             ${VIKING_HOME}/run/wavelet/direct_batch/average/average_direct_wavelet.npz
+  shot_start:                  1
+  shot_stop:                   1001
+  nearest_receivers:           4
+  tmax_s:                      6.0
+  velocity_m_s:                1500
+  dx_m:                        12.5
+  dz_m:                        12.5
+  x_padding_m:                 500
+  z_padding_m:                 500
+  model_depth_m:               360
+  backend:                     cuda
+  mode:                        siren
+  filter_lowcut_hz:            3
+  filter_highcut_hz:           30
+  filter_order:                4
+  epochs:                      100
+  lr:                          1.0e-3
+  loss_type:                   trace_cosine
+  prefit_steps:                10
+  prefit_lr:                   1.0e-3
+  initial_wavelet_prior_weight: 0.05
+
+convert_farfield:
+  input:  ${VIKING_HOME}/raw/Farfield.dat
+  output: ${VIKING_HOME}/run/wavelet/farfield/farfield_wavelet.npz
+  dt_s:   0.004
+
+plot_wavelet_steps:
+  pipeline_dir: ${VIKING_HOME}/run/wavelet/siren_pipeline
+  max_freq_hz:  80

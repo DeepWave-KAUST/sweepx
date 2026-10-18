@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sweep-tasks"
+version = "0.1.1"
+description = "Typed, YAML-driven task layer for sweep — FWI/LSRTM/forward/wavefield tasks with a Pydantic schema, sync TaskRunner, distributed (torchrun) support, and a CLI suitable for LLM / programmatic invocation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Shaowen Wang", email = "shaowen.wang@kaust.edu.sa"},
+]
+keywords = ["fwi", "lsrtm", "geophysics", "task", "yaml", "pydantic", "llm", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "sweep-solver>=0.3.5,<0.4",
+    "sweep-loss>=0.1,<0.2",
+    "sweep-nn>=0.1,<0.2",
+    "sweep-io>=0.1,<0.2",         # imported at module scope by _helpers/data_loading + wavelet/*
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+    "numpy>=1.20",
+    "scipy>=1.8",       # sweep_tasks.preproc (filter/resample) + sweep_tasks.viz
+    "torch>=1.13",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+animate = ["imageio>=2.9"]   # GIF writing in sweep_tasks.viz.wavefield
+test    = ["pytest>=7"]
+dev     = ["pytest>=7", "ruff", "black"]
+
+[project.scripts]
+sweep-tasks = "sweep_tasks.cli:main"
+
+
+[project.urls]
+Homepage = "https://github.com/DeepWave-KAUST/sweep-tasks"
+Issues   = "https://github.com/DeepWave-KAUST/sweep-tasks/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sweep_tasks = ["templates/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

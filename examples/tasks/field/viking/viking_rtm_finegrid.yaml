@@ -1,0 +1,106 @@
+# Viking 2-D RTM — one-pass post-FWI imaging at the fine 12.5 m grid.
+#
+# Inputs:
+#   * velocity_model: the final inverted vp from the Viking 6-stage SIREN/hash
+#     FWI run.
+#   * wavelet: the SIREN-pipeline estimated wavelet (re-used from FWI).
+#   * geometry + obs: unified seismic_plan_v1 cache (csg-grouped, 12.5 m grid).
+#
+# Stage filter: bandpass 3–25 Hz to match the inverted-vp's effective freq
+# content and suppress out-of-band noise in the SEG-Y; matches the legacy
+# `fwi_workflow.imaging.rtm` defaults for Viking-class 2-D streamer data.
+#
+# Outputs land under <output_dir>/<task_id>/{output, qc}/ — see
+# `RTMSpec._run_rtm` in the runner for the artefact catalog.
+
+task_type: rtm
+output_dir: ${SWEEP_RUNS_ROOT}/viking_rtm
+task_id: viking_rtm_finegrid_v1
+seed: 2026
+device: auto
+
+grid:
+  dh: 12.5
+  shape: [401, 2305]
+time:
+  dt: 0.001
+  nt: 6000
+
+wavelet:
+  kind: siren_pipeline_npz
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/wavelets/siren_pipeline/estimated_wavelet.npz
+  scale: 1.0
+
+geometry:
+  kind: from_plan
+  plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz
+  dedupe: true
+
+obs:
+  plan:
+    plan_path: ${SWEEP_RUNS_ROOT}/viking_unified/viking_csg_plan.npz
+    cache_all: true
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: true
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+backend:
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+# Post-FWI inverted velocity to image — no inversion update, just RTM.
+velocity_model:
+  name: vp
+  path: ${SWEEP_RUNS_ROOT}/viking_sweep_6stage/viking_siren_hash_6stage_v1/output/models/velocity_final.npy
+
+# Per-trace amplitude-normalised correlation misfit (same as FWI) — drives the
+# FWI gradient image. The RTM image itself uses (obs - syn_filt) regardless.
+loss:
+  kind: trace_cosine
+  trace_cosine_demean: true
+
+# Optional: bound vp the same way FWI did. RTM does not update vp, so this is
+# mostly a safety net for downstream consumers of the saved velocity.
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+# Engquist-style local-window solve: ~5–10× smaller solver per batch on the
+# Viking 2-D geometry. Reuses the same shape-keyed solver cache the FWI path
+# uses (capped at 4 entries to bound GPU memory).
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0
+  padding_z_m: 0.0
+  full_depth: true
+  min_width_m: 0.0
+
+imaging:
+  shots_per_batch: 1
+  filter_lowcut_hz: 3.0
+  filter_highcut_hz: 25.0
+  filter_order: 4
+  filter_padtype: odd
+  # Where the bandpass is applied:
+  #   syn     (default, FWI-style) — obs once + syn per-batch (differentiable filtfilt)
+  #   wavelet — pre-filter the source wavelet once; skip the per-batch syn filter
+  #             (cheaper + matches the legacy fwi_workflow.imaging.rtm path)
+  filter_target: wavelet
+  illumination_epsilon: 1.0e-6
+  normalize_by_illumination: true
+  save_per_shot: false
+  live_update_every_batches: 20
+  loss_kind: trace_cosine
+  trace_cosine_demean: true

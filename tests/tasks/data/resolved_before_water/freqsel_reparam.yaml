@@ -1,0 +1,168 @@
+# ====================================================================
+# Run environment — CAPTURED at runtime; NOT part of the spec.
+# (YAML comment, ignored on reload; machine-readable copy in
+#  run_meta.json['distributed'].) Needed to reproduce a multi-GPU run.
+# --------------------------------------------------------------------
+# Single-process run (no torch.distributed / DD).
+# ====================================================================
+task_id: freqsel_reparam
+output_dir: /runs
+seed: 0
+device: cpu
+task_type: fwi
+grid:
+  dh: 12.5
+  shape: null
+time:
+  dt: 0.001
+  nt: 2000
+wavelet: null
+geometry: null
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  pml_type: null
+  source_type:
+  - h1
+  receiver_type:
+  - h1
+  topography: null
+backend:
+  impl: eager
+  eager_options: null
+  cuda_options: null
+  use_ckpt: false
+  ckpt_chunks: 100
+init_model:
+  name: vp
+  path: /demo/init_vp.npy
+  constant: null
+  shape: null
+  dataset: null
+  dataset_field: null
+  preset: null
+  downsample: null
+  linear_gradient: null
+  smooth_sigma_cells: null
+init_models: null
+obs: null
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-22
+  betas:
+  - 0.9
+  - 0.999
+scheduler:
+  kind: constant
+loss:
+  kind: steady_gcn
+  huber_delta: 1.0
+  cc_max_lag_samples: 0
+  cc_beta: 30.0
+  time_mute_samples: 0
+  time_mute_late_samples: 0
+  trace_cosine_demean: true
+  trace_cosine_eps: 1.0e-08
+  data_mask_path: null
+  data_mask_window_mode: false
+  diving_window_db: null
+  diving_pre_s: 0.3
+  diving_minwin_s: 0.5
+  diving_taper_s: 0.16
+  diving_water_vel: 1500.0
+  diving_obs_delay_s: 0.0
+epochs: 10
+batchsize: 1
+train_shot_batchsize: null
+show_every: 10
+model_bounds: {}
+freeze_top_n_rows: 0
+stages: null
+resume_from: null
+resume: false
+save_illumination: false
+modeling_override: null
+data_plan: null
+model_plan: null
+reparam:
+  kind: velocity_inr
+  free_params: null
+  init_from: null
+  save_net: false
+  save_optimizer: true
+  init_optimizer_from: null
+  hidden_features: 64
+  hidden_layers: 3
+  first_omega0: 30.0
+  hidden_omega0: 30.0
+  use_bias: false
+  vp_mean: 0.0
+  vp_std: 50.0
+  direct_velocity: false
+  coord_min: 0.0
+  coord_max: 1.0
+  mask_water_layer: false
+  water_vp_m_s: 1500.0
+  seabed_depth_path: null
+  water_reset_each_stage: false
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 2
+    log2_size: 15
+    base_resolution: 4
+    finest_resolution: 512
+    backend: pytorch
+    c2f:
+      enabled: false
+      base_levels: 2
+      ramp: cosine
+      warmup: 0.0
+      ramp_end: 1.0
+      final_levels: null
+      growing: false
+  fourier:
+    enabled: false
+    levels: 6
+    include_input: true
+  lateral_downsample: 1
+  compile_render: false
+  lr: 0.0001
+  backward_mode: two_pass_full
+  backward_chunk_rows: 64
+qc: null
+local_model_window: null
+illumination_precondition: null
+source_encoding:
+  enabled: true
+  min_coverage: 0
+  sign_seed: null
+  mode: frequency_selection
+  frequency:
+    coeff_shards: /demo/coeff.npz
+    synthesize_from_true: false
+    true_model_path: null
+    synth_n_nodes: 16
+    synth_rec_stride: 2
+    synth_node_z: 2
+    probe_samples: 1000
+    k_lo: 10
+    k_hi: 20
+    steady_samples: 500
+    slack_samples: 500
+    ramp_s: 0.5
+    n_pools: 14
+    eps: 1.0e-12
+    random_batch: null
+    lift_source_to_water_vp: null
+    bwd_tail_margin: null
+    bwd_tail_margin_s: null
+bandpass: null
+receiver_smoothing: null
+smooth_regularization: null
+diffusion_prior: null
+grad_smooth: null
+freeze_water_layer: null

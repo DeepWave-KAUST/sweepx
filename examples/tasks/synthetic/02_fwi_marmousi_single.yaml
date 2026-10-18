@@ -1,0 +1,97 @@
+# Marmousi 2-D — single-scale FWI from a smoothed starting model.
+#
+# Teaches:  the FWI task shape, `obs.synthetic_from`, boundary-saving adjoint,
+#           and the QC the runner drops per epoch.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/inverted_vp.npy, loss.npy, per-epoch QC PNGs.
+#
+# Run:
+#   sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml
+# Multi-GPU:
+#   sweep-tasks run examples/synthetic/02_fwi_marmousi_single.yaml --nproc-per-node 4
+#
+# Starting model is `vp_smooth` — the low-pass-filtered true model. It keeps
+# the right depth trend, so a SINGLE band converges without cycle-skipping.
+# For the harder 1-D start that needs frequency continuation, see 03.
+#
+# Reference result (RTX 6000 Ada, impl: c, seed 0):
+#   wall time      29.6 min (200 epochs)
+#   misfit         1.592e-02 -> 1.564e-04 (min, epoch 115) -> 2.575e-04 (end)
+#   RMSE vs true   357.3 (init) -> 270.6
+#   perturbation correlation with the true update   r = 0.700
+# See docs/examples/fwi-single.md for the figures and for how to check
+# your own run against these numbers.
+
+task_type: fwi
+output_dir: ./sweep_runs
+task_id: fwi_marmousi_single
+seed: 0                     # explicit, not implicit: the shot batch is drawn
+                            # at random each step, so the seed is what makes
+                            # a re-run reproduce this example exactly.
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 10000                 # 10 s — see 01 on why 7 s was too short
+
+wavelet:
+  kind: ricker
+  fm: 8.0
+  delay: 2.0                # see 01
+
+geometry:
+  kind: line
+  sources:   { step: 12, depth: 1 }    # 114 shots at 150 m
+  receivers: { step: 1,  depth: 18 }
+
+physics:
+  equation: Acoustic
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      # Boundary-saving adjoint (Symes 2007): store only the PML-zone slab per
+      # time step and reconstruct the wavefield backwards during the adjoint
+      # pass. Exact gradient at O(nt x N_boundary) memory instead of
+      # O(nt x N_total). `storage: cpu` / `disk` trade bandwidth for capacity.
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  dataset: marmousi:2d-demo
+  preset: vp_smooth
+
+# `synthetic_from`: the runner re-runs forward modelling from vp_true at task
+# start, so this file is self-contained. To consume 01's output instead, swap
+# in `npy_path: sweep_runs/forward_marmousi/output/record.npy`.
+obs:
+  synthetic_from:
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16              # schema default is 1e-22; 1e-16 is steadier at this obs scale
+
+loss:
+  kind: mse                 # alt: l1, huber, trace_cosine
+
+epochs: 200
+batchsize: 16               # shots drawn per optimizer step (stochastic mini-batch,
+                            # NOT a pass over the survey). Keep it near ~15% of the
+                            # shot count: at 114 shots a batch of 8 samples only 7%
+                            # per step and the extra gradient noise costs more than
+                            # the denser shots gain (measured: RMSE 277 -> 297).
+
+qc:
+  every_n_epochs: 9999      # >> epochs => QC fires only at epoch 0 and the last
+                            # epoch (the runner always forces the last). Set to
+                            # e.g. 10 to watch the inversion evolve.
+  shot_gather: true
+  shot_gather_n_shots: 2

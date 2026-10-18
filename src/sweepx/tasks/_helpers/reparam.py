@@ -1,0 +1,250 @@
+"""Reparameterisation network (VelocityINR) build + hash schedule + tiled render. Verbatim from runner.py."""
+
+
+def _build_reparam_net(spec, base_vp, bounds, water_mask=None,
+                       water_vp=1500.0, param_bases=None):
+    """Construct the reparam network from a ReparamSpec.
+
+    Single-parameter (default): a :class:`sweep_nn.VelocityINR` over ``base_vp``
+    (the initial vp tensor at the first stage's grid); its forward returns
+    ``base + delta`` clamped to ``bounds``.
+
+    Multi-parameter (``spec.free_params`` set): a :class:`sweep_nn.MultiParamINR`
+    with one output channel per freed parameter. ``param_bases`` is the list of
+    per-channel init tensors (same order as ``spec.free_params``, already
+    resampled+padded to the stage grid); channel 0 is vp. Each channel's
+    affine/bounds/water come from its :class:`FreeParamSpec`; the shared trunk
+    reuses the ReparamSpec SIREN/hash hyperparameters.
+
+    ``water_mask`` (boolean, ``base_vp``'s shape) is where the network renders
+    ``water_vp`` instead of its own output -- the task's ``water:`` layer on
+    this grid, built by the caller (``_helpers.water.WaterRegion``). ``None``
+    leaves the whole model to the network. In a multi-parameter network the vp
+    channel holds ``water_vp`` there and every other channel its
+    ``FreeParamSpec.water_value`` (null = free).
+    """
+    import torch  # local import — runner.py keeps torch imports per-function
+    from sweep_nn import VelocityINR
+
+    bounds_tuple = None
+    if bounds is not None and bounds.min is not None and bounds.max is not None:
+        bounds_tuple = (float(bounds.min), float(bounds.max))
+    if water_mask is not None:
+        water_mask = water_mask.to(device=base_vp.device, dtype=torch.bool)
+        if tuple(water_mask.shape) != tuple(base_vp.shape):
+            raise ValueError(
+                f"water_mask shape {tuple(water_mask.shape)} != "
+                f"base_vp shape {tuple(base_vp.shape)}"
+            )
+    # ---- multi-parameter reparam (free_params) -> MultiParamINR ---------- #
+    free_params = getattr(spec, "free_params", None)
+    if free_params:
+        from sweep_nn import MultiParamINR
+        if param_bases is None or len(param_bases) != len(free_params):
+            raise ValueError(
+                f"free_params has {len(free_params)} entries but got "
+                f"{0 if param_bases is None else len(param_bases)} param_bases")
+
+        def _fp_bounds(fp):
+            b = getattr(fp, "bounds", None)
+            if b is None or not bool(getattr(b, "enabled", True)):
+                return None
+            return (b.min, b.max)
+
+        net = MultiParamINR(
+            [b.detach() for b in param_bases],
+            means=[float(fp.mean) for fp in free_params],
+            stds=[float(fp.std) for fp in free_params],
+            bounds=[_fp_bounds(fp) for fp in free_params],
+            water_mask=water_mask,
+            water_values=[(float(water_vp) if fp.name == "vp"
+                           else float(fp.water_value) if fp.water_value is not None
+                           else float("nan")) for fp in free_params],
+            hidden_features=int(spec.hidden_features),
+            hidden_layers=int(spec.hidden_layers),
+            first_omega0=float(spec.first_omega0),
+            hidden_omega0=float(spec.hidden_omega0),
+            use_bias=bool(spec.use_bias),
+            use_hash_encoding=bool(spec.hash.enabled),
+            hash_levels=int(spec.hash.levels),
+            hash_features_per_level=int(spec.hash.features_per_level),
+            hash_log2_size=int(spec.hash.log2_size),
+            hash_base_resolution=(list(spec.hash.base_resolution)
+                                  if isinstance(spec.hash.base_resolution, list)
+                                  else int(spec.hash.base_resolution)),
+            hash_finest_resolution=(list(spec.hash.finest_resolution)
+                                    if isinstance(spec.hash.finest_resolution, list)
+                                    else int(spec.hash.finest_resolution)),
+            hash_c2f=bool(getattr(spec.hash, "c2f", None) is not None
+                          and spec.hash.c2f.enabled),
+            hash_c2f_base_levels=int(getattr(getattr(spec.hash, "c2f", None),
+                                             "base_levels", 2) or 2),
+            hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
+                                      "ramp", "cosine") or "cosine"),
+            hash_growing=bool(getattr(getattr(spec.hash, "c2f", None), "growing", False)),
+            hash_backend=str(getattr(spec.hash, "backend", "pytorch") or "pytorch"),
+            direct_velocity=bool(spec.direct_velocity),
+            coord_min=float(spec.coord_min),
+            coord_max=float(spec.coord_max),
+        ).to(base_vp.device)
+        _init_from = getattr(spec, "init_from", None)
+        if _init_from:
+            sd = torch.load(str(_init_from), map_location=base_vp.device)
+            if isinstance(sd, dict) and "state_dict" in sd:
+                sd = sd["state_dict"]
+            net.load_state_dict(sd)
+            print(f"[reparam] init_from: warm-started MultiParamINR "
+                  f"({net.n_params}-param) <- {_init_from}", flush=True)
+        return net
+
+    net = VelocityINR(
+        base_vp.detach(),
+        vp_mean=float(spec.vp_mean),
+        vp_std=float(spec.vp_std),
+        hidden_features=int(spec.hidden_features),
+        hidden_layers=int(spec.hidden_layers),
+        first_omega0=float(spec.first_omega0),
+        hidden_omega0=float(spec.hidden_omega0),
+        use_bias=bool(spec.use_bias),
+        use_hash_encoding=bool(spec.hash.enabled),
+        hash_levels=int(spec.hash.levels),
+        hash_features_per_level=int(spec.hash.features_per_level),
+        hash_log2_size=int(spec.hash.log2_size),
+        hash_base_resolution=(list(spec.hash.base_resolution)
+                              if isinstance(spec.hash.base_resolution, list)
+                              else int(spec.hash.base_resolution)),
+        hash_finest_resolution=(list(spec.hash.finest_resolution)
+                                if isinstance(spec.hash.finest_resolution, list)
+                                else int(spec.hash.finest_resolution)),
+        hash_c2f=bool(getattr(spec.hash, "c2f", None) is not None
+                      and spec.hash.c2f.enabled),
+        hash_c2f_base_levels=int(getattr(getattr(spec.hash, "c2f", None),
+                                         "base_levels", 2) or 2),
+        hash_c2f_ramp=str(getattr(getattr(spec.hash, "c2f", None),
+                                  "ramp", "cosine") or "cosine"),
+        hash_growing=bool(getattr(getattr(spec.hash, "c2f", None), "growing", False)),
+        hash_backend=str(getattr(spec.hash, "backend", "pytorch") or "pytorch"),
+        use_fourier_encoding=bool(getattr(getattr(spec, "fourier", None), "enabled", False)),
+        fourier_levels=int(getattr(getattr(spec, "fourier", None), "levels", 6) or 6),
+        fourier_include_input=bool(getattr(getattr(spec, "fourier", None), "include_input", True)),
+        direct_velocity=bool(spec.direct_velocity),
+        coord_min=float(spec.coord_min),
+        coord_max=float(spec.coord_max),
+        bounds=bounds_tuple,
+        water_mask=water_mask,
+        water_vp=float(water_vp),
+        lateral_downsample=getattr(spec, "lateral_downsample", 1),
+        compile_render=bool(getattr(spec, "compile_render", False)),
+    ).to(base_vp.device)
+    # Warm-start from a saved reparam net (a previous run's ``reparam_net.pt``,
+    # dumped via SWEEP_SAVE_REPARAM_NET=1) — continue the SAME network across
+    # separate processes/bands (e.g. run 2-4Hz, then resume 2-8Hz). A
+    # GrowingHashGrid auto-grows its levels to match the checkpoint on load, so
+    # the second run keeps the first run's latents and grows further. The hash
+    # config (levels/base/finest/log2/features) must match across runs.
+    _init_from = getattr(spec, "init_from", None)
+    if _init_from:
+        sd = torch.load(str(_init_from), map_location=base_vp.device)
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
+        net.load_state_dict(sd)  # strict: mismatched hash config fails loudly
+        print(f"[reparam] init_from: warm-started network <- {_init_from} "
+              f"(encoder levels now {getattr(net.encoder, 'n_active', 'n/a')})",
+              flush=True)
+    return net
+
+
+def _has_hash_schedule(net) -> bool:
+    """True if ``net``'s encoder supports a coarse-to-fine level schedule
+    (either a CoarseToFineHashGrid mask or a GrowingHashGrid lazy allocator)."""
+    enc = getattr(net, "encoder", None)
+    return hasattr(enc, "set_progress") or hasattr(enc, "grow_to_progress")
+
+
+def _add_grown_levels(optimizer, params, scheduler=None):
+    """Register a growing hash grid's new latent tables with ``optimizer``.
+
+    A new level joins at the lr the network's parameters run at at that
+    moment, the first param group's: base lr x the stage's scale x the
+    schedule's factor at the current epoch. ``add_param_group`` alone would
+    give it ``optimizer.defaults['lr']``, the base the optimizer was built
+    with, unscaled and off the schedule. It also takes the first group's
+    ``initial_lr`` (the stage's base, set by ``_bind_stage_scheduler``) and
+    joins ``scheduler.base_lrs``, so the schedule steps it as it steps the
+    others.
+    """
+    lead = optimizer.param_groups[0]
+    group = {"params": params, "lr": lead["lr"]}
+    if "initial_lr" in lead:
+        group["initial_lr"] = lead["initial_lr"]
+    optimizer.add_param_group(group)
+    if scheduler is not None:
+        scheduler.base_lrs.append(group["initial_lr"])
+
+
+def _advance_hash_schedule(net, progress, c2f_cfg, optimizer, scheduler=None):
+    """Advance the hash coarse-to-fine schedule by one epoch (``progress`` in [0,1]).
+
+    Two encoder mechanisms, picked by duck-typing:
+      * ``GrowingHashGrid``      -> allocate fine levels ON DEMAND and register the
+        new latent Parameters with ``optimizer`` (``_add_grown_levels``: a param
+        group at the lr the network runs at now, on ``scheduler`` when one is
+        bound) so Adam trains them (saves latent memory: fine levels aren't
+        allocated until due).
+      * ``CoarseToFineHashGrid`` -> soft per-level mask (``set_progress``).
+
+    Both read ``base_levels -> final_levels`` over ``[warmup, ramp_end]`` from
+    ``c2f_cfg``. Returns ``(active_levels: float, total_levels: int)`` for logging,
+    or ``None`` if the encoder has no schedulable hash grid.
+    """
+    enc = getattr(net, "encoder", None)
+    if enc is None:
+        return None
+    warmup = float(c2f_cfg.warmup)
+    ramp_end = float(c2f_cfg.ramp_end)
+    final = (None if getattr(c2f_cfg, "final_levels", None) is None
+             else int(c2f_cfg.final_levels))
+    if hasattr(enc, "grow_to_progress"):          # GrowingHashGrid (lazy alloc)
+        base = (None if getattr(c2f_cfg, "base_levels", None) is None
+                else int(c2f_cfg.base_levels))
+        new = enc.grow_to_progress(progress, base_levels=base, final_levels=final,
+                                   warmup=warmup, ramp_end=ramp_end)
+        if new and optimizer is not None:
+            _add_grown_levels(optimizer, new, scheduler)
+        return float(enc.n_active), int(enc.L)
+    if hasattr(enc, "set_progress"):              # CoarseToFineHashGrid (soft mask)
+        enc.set_progress(progress, warmup=warmup, ramp_end=ramp_end, final_levels=final)
+        return float(enc.n_active_levels), int(enc.L)
+    return None
+
+
+def _render_full_to_cpu_tiled(net, cz: int = 1, cy: int = 294):
+    """Render a VelocityINR's full base grid to a CPU tensor, z+y tiled.
+
+    The DD snapshot render (rank 0 only) reconstructs the GLOBAL model, but
+    a full-lateral z-slab render materializes O(ny*nx * 16 levels * 8 corners)
+    hash vertex positions -> many GB on a large grid, even at
+    chunk_rows=1. On a 32 GB V100 tile the solver working set already fills
+    most of the card, so even the
+    chunk_rows=1 full-lateral render OOM'd rank 0. Tiling BOTH z and y bounds
+    each ``render_window`` to cz*cy*nx points; at (cz=1, cy=294) peak render
+    overhead is about a GB (probed on RTX 6000 Ada), which fits the
+    headroom. Each tile is copied to CPU immediately, so GPU only ever
+    holds one tile's intermediates. 3-D only; callers fall back to
+    ``render(chunk_rows=1)`` for 2-D.
+    """
+    import torch
+    full = tuple(int(s) for s in net.base_velocity.shape)
+    if len(full) != 3:
+        return net.render(chunk_rows=1).detach().to("cpu")
+    nz, ny, nx = full
+    out = torch.empty(full, dtype=torch.float32, device="cpu")
+    for z0 in range(0, nz, cz):
+        z1 = min(nz, z0 + cz)
+        for y0 in range(0, ny, cy):
+            y1 = min(ny, y0 + cy)
+            with torch.no_grad():
+                win = net.render_window(z0, z1, y0, y1, 0, nx)
+            out[z0:z1, y0:y1] = win.detach().to("cpu")
+            del win
+    return out
