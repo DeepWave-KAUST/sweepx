@@ -1,0 +1,5 @@
+{
+  "fig": "10_deconvolution.png",
+  "expected_psi_peak_ms": 30.0,
+  "measured_psi_peak_ms": 30.0
+}

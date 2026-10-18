@@ -1,0 +1,110 @@
+[
+  {
+    "name": "L2",
+    "cos_with_ideal": 0.03306940197944641,
+    "grad_norm": 0.04965851455926895,
+    "loss_value": 258.7997131347656
+  },
+  {
+    "name": "L1",
+    "cos_with_ideal": 0.024937283247709274,
+    "grad_norm": 0.8436295986175537,
+    "loss_value": 3633.127197265625
+  },
+  {
+    "name": "Huber",
+    "cos_with_ideal": 0.027421632781624794,
+    "grad_norm": 0.02805139496922493,
+    "loss_value": 123.75621032714844
+  },
+  {
+    "name": "NCC",
+    "cos_with_ideal": 0.02268626168370247,
+    "grad_norm": 0.0036583354230970144,
+    "loss_value": 16.51888084411621
+  },
+  {
+    "name": "Envelope(p=2)",
+    "cos_with_ideal": -0.058221958577632904,
+    "grad_norm": 0.02352687530219555,
+    "loss_value": 385.2077941894531
+  },
+  {
+    "name": "FreqL2",
+    "cos_with_ideal": 0.033069875091314316,
+    "grad_norm": 19.863445281982422,
+    "loss_value": 103521.0
+  },
+  {
+    "name": "Laplace(s=3)",
+    "cos_with_ideal": 0.010692269541323185,
+    "grad_norm": 0.014128846116364002,
+    "loss_value": 11.927921295166016
+  },
+  {
+    "name": "AWI",
+    "cos_with_ideal": -0.017971232533454895,
+    "grad_norm": 6.950976967345923e-05,
+    "loss_value": 0.4325261116027832
+  },
+  {
+    "name": "Deconv",
+    "cos_with_ideal": -0.008280202746391296,
+    "grad_norm": 1.705262366158422e-05,
+    "loss_value": 0.03458718955516815
+  },
+  {
+    "name": "OTMF2",
+    "cos_with_ideal": -0.017497200518846512,
+    "grad_norm": 0.00013356932322494686,
+    "loss_value": 0.8615744113922119
+  },
+  {
+    "name": "W1(abs)",
+    "cos_with_ideal": 0.016486316919326782,
+    "grad_norm": 0.0005016024806536734,
+    "loss_value": 8.515411376953125
+  },
+  {
+    "name": "W2(abs)",
+    "cos_with_ideal": 0.003398873843252659,
+    "grad_norm": 4.01501492888201e-05,
+    "loss_value": 0.40563178062438965
+  },
+  {
+    "name": "NIM(square)",
+    "cos_with_ideal": 0.009167477488517761,
+    "grad_norm": 4.74607695650775e-05,
+    "loss_value": 0.3557828664779663
+  },
+  {
+    "name": "JSD(square)",
+    "cos_with_ideal": 0.014631061814725399,
+    "grad_norm": 0.002666153246536851,
+    "loss_value": 11.913362503051758
+  },
+  {
+    "name": "ExpPhase",
+    "cos_with_ideal": 0.05336267873644829,
+    "grad_norm": 44.13188934326172,
+    "loss_value": 57675.6875
+  },
+  {
+    "name": "CCT",
+    "cos_with_ideal": 0.02186429500579834,
+    "grad_norm": 4.390381491248263e-06,
+    "loss_value": 0.025858689099550247
+  },
+  {
+    "name": "LocalSim",
+    "cos_with_ideal": 0.045808278024196625,
+    "grad_norm": 0.004581328947097063,
+    "loss_value": 4.141002655029297
+  },
+  {
+    "name": "TFPhase",
+    "cos_with_ideal": 0.0011420538648962975,
+    "grad_norm": 0.5444236993789673,
+    "loss_value": 7189.3837890625
+  }
+]

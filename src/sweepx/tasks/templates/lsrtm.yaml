@@ -1,0 +1,160 @@
+# sweep-tasks LSRTM task YAML — COMPLETE annotated reference.
+#
+# Generate with:    sweep-tasks init lsrtm -o my_lsrtm.yaml
+# Run with:         sweep-tasks run my_lsrtm.yaml
+# Multi-GPU:        sweep-tasks run my_lsrtm.yaml --nproc-per-node 4
+#
+# LSRTM = least-squares reverse-time migration. Inverts for a REFLECTIVITY
+# image that, when Born-modeled through the smooth `background_model`,
+# best matches data generated from `true_model`. Two solvers run internally:
+# AcousticLSRTM (foreground/perturbation) + Acoustic (background).
+#
+# ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
+# │ • UNCOMMENTED = active example (Marmousi 2-D synthetic LSRTM).          │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes / OPTIONAL features.         │
+# │ • Schema is `extra="forbid"` — a mistyped key fails loudly at load.     │
+# │ • LSRTM has NO obs block (data comes from true_model), NO reparam,      │
+# │   NO source_encoding — those are FWI-only.                              │
+# └────────────────────────────────────────────────────────────────────────┘
+
+# ═══ Identity ════════════════════════════════════════════════════════════════
+
+task_type: lsrtm
+output_dir: ./sweep_runs
+task_id: marmousi_lsrtm
+seed: 0
+device: auto
+
+# ═══ Grid + time axis ═════════════════════════════════════════════════════════
+
+grid:
+  dh: 12.5
+  # shape inferred from background_model.path npy header when omitted.
+  # shape: [281, 1361]
+
+time:
+  dt: 0.001
+  nt: 4000                          # 4.0 s
+
+# ═══ Source wavelet ═══════════════════════════════════════════════════════════
+# Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
+
+wavelet:
+  kind: ricker
+  fm: 15.0                          # peak frequency [Hz]  (required)
+  delay: 0.1
+  scale: 1.0
+# ── ALTERNATIVES ──
+# wavelet: {kind: from_npy, path: /path/w.npy, scale: 1.0}
+# wavelet: {kind: siren_pipeline_npz, path: /path/estimated_wavelet.npz}
+
+# ═══ Acquisition geometry ═════════════════════════════════════════════════════
+# Discriminated on `kind`: line | explicit | from_file | from_segy_headers |
+#                          from_segy_index | from_plan
+
+geometry:
+  kind: line
+  sources:   {step: 20, depth: 1}
+  receivers: {step: 1,  depth: 1}
+# ── ALTERNATIVES: same six kinds as FWI (see fwi.yaml) ──
+# geometry: {kind: from_plan, plan_path: /p/plan.npz, dedupe: true, dedup_method: nearest}  # nearest|first
+
+# ═══ Wave-equation physics ════════════════════════════════════════════════════
+
+physics:
+  equation: AcousticLSRTM            # LSRTM foreground solver (NOT plain Acoustic);
+                                     # the runner derives the Acoustic background from it
+  spatial_order: 8
+  abcn: 20
+  free_surface: false
+  source_type: [h1]
+  receiver_type: [sh1]               # LSRTM records the scattered field
+
+# ═══ Compute backend ══════════════════════════════════════════════════════════
+# impl: eager (portable, slow) | c (CUDA kernels, production)
+
+backend:
+  impl: eager
+  use_ckpt: false
+  # ---- production CUDA + boundary saving ----
+  # impl: c
+  # cuda_options:
+  #   memory:
+  #     strategy: boundary           # boundary (default) | full (store-all) | ckpt
+  #     boundary: {storage: gpu, storage_dtype: fp32}   # storage gpu|cpu|disk; dtype fp32|fp16|bf16|int8
+  #     # OR: memory: {strategy: ckpt, ckpt: {mode: chunk, chunks: 100}}   # mode: chunk|recursive
+
+# ═══ Models — smooth background + true (data source) ═════════════════════════
+# background_model: the smooth migration velocity (Born reference).
+# true_model:       generates the "observed" data whose reflectivity we invert.
+# Each is a single ModelRef (name + path, OR constant + shape).
+
+background_model:
+  name: vp
+  path: ./vp_smooth.npy
+true_model:
+  name: vp
+  path: ./vp_true.npy
+
+# ═══ Optimizer ════════════════════════════════════════════════════════════════
+# Discriminated on `kind`: adam | sgd | lbfgs
+
+optimizer:
+  kind: adam
+  lr: 0.05                          # reflectivity is ~O(1); much smaller LR than FWI vp
+  # eps: 1.0e-16
+# ── ALTERNATIVES ──
+# optimizer: {kind: sgd, lr: 0.02, momentum: 0.9}
+# optimizer: {kind: lbfgs, lr: 1.0, max_iter: 20, line_search_fn: strong_wolfe}
+
+# ═══ LR scheduler ═════════════════════════════════════════════════════════════
+# Discriminated on `kind`: constant | step | exp | cosine
+# One schedule over the whole run (epoch counted across stages), applied to
+# each stage's base lr (optimizer.lr x lr_scale), as in FWI.
+
+scheduler:
+  kind: constant
+# scheduler: {kind: cosine, t_max: 50, eta_min: 0.0}
+
+# ═══ Loss / misfit ════════════════════════════════════════════════════════════
+# kind: mse | l1 | huber | trace_cosine
+
+loss:
+  kind: mse
+
+# ═══ Iteration budget ═════════════════════════════════════════════════════════
+
+epochs: 50
+batchsize: 8                        # shots per iter
+train_shot_batchsize: 1             # gradient micro-batch per forward solve
+show_every: 10
+
+# ═══ Reflectivity bounds (optional clip on the image) ════════════════════════
+# reflectivity_bounds: {enabled: true, min: -1.0, max: 1.0}
+
+# ═══ Water layer (optional) ══════════════════════════════════════════════════
+# The reflectivity is held at zero there (mode pin) or reset to zero at every
+# stage entry (reset_each_stage). Exactly one of seabed / mask; no velocity.
+
+# water:
+#   seabed: /path/seabed.npz        # npz key "seabed_depth" (metres below z=0),
+#                                   # or a number = a flat layer that deep
+#   # mask: /path/water.npy         # bool on the background model's grid
+#   mode: pin
+
+# ═══ Stages (optional) ═══════════════════════════════════════════════════════
+# An LSRTM stage reads epochs, lr_scale and wavelet only. Every stage runs on
+# the top-level grid, time axis, batchsize, backend and optimizer; the FWI-only
+# stage keys (dh_m, dt_s, nt, batch_size, bandpass, optimizer_reset,
+# inr_lr_scale, frequency, boundary) are refused at load. A stage wavelet
+# changes the demigration source only; the observed data are modeled once.
+# stages:
+#   - {epochs: 25}
+#   - {epochs: 25, lr_scale: 0.5}
+
+# ═══ Obs-synthesis override + resume (optional) ══════════════════════════════
+# modeling_override:                # different wavelet/geometry for data gen
+#   wavelet: {kind: ricker, fm: 12.0}
+# save_illumination: false
+# resume: false                     # auto-resume from checkpoint.pt here
+# resume_from: <task_id>            # resume from a different run

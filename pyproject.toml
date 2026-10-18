@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sweepx"
-version = "0.3.5"
-description = "Install handle for the sweep engine: `pip install sweepx`, then `import sweep`."
+version = "0.4.0"
+description = "The sweep toolkit: seismic I/O, FWI losses, neural reparameterizations, FWI optimizers, the YAML task runner and the natural-language agent, on top of the sweep wave-equation engine."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Shaowen Wang", email = "shaowen.wang@kaust.edu.sa"},
 ]
-keywords = ["fwi", "geophysics", "seismic", "wave-equation", "meta-package"]
+keywords = ["fwi", "geophysics", "seismic", "wave-equation", "inversion", "segy"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -25,24 +25,72 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-# The umbrella pulls the engine (`sweep-solver`) plus every companion that is
-# published: sweep-agent (natural-language control layer) and sweep-tasks, which
-# brings sweep-loss, sweep-io and sweep-nn. Add new companions here when they
-# ship (sweep-tomo, sweep-opt); users keep the same `pip install sweepx`.
-# NOTE: sweep-agent depends on sweep-solver (not on sweepx) — no dependency cycle.
+# The engine stays its own package (CUDA cores, own release cadence); everything
+# else is a subpackage here: sweepx.io / loss / nn / opt (libraries) -> sweepx.tasks
+# (workflows) -> sweepx.agent (interface). See [tool.importlinter] for the rule.
 dependencies = [
     "sweep-solver>=0.3.5,<0.4",
-    "sweep-agent>=0.0.5",
-    "sweep-tasks>=0.1,<0.2",
+    "torch>=1.13",
+    "numpy>=1.20",
+    "scipy>=1.8",
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+    "matplotlib>=3.5",
+    "httpx>=0.25",          # sweepx.agent: LLM endpoint client
 ]
 
-[project.urls]
-Homepage = "https://github.com/DeepWave-KAUST/sweepx"
-Issues   = "https://github.com/DeepWave-KAUST/sweepx/issues"
+[project.optional-dependencies]
+segy     = ["segyio>=1.9"]
+hdf5     = ["h5py>=3.6"]
+animate  = ["imageio>=2.9"]                  # GIFs in sweepx.tasks.viz / sweepx.agent
+agent-ui = ["gradio>=4.0", "ipywidgets>=8.0"]
+mcp      = ["mcp>=0.9"]
+vllm     = ["vllm>=0.5"]                     # serve the agent's model locally; not in `all`
+all      = ["sweepx[segy,hdf5,animate,agent-ui,mcp]"]
+test     = ["pytest>=7", "segyio>=1.9", "h5py>=3.6", "imageio>=2.9"]
+dev      = ["sweepx[test]", "ruff", "import-linter>=2.0"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project.scripts]
+sweepx      = "sweepx.cli:main"
+sweep-tasks = "sweepx.tasks.cli:main"
+sweep-agent = "sweepx.agent.cli:main"
+
+[project.urls]
+Homepage      = "https://github.com/DeepWave-KAUST/sweepx"
+Documentation = "https://sweepx.deepwave.group/"
+Issues        = "https://github.com/DeepWave-KAUST/sweepx/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["sweepx*"]
+
+[tool.setuptools.package-data]
+sweepx = ["loss/py.typed", "tasks/templates/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# Default (prepend) import mode, as in the separate repos: tests/tasks/ imports
+# helpers from sibling test files. tests/io, tests/nn and tests/tasks are not
+# packages, so a test file name must be unique across the three.
+
+# Layering, checked in CI with `lint-imports`: a module may import only from
+# layers below it, and the libraries not from each other.
+[tool.importlinter]
+root_package = "sweepx"
+include_external_packages = true   # for the "no engine in the libraries" contract
+
+[[tool.importlinter.contracts]]
+name = "interface -> tasks -> libraries"
+type = "layers"
+layers = [
+    "sweepx.agent",
+    "sweepx.tasks",
+    "sweepx.io | sweepx.loss | sweepx.nn | sweepx.opt",
+]
+
+[[tool.importlinter.contracts]]
+name = "libraries do not depend on the engine"
+type = "forbidden"
+source_modules = ["sweepx.io", "sweepx.loss", "sweepx.nn", "sweepx.opt"]
+forbidden_modules = ["sweep"]

@@ -1,11 +1,58 @@
+# python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
 *.egg-info/
-dist/
+.eggs/
 build/
-*.pyc
+dist/
+.venv/
+venv/
+env/
+.env
+.ipynb_checkpoints/
+
+# tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# data: never check it in
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.segy
+*.sgy
+*.su
+*.pt
+
+# generated figures of the loss validation scripts
+examples/loss/validation/**/*.png
+examples/loss/validation/**/*.pdf
+examples/loss/validation/**/*.svg
+
+# run outputs and job logs
+sweep_runs/
+examples/agent/demos/outputs/
+examples/loss/validation/REPORT.html
+*.log
+*.out
+*.err
+**/dcgm/
+
+# docs site
 site/
 temp_dir/
 .cache/
-mkdocs.local.yml
 mrtemp/
+mkdocs.local.yml
 mkdocs.probe.yml

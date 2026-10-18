@@ -1,0 +1,100 @@
+# Marmousi 2-D — wavefield snapshots with a free surface.
+#
+# Teaches:  `task_type: wavefield` — dump the pressure field at chosen time
+#           steps instead of only recording at receivers. The fastest way to
+#           see what the physics knobs actually do.
+# Needs:    nothing (models from `sweep.datasets`).
+# Produces: output/record.npy, output/snapshots.npy, output/snapshots.png.
+#
+# Run:
+#   sweep-tasks run examples/tasks/synthetic/06_wavefield_snapshots.yaml
+#
+# `snapshots.png` draws the velocity model in greyscale underneath and lays the
+# wavefield on top with a per-pixel transparency taken from its own amplitude,
+# so quiet regions stay clear and you can see WHAT the wave is travelling
+# through. On Marmousi that is the difference between "there is a scatterer
+# around 7 km" and "that is the fault". The background is `vp` when the
+# equation has one, otherwise the first entry in `models:` — so an elastic or
+# VTI run shows its leading model rather than nothing.
+#
+# `snapshots.npy` is the raw capture and is much richer than the figure:
+# (n_snapshot_times, n_fields, 1, 1, nz+pml, nx+pml). `n_fields` is EVERY field
+# the equation carries, not just pressure — for `Acoustic` that is
+# [h1, h2, psix, psiz, zetax, zetaz], the last four being the PML memory
+# variables, so you can watch the absorbing boundary work. The grid is the
+# PADDED one, and the padding is asymmetric here: 281 -> 301 in z (no PML on
+# top, because of the free surface below) against 1361 -> 1401 in x.
+#
+# A 3-D grid gets three panels per row instead of one — a depth slice, an
+# inline and a crossline. The inline and crossline are cut through the SOURCE
+# so the wavefront is in frame; the depth slice sits at mid-model, because the
+# source is near the surface and a slice at its depth would be nearly empty.
+# All three share one amplitude scale per row, so they are comparable rather
+# than each self-normalised.
+#
+# `snapshot_times` are TIME-STEP INDICES, not seconds: at dt = 1 ms the four
+# below are 0.4 / 0.9 / 1.5 / 2.4 s.
+#
+# Reference (RTX 6000 Ada, seed 0): 17 s.
+#
+# `physics.free_surface: true` puts a pressure-release boundary at z=0, so the
+# snapshots show the downgoing wave AND its polarity-flipped surface ghost,
+# plus the surface multiples that follow. Flip it to false and re-run: the
+# ghost and the multiples disappear and only the direct wavefront is left.
+# That difference is the whole reason marine FWI has to model a free surface.
+
+task_type: wavefield
+output_dir: ./sweep_runs
+task_id: wavefield_snapshots
+seed: 0
+
+grid:
+  dh: 12.5
+
+time:
+  dt: 0.001
+  nt: 3000                   # 3 s — long enough for a few surface bounces
+
+wavelet:
+  kind: ricker
+  fm: 10.0
+  delay: 0.15
+
+# One shot near the middle of the model, receivers across the whole surface.
+geometry:
+  kind: line
+  sources:
+    step: 1
+    depth: 2
+    start: 680
+    stop: 681
+  receivers:
+    step: 4
+    depth: 4
+    start: 4
+    stop: null
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 20
+  free_surface: true         # <- flip to false and compare the snapshots
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: eager                # NOT `c`: snapshot capture (return_wavefield +
+                             # snapshot_times) is implemented on the eager
+                             # backend only. The compiled path records at
+                             # receivers and discards the interior field, which
+                             # is exactly what makes it fast. nt is small here
+                             # so eager is still quick.
+
+models:
+  - name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
+
+# Time steps to dump, in samples (t = index * dt).
+snapshot_times: [400, 900, 1500, 2400]
+plot: true

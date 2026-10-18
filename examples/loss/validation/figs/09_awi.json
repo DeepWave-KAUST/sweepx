@@ -1,0 +1,6 @@
+{
+  "fig": "09_awi.png",
+  "expected_wiener_peak_ms": 30.0,
+  "measured_wiener_peak_ms": 30.0,
+  "awi_loss_at_tau0": 0.0009063838074339609
+}

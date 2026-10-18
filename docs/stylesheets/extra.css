@@ -245,9 +245,78 @@
   padding: 0.7rem 0;
 }
 [data-sweep-d] .md-tabs__link:hover { color: var(--md-default-fg-color); }
-[data-sweep-d] .md-tabs__link--active {
+/* Material 9 marks the current tab on the <li> (md-tabs__item--active). */
+[data-sweep-d] .md-tabs__item--active > .md-tabs__link {
   color: var(--md-default-fg-color);
   font-weight: 500;
+}
+
+/* Tab with a dropdown: the sections listed in extra.tab_menus (the sweepx
+   modules), rendered by overrides/partials/tabs-item.html. Material lets the
+   tabs row scroll sideways (overflow: auto), which would clip the panel; with
+   four tabs nothing needs to scroll, so the row may overflow instead. Below
+   76.25em the tabs are hidden and the drawer lists the same sections. */
+@media screen and (min-width: 76.25em) {
+  [data-sweep-d] .md-tabs,
+  [data-sweep-d] .md-tabs__list { overflow: visible; contain: none; }
+}
+[data-sweep-d] .sweep-tabmenu { position: relative; }
+[data-sweep-d] .sweep-tabmenu__caret {
+  display: inline-block;
+  width: 0.38em;
+  height: 0.38em;
+  margin-left: 0.45em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(0.3em) rotate(45deg);
+  opacity: 0.55;
+}
+[data-sweep-d] .sweep-tabmenu__panel {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: -0.2rem;
+  z-index: 5;
+  grid-template-columns: repeat(2, minmax(11rem, 1fr));
+  gap: 0.2rem 0.8rem;
+  width: 26rem;
+  padding: 0.6rem;
+  white-space: normal;
+  background: var(--sw-paper);
+  border: 1px solid var(--sw-rule);
+  border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.12);
+}
+[data-sweep-d] .sweep-tabmenu:hover > .sweep-tabmenu__panel,
+[data-sweep-d] .sweep-tabmenu:focus-within > .sweep-tabmenu__panel { display: grid; }
+[data-sweep-d] .sweep-tabmenu__label {
+  padding: 0.35rem 0.6rem 0.3rem;
+  font-family: var(--md-code-font-family);
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sw-ink3);
+}
+[data-sweep-d] .sweep-tabmenu__link {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  color: var(--md-default-fg-color);
+}
+[data-sweep-d] .sweep-tabmenu__link:hover,
+[data-sweep-d] .sweep-tabmenu__link:focus-visible,
+[data-sweep-d] .sweep-tabmenu__link--active { background: var(--sw-card); }
+[data-sweep-d] .sweep-tabmenu__name {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+[data-sweep-d] .sweep-tabmenu__note {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.6rem;
+  line-height: 1.35;
+  color: var(--sw-ink3);
 }
 
 /* Search input */

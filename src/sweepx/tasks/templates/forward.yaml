@@ -1,0 +1,116 @@
+# sweep-tasks FORWARD task YAML — COMPLETE annotated reference.
+#
+# Generate with:    sweep-tasks init forward -o my_forward.yaml
+# Run with:         sweep-tasks run my_forward.yaml
+# Multi-GPU:        sweep-tasks run my_forward.yaml --nproc-per-node 4
+#
+# Forward modelling = propagate a wavelet through a velocity model to make
+# synthetic shot records (build FWI test obs, debug geometry, paper figures).
+#
+# ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
+# │ • UNCOMMENTED = active example (Marmousi 2-D acoustic).                 │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes. To switch, comment the      │
+# │   active variant and uncomment the one you want.                        │
+# │ • Schema is `extra="forbid"` — a mistyped key fails loudly at load.     │
+# └────────────────────────────────────────────────────────────────────────┘
+
+# ═══ Identity ════════════════════════════════════════════════════════════════
+
+task_type: forward                  # fixed: selects the forward runner
+output_dir: ./sweep_runs            # run dir = <output_dir>/<task_id>/
+task_id: marmousi_forward
+seed: 0
+device: auto                        # "auto" | "<cuda index>" | "cpu"
+
+# ═══ Grid + time axis ═════════════════════════════════════════════════════════
+
+grid:
+  dh: 12.5                          # cell size [m]
+  # shape ([nz,nx] | [nz,ny,nx]) inferred from models[0].path npy when omitted.
+  # shape: [281, 1361]
+
+time:
+  dt: 0.001                         # [s]; CFL: dt < dh/(v_max·√ndim)
+  nt: 4000                          # samples; t_max = dt·nt = 4.0 s
+
+# ═══ Source wavelet ═══════════════════════════════════════════════════════════
+# Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
+
+wavelet:
+  kind: ricker                      # analytic; needs fm
+  fm: 8.0                           # peak frequency [Hz]  (required)
+  delay: 0.125                      # peak time [s] (≈1/fm keeps it causal)
+  scale: 1.0
+# ── ALTERNATIVES ──
+# wavelet: {kind: from_npy, path: /path/w.npy, scale: 1.0}          # length == nt
+# wavelet: {kind: siren_pipeline_npz, path: /path/estimated_wavelet.npz}
+
+# ═══ Acquisition geometry ═════════════════════════════════════════════════════
+# Discriminated on `kind`: line | explicit | from_file | from_segy_headers |
+#                          from_segy_index | from_plan
+
+geometry:
+  kind: line                        # auto-generated regular line
+  sources:   {step: 50, depth: 1}   # start=0, stop=nx by default
+  receivers: {step: 1,  depth: 18}
+# ── ALTERNATIVES ──
+# geometry:
+#   kind: explicit                  # hard-coded lists of GRID INDICES, one
+#                                   # [x, z] per point ([x, y, z] in 3-D)
+#   sources:   [[100, 1], [500, 1]]
+#   receivers: [[0, 18], [1, 18], [2, 18]]
+# geometry: {kind: from_file, sources_file: /p/s.npy, receivers_file: /p/r.npy}
+# geometry:
+#   kind: from_segy_headers         # read a SEG-Y file's trace headers
+#   path: /p/line.segy
+#   byte_map: {sx: 73, sy: 77, gx: 81, gy: 85}
+# geometry: {kind: from_segy_index, index_path: /p/index.npz, shot_ids: null}
+# geometry:                         # sweepx.io SeismicPlan (field data)
+#   kind: from_plan
+#   plan_path: /p/plan.npz
+#   dedupe: true
+#   dedup_method: nearest           # "nearest" | "first"
+#   # 3-D: rotation_metadata / dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells
+#   # (the last three per-axis, ordered (z, y, x) like the model array)
+
+# ═══ Wave-equation physics ════════════════════════════════════════════════════
+
+physics:
+  equation: Acoustic                # constant-density acoustic
+  spatial_order: 8                  # FD order 2/4/6/8
+  abcn: 20                          # PML thickness [cells]
+  free_surface: false               # true for marine (z=0 free surface)
+  source_type: [h1]                 # pressure / hydrophone component
+  receiver_type: [h1]
+  # topography: /path/surface_row.npy   # curvilinear free-surface topo
+
+# ═══ Compute backend ══════════════════════════════════════════════════════════
+# impl: eager (portable, slow, debug) | c (CUDA kernels, production)
+
+backend:
+  impl: eager
+  use_ckpt: false
+  # ---- production CUDA + low-memory boundary saving ----
+  # impl: c
+  # cuda_options:
+  #   memory:
+  #     strategy: boundary            # boundary (default) | full (store-all) | ckpt
+  #     boundary: {storage: gpu, storage_dtype: fp32}  # storage gpu|cpu|disk;
+  #                                                     # dtype fp32|fp16|bf16|int8
+  #     # OR: memory: {strategy: ckpt, ckpt: {mode: chunk, chunks: 100}}  # mode: chunk|recursive
+  # ---- eager tuning ----
+  # eager_options: {use_compile: false, store_last_wavefield: false}
+
+# ═══ Physical-property models ═════════════════════════════════════════════════
+# `models:` is a LIST — one entry per field the equation declares in
+# MODEL_SPECS. Acoustic → [vp]; elastic → [vp, vs, rho]. Each entry gives
+# a `name` plus EITHER `path` (npy) OR `constant` (+ `shape` for a homogeneous
+# field with no init_model backing).
+
+models:
+  - {name: vp, path: ./vp_true.npy}
+# ── multi-parameter (e.g. elastic) ──
+# models:
+#   - {name: vp,  path: ./vp.npy}
+#   - {name: vs,  path: ./vs.npy}
+#   - {name: rho, constant: 1000.0, shape: [281, 1361]}

@@ -10,7 +10,7 @@
 # Quick standalone check (plain Material, no sweepx skin): `mkdocs serve` here.
 # Real look: preview from the sweepx repo.
 # ─────────────────────────────────────────────────────────────────────────
-site_name: PACKAGE_NAME          # e.g. sweep-tasks
+site_name: PACKAGE_NAME          # e.g. sweep-solver
 theme:
   name: material                 # placeholder only — sweepx supplies the real theme
 

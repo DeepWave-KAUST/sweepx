@@ -5,7 +5,7 @@ on:
     branches: [main]
 
   # The packages' docs are cloned at BUILD time, so a docs change pushed to
-  # sweep / sweep-agent / … only reaches this site when the site rebuilds. This
+  # the sweep solver repo only reaches this site when the site rebuilds. This
   # daily run picks those up on its own.
   schedule:
     - cron: "17 3 * * *"        # 03:17 UTC — off the hour, which GitHub prefers
@@ -57,42 +57,24 @@ jobs:
           # CPU torch — sweep's equation modules import torch at module top,
           # so mkdocstrings' force_inspection needs it present.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # Published packages (import as `sweep` / `sweep_agent` / `sweep_tasks`;
-          # sweep-tasks brings sweep-loss, sweep-io and sweep-nn):
-          pip install sweep-solver sweep-agent sweep-tasks
-          # mkdocs.yml imports the Solver docs from sweep@dev, so an API page can
-          # document a class that is not in the released wheel yet — ElasticTTI2nd
-          # and ElasticTTISG3D did exactly that and aborted the build. Render the
-          # API against the same ref the docs come from. Installed AFTER
-          # sweep-agent so its resolver cannot pull the released wheel back over
-          # it, --force-reinstall because dev carries the same version string as
-          # PyPI, --no-deps because dev adds no runtime dependency of its own.
+          # The toolkit from this checkout (its docs live in docs/ here), then
+          # the solver from sweep@dev: mkdocs.yml imports the Solver docs from dev,
+          # so an API page can document a class that is not in the released wheel
+          # yet (ElasticTTI2nd / ElasticTTISG3D aborted the build that way).
+          # --force-reinstall because dev carries the PyPI version string,
+          # --no-deps because dev adds no runtime dependency of its own.
+          pip install -e .
           pip install --force-reinstall --no-deps \
             "sweep-solver @ git+https://github.com/DeepWave-KAUST/sweep@dev"
-          # A companion's upper pin can also silently hold sweep-solver back —
-          # that is how v0.2.0 shipped with the umbrella still resolving 0.1.0,
-          # and the only symptom was mkdocstrings failing to collect a class that
-          # the API page documents. Say so here instead.
-          # The Tasks tab imports its docs from sweep-tasks@main, so render its
-          # API from main too — same --force-reinstall --no-deps as the solver.
-          pip install --force-reinstall --no-deps \
-            "sweep-tasks @ git+https://github.com/DeepWave-KAUST/sweep-tasks@main"
-          # Same for the NN tab: its notebooks and API page come from sweep-nn@main.
-          pip install --force-reinstall --no-deps \
-            "sweep-nn @ git+https://github.com/DeepWave-KAUST/sweep-nn@main"
-          # …and the IO tab, from sweep-io@main.
-          pip install --force-reinstall --no-deps \
-            "sweep-io @ git+https://github.com/DeepWave-KAUST/sweep-io@main"
           python - <<'PY'
           import importlib, sys
           from importlib.metadata import version
-          print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"),
-                "| sweep-tasks", version("sweep-tasks"))
+          print("sweep-solver", version("sweep-solver"), "| sweepx", version("sweepx"))
           print("sweep imported from", importlib.import_module("sweep").__file__)
-          for mod in ("sweep", "sweep.parallel", "sweep_agent",
-                      "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas",
-                      "sweep_nn", "sweep_nn.diffusion.prior",
-                      "sweep_io.seismic_plan", "sweep_io.cuda_prefetch"):
+          for mod in ("sweep", "sweep.parallel", "sweepx.agent",
+                      "sweepx.tasks.runner", "sweepx.tasks.yaml_io", "sweepx.tasks.schemas",
+                      "sweepx.nn", "sweepx.nn.diffusion.prior",
+                      "sweepx.io.seismic_plan", "sweepx.io.cuda_prefetch"):
               try:
                   importlib.import_module(mod)
               except Exception as exc:
@@ -101,7 +83,7 @@ jobs:
                            f"with an unreadable mkdocstrings error")
           PY
 
-      - name: Build site (multirepo pulls the package docs)
+      - name: Build site (multirepo pulls the Solver docs)
         run: mkdocs build
 
       - name: Upload artifact

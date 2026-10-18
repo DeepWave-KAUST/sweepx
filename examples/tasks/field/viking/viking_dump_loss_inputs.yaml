@@ -1,0 +1,118 @@
+# Debug copy of viking_siren_hash_8stage.yaml — one stage, one epoch,
+# meant to be run with DUMP_LOSS_INPUTS=<path.npz> set in the env so
+# the runner saves the exact obs+syn the loss consumes for that single
+# iter, then exits via DUMP_LOSS_INPUTS_EXIT=1.
+
+task_type: fwi
+output_dir: ${SWEEP_RUNS_ROOT}/viking_dump
+task_id: viking_dump_v1
+seed: 2026
+device: auto
+
+grid:
+  dh: 12.5
+  shape: [401, 2305]
+time:
+  dt: 0.001
+  nt: 6000
+
+wavelet:
+  kind: siren_pipeline_npz
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/wavelets/siren_pipeline/estimated_wavelet.npz
+  scale: 1.0
+
+geometry:
+  kind: from_segy_headers
+  path: ${PROJECT_DATA_ROOT}/results/field_data/viking/raw/seismic.segy
+  source_depth_m_override: 6.0
+  receiver_depth_m_override: 10.0
+  dedupe: false   # OFF: no per-shot rec dedupe, no source mean-stack — apples-to-apples vs standalone bandpass
+
+physics:
+  equation: Acoustic
+  spatial_order: 6
+  abcn: 20
+  free_surface: true
+  pml_type: cpmlr
+  source_type: ["h1"]
+  receiver_type: ["h1"]
+
+backend:
+  impl: c
+  use_ckpt: false
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary:
+        storage: gpu
+
+init_model:
+  name: vp
+  path: ${SWEEP_REPOS_ROOT}/fwi_workflow-dev/data/viking/models/viking_initial_model_12.5m.npy
+
+obs:
+  segy:
+    path: ${PROJECT_DATA_ROOT}/results/field_data/viking/raw/seismic.segy
+    source_depth_m_override: 6.0
+    receiver_depth_m_override: 10.0
+
+optimizer:
+  kind: adam
+  lr: 25.0
+  eps: 1.0e-16
+scheduler:
+  kind: constant
+
+loss:
+  kind: trace_cosine
+  trace_cosine_demean: true
+
+model_bounds:
+  vp:
+    min: 1450.0
+    max: 5500.0
+
+reparam:
+  kind: velocity_inr
+  hidden_features: 128
+  hidden_layers: 2
+  first_omega0: 10.0
+  hidden_omega0: 10.0
+  use_bias: false
+  vp_mean: 0.0
+  vp_std: 400.0
+  direct_velocity: false
+  lr: 1.0e-4
+  backward_mode: two_pass_full
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 1
+    log2_size: 18
+    base_resolution: 16
+    finest_resolution: 512
+
+local_model_window:
+  enabled: true
+  padding_x_m: 1500.0
+  padding_z_m: 0.0
+  full_depth: true
+  min_width_m: 0.0
+
+# One stage, one epoch — runner exits after the first iter when
+# DUMP_LOSS_INPUTS_EXIT=1 is set in env.
+epochs: 1
+batchsize: 48
+train_shot_batchsize: 1
+show_every: 1
+
+stages:
+  - {epochs: 1, batch_size: 48, dh_m: 75.0, dt_s: 0.004, nt: 1500, bandpass: {lo_hz: 2.0, hi_hz: 5.0, order: 4, target: syn}}
+
+qc:
+  every_n_epochs: 1
+  vp_png: false
+  vp_diff_png: false
+  gradient_png: false
+  shot_gather: false
+  loss_curve: false

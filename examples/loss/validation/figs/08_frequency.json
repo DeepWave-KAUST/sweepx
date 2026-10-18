@@ -1,0 +1,7 @@
+{
+  "fig": "08_frequency.png",
+  "max_log_amp_residual": 4.934329354000511e-07,
+  "max_phase_residual_rad": 3.1331217005132905,
+  "freq_l2_basin_full": null,
+  "low_band_cutoff_index": 7
+}

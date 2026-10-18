@@ -1,0 +1,7 @@
+{
+  "fig": "15_w2.png",
+  "monotone_inverse_cdf_syn": true,
+  "monotone_inverse_cdf_obs": true,
+  "w2_at_tau_20ms_square_sum": 0.0004500000000000011,
+  "note_on_theory": "Engquist-Froese-Yang 2016 thm 2.1: W2 IS linear in shift \u03c4; the scaling W2\u00b2 = \u00bd \u03c4\u00b2 holds for delta densities only. For a Ricker\u00b2 density the proportionality constant is wavelet-bandwidth-dependent."
+}

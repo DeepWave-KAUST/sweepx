@@ -1,0 +1,668 @@
+[
+  {
+    "name": "L2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006898301653563976,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00041038464405573905,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "L1Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.014761239290237427,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.009505821391940117,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "HuberLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006898301653563976,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00041038464405573905,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "PseudoHuberLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006367384339682758,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0003531832480803132,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "HybridL1L2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006367384339682758,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0003531832480803132,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "CauchyLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0005897459923289716,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00030676115420646966,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "TukeyLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006617580074816942,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00037754172808490694,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "GemanMcClureLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0010218574898317456,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00047738858847878873,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "StudentTLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.021693594753742218,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.012215129099786282,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "GlobalCorrelationLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.014165237545967102,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.008397062309086323,
+    "grad_nonzero": true,
+    "zero_residual_value": 1.4901161193847656e-08,
+    "zero_residual_small": true
+  },
+  {
+    "name": "TraceNormalizedL2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 2.766636862361338e-05,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 1.6400514141423628e-05,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "CrossCorrelationTraveltimeLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 1.903381985357555e-06,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 1.8304870081919944e-06,
+    "grad_nonzero": true,
+    "zero_residual_value": 1.6918935760483686e-20,
+    "zero_residual_small": true
+  },
+  {
+    "name": "EnvelopeLoss_p2",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.00011973659275099635,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0002404260158073157,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "EnvelopeLoss_p1",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.007809910923242569,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.010238280519843102,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "EnvelopeLoss_log",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.03096669353544712,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 137.1142578125,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "EnvelopeLoss_sq",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.00017326192755717784,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00038566935108974576,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "InstantaneousPhaseLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0012639808701351285,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.013384192250669003,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "ExponentiatedPhaseLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.003206857480108738,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 3.3002021312713623,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "EnvelopePhaseLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0006918503786437213,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00041249560308642685,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "TimeFrequencyPhaseLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0015937535790726542,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0010807652724906802,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "FrequencyDomainL2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.35181868076324463,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.20929932594299316,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "FrequencyPhaseLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0002956395910587162,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0003659406502265483,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "FrequencyAmplitudeLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 5.539881053895357e-12,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 8.404863365285564e-07,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "LogarithmicShinMinLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.16856275498867035,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 383343.125,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "LaplaceL2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.00024138532171491534,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.00014650108641944826,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "AWILoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0002927911700680852,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0009015571558848023,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.00029079412342980504,
+    "zero_residual_small": false
+  },
+  {
+    "name": "DeconvolutionLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 1.558933945489116e-05,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 4.888659168500453e-05,
+    "grad_nonzero": true,
+    "zero_residual_value": 1.5483010429306887e-05,
+    "zero_residual_small": true
+  },
+  {
+    "name": "OTMFLoss_2",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0005855823983438313,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.0018031143117696047,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0005815881886519492,
+    "zero_residual_small": false
+  },
+  {
+    "name": "OTMFLoss_1",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.009855451993644238,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.007096270099282265,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.009613399393856525,
+    "zero_residual_small": false
+  },
+  {
+    "name": "NIMLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 4.5080123527441174e-05,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 5.7736862800084054e-05,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "JensenShannonLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0128273144364357,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.007666366174817085,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "Wasserstein1Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 0.0001776451972546056,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.000492751772981137,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "Wasserstein2Loss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 8.362239611869882e-08,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 1.6829064009016292e-07,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "SinkhornLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 1.554872142150998e-07,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 1.4131285297480645e-07,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "SoftDTWLoss",
+    "shape": [
+      1,
+      96,
+      4
+    ],
+    "finite": true,
+    "value": 0.0022667646408081055,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.004266803618520498,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "GSOTLoss",
+    "shape": [
+      1,
+      96,
+      4
+    ],
+    "finite": true,
+    "value": 0.32294872403144836,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 0.5682857632637024,
+    "grad_nonzero": true,
+    "zero_residual_value": 0.0,
+    "zero_residual_small": true
+  },
+  {
+    "name": "LocalSimilarityLoss",
+    "shape": [
+      2,
+      512,
+      8
+    ],
+    "finite": true,
+    "value": 2.724691285038716e-06,
+    "value_is_nan": false,
+    "value_is_inf": false,
+    "neg": false,
+    "grad_finite": true,
+    "grad_norm": 3.386258185855695e-06,
+    "grad_nonzero": true,
+    "zero_residual_value": 9.527575880273324e-16,
+    "zero_residual_small": true
+  }
+]
