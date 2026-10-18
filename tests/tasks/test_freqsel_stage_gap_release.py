@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from sweep_tasks.tasks import fwi_freqsel as F
+from sweepx.tasks.tasks import fwi_freqsel as F
 
 
 class _Cuda:

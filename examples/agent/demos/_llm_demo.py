@@ -15,9 +15,9 @@ import os
 os.environ.setdefault("SWEEP_AGENT_LLM_URL", "http://localhost:8001/v1")
 os.environ.setdefault("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.vllm_backend import VLLMBackend
-from sweep_agent.tools.selection import select_tool_names
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.vllm_backend import VLLMBackend
+from sweepx.agent.tools.selection import select_tool_names
 
 
 def drive(prompt: str, max_steps: int = 24) -> None:

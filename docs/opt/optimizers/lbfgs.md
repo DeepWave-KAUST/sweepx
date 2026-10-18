@@ -1,17 +1,17 @@
 # L-BFGS-FWI
 
-`sweep_opt.optim.LBFGS` is the limited-memory BFGS quasi-Newton optimizer
+`sweepx.opt.optim.LBFGS` is the limited-memory BFGS quasi-Newton optimizer
 (Nocedal 1980; Nocedal & Wright 2006, Algorithm 7.4) with three FWI-friendly
 extensions on top of `torch.optim.LBFGS`:
 
 1. **Bounds.** ``bounds=(lo, hi)`` enforces a box on every parameter via
    projection after each step. (The proper active-set Byrd-Lu-Nocedal
    L-BFGS-B variant lands in Tier-2 as
-   :class:`sweep_opt.optim.LBFGSB`; the two share the same FWI-friendly knobs
+   :class:`sweepx.opt.optim.LBFGSB`; the two share the same FWI-friendly knobs
    and differ only in how bounds are handled.)
 2. **Preconditioner as $H_0$.** A preconditioner can be supplied as the
    initial inverse-Hessian inside the two-loop recursion. With
-   :class:`sweep_opt.precond.PseudoHessianPrecond`, this gives
+   :class:`sweepx.opt.precond.PseudoHessianPrecond`, this gives
    *preconditioned L-BFGS* - faster convergence on FWI's poorly-scaled
    Hessian without giving up any of the L-BFGS history.
 3. **Restart.** ``restart_every=N`` clears the stored ``(s, y)`` history
@@ -41,7 +41,7 @@ preconditioner. The step length is then chosen by strong-Wolfe.
 ## API
 
 ```python
-sweep_opt.optim.LBFGS(
+sweepx.opt.optim.LBFGS(
     params,                          # iterable of torch.Tensor
     *,
     history_size=10,                 # m in N&W
@@ -62,12 +62,12 @@ current count of stored ``(s, y)`` pairs.
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
-precond = sweep_opt.precond.PseudoHessianPrecond(eps=1e-3)
+precond = sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3)
 
-opt = sweep_opt.optim.LBFGS(
+opt = sweepx.opt.optim.LBFGS(
     [vp],
     history_size=10,
     bounds=(1500.0, 5500.0),

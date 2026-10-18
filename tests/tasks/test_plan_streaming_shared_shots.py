@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 from test_plan_streaming_schema_guards import _plan_streaming_doc, _validate
 from test_task_fwi_plan_streaming import (
     _SYN_NODES,
@@ -118,8 +118,8 @@ def test_a_cap_above_the_shots_drawn_uses_them_all_and_says_so(tmp_path, monkeyp
 
 def test_the_cap_keeps_one_shot_set_across_the_nodes(tmp_path):
     """Row j of every node's gather is still the same physical shot."""
-    from sweep_io.seismic_plan import SeismicPlan, sample_shared_shots_from_plan
-    from sweep_tasks.tasks.fwi_plan_streaming import _cap_shared_shots
+    from sweepx.io.seismic_plan import SeismicPlan, sample_shared_shots_from_plan
+    from sweepx.tasks.tasks.fwi_plan_streaming import _cap_shared_shots
 
     spec = _synthetic_stage_spec(tmp_path, [{"epochs": 1}])
     plan = SeismicPlan.load(spec["obs"]["plan"]["plan_path"])
@@ -138,7 +138,7 @@ def test_the_cap_keeps_one_shot_set_across_the_nodes(tmp_path):
 def test_null_is_the_default_and_one_is_refused(tmp_path):
     """null keeps every shot; 1, the default before the field was read, which
     an older run's config_resolved.yaml records, is refused."""
-    from sweep_tasks._helpers.metadata import _dump_run_metadata
+    from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
     doc = _plan_streaming_doc()
     doc["obs"]["plan"]["sampling"] = {}

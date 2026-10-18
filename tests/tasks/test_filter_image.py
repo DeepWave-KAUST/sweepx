@@ -1,4 +1,4 @@
-"""Unit tests for ``sweep_tasks.postproc.filter_image``.
+"""Unit tests for ``sweepx.tasks.postproc.filter_image``.
 
 Covers:
 
@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_tasks.postproc.filter_image import (
+from sweepx.tasks.postproc.filter_image import (
     cosine_taper,
     filter_image_file,
     filter_shallow_low_frequency,
@@ -233,7 +233,7 @@ def test_filter_image_file_no_png(tmp_path: Path):
 def test_cli_filter_image_smoke(tmp_path: Path):
     src = _make_synthetic_npy(tmp_path)
     cmd = [
-        sys.executable, "-m", "sweep_tasks.cli", "filter-image",
+        sys.executable, "-m", "sweepx.tasks.cli", "filter-image",
         str(src),
         "--dz-m", "12.5",
         "--wavelength-m", "300",
@@ -255,7 +255,7 @@ def test_cli_filter_image_infers_dh_from_rtm_result(tmp_path: Path):
     # Stash a fake rtm_result.npz next to the input with a sentinel dh.
     np.savez_compressed(tmp_path / "rtm_result.npz", dh=np.float32(12.5))
     cmd = [
-        sys.executable, "-m", "sweep_tasks.cli", "filter-image",
+        sys.executable, "-m", "sweepx.tasks.cli", "filter-image",
         str(src),
         # NOTE: no --dz-m here on purpose.
         "--no-png",
@@ -275,7 +275,7 @@ def test_cli_filter_image_infers_dh_from_rtm_result(tmp_path: Path):
 def test_cli_filter_image_requires_dz_when_no_rtm_result(tmp_path: Path):
     src = _make_synthetic_npy(tmp_path)
     cmd = [
-        sys.executable, "-m", "sweep_tasks.cli", "filter-image",
+        sys.executable, "-m", "sweepx.tasks.cli", "filter-image",
         str(src), "--no-png",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -289,7 +289,7 @@ def test_cli_filter_image_requires_dz_when_no_rtm_result(tmp_path: Path):
 
 
 def test_post_filter_spec_defaults_match_legacy():
-    from sweep_tasks import PostFilterImageSpec
+    from sweepx.tasks import PostFilterImageSpec
     spec = PostFilterImageSpec()
     assert spec.enabled is True
     assert spec.wavelength_m == 300.0
@@ -303,7 +303,7 @@ def test_post_filter_spec_defaults_match_legacy():
 
 
 def test_rtm_imaging_spec_round_trips_with_post_filter():
-    from sweep_tasks import RTMImagingSpec
+    from sweepx.tasks import RTMImagingSpec
     spec = RTMImagingSpec.model_validate({
         "shots_per_batch": 2,
         "loss_kind": "mse",

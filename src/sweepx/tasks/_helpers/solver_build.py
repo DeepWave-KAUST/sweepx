@@ -5,15 +5,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from sweep_tasks.schemas import ModelRef, PhysicsSpec
-from sweep_tasks.introspect import CFL_RAISE, CFL_WARN, cfl_number
-from sweep_tasks._helpers.geometry import _build_geometry_2d
-from sweep_tasks._helpers.model import (
+from sweepx.tasks.schemas import ModelRef, PhysicsSpec
+from sweepx.tasks.introspect import CFL_RAISE, CFL_WARN, cfl_number
+from sweepx.tasks._helpers.geometry import _build_geometry_2d
+from sweepx.tasks._helpers.model import (
     _get_equation_class,
     _load_model_tensor,
     _model_names_for_equation,
 )
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
 
 def _resolve_modeling_inputs(spec, base_wavelet, base_sources, base_receivers, shape):
     """If spec.modeling_override is set, build wavelet/geometry overrides used only
@@ -52,7 +52,7 @@ def _cfl_check(vmax_m_s: float, dh_m: float, dt_s: float, *, threshold: float = 
     For 8th-order acoustic FD in 2D the practical safe range is roughly
     ``vmax * dt / dh ≤ 0.5–0.6``. We warn at 0.85 and raise above 1.0
     because anything above 1.0 will produce NaNs on the first step. The
-    number and both limits live in :mod:`sweep_tasks.introspect`, so tools
+    number and both limits live in :mod:`sweepx.tasks.introspect`, so tools
     that pre-check a spec apply this same rule.
     """
     cfl = cfl_number(vmax_m_s, dh_m, dt_s)

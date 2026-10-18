@@ -6,9 +6,9 @@ subclass TaskRunner without changing the `run(spec) -> TaskResult` contract.
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
-from sweep_tasks.registry import TASK_TYPES
-from sweep_tasks.runner import TaskResult, TaskRunner, TaskStatus
-from sweep_tasks.schemas import (
+from sweepx.tasks.registry import TASK_TYPES
+from sweepx.tasks.runner import TaskResult, TaskRunner, TaskStatus
+from sweepx.tasks.schemas import (
     BaseTaskSpec,
     DataPlanSpec,
     ForwardSpec,
@@ -26,7 +26,7 @@ from sweep_tasks.schemas import (
     WaterSpec,
     WavefieldSpec,
 )
-from sweep_tasks.yaml_io import (
+from sweepx.tasks.yaml_io import (
     dump_task,
     load_task,
     load_task_from_dict,

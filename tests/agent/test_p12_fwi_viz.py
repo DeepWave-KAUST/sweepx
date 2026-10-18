@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _models(tmp_path):
@@ -24,8 +24,8 @@ def _models(tmp_path):
 @pytest.mark.timeout(180)
 def test_plot_model_and_convergence(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks")
+    pytest.importorskip("sweepx.tasks.viz")
     true_p, init_p = _models(tmp_path)
     b = registry.get("build_fwi_spec").invoke({
         "init_model_path": init_p, "synthetic_true_vp_path": true_p,
@@ -56,8 +56,8 @@ def test_plot_model_and_convergence(tmp_path):
 @pytest.mark.timeout(240)
 def test_run_fwi_orchestration(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks")
+    pytest.importorskip("sweepx.tasks.viz")
     true_p, init_p = _models(tmp_path)
     a = registry.get("run_fwi").invoke({
         "init_model_path": init_p, "synthetic_true_vp_path": true_p, "out_dir": str(tmp_path / "runs"),
@@ -83,6 +83,6 @@ def test_run_fwi_requires_one_obs_source(tmp_path):
 
 
 def test_plot_model_no_result(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     res = registry.get("plot_model").invoke({"task_dir": str(tmp_path / "nope")})
     assert "error" in res.value

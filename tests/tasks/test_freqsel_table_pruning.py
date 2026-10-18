@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 
-from sweep_tasks.freqsel import (FreqSelTargets, FrequencyComb, PoolScheduler,
+from sweepx.tasks.freqsel import (FreqSelTargets, FrequencyComb, PoolScheduler,
                                  SteadyGCNLoss, extract_shard)
 
 NT, K_LO, K_HI, N_NODES, N_REC, NY = 256, 8, 40, 6, 5, 64
@@ -112,7 +112,7 @@ def test_pruning_composes_with_comb_decimation(tmp_path):
 
 
 def test_unscheduled_pair_raises_instead_of_reading_a_wrong_column(tmp_path):
-    from sweep_tasks.freqsel import _dcol
+    from sweepx.tasks.freqsel import _dcol
     p, comb = _shard(tmp_path)
     t = FreqSelTargets(p, comb, ny=NY)
     use = np.zeros((t.n_nodes, comb.n_bins), bool)

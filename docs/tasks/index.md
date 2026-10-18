@@ -10,7 +10,7 @@ multi-rank, shot-parallel by default, with `status.json` + `checkpoint.pt` +
 figures written per run.
 
 Installed with `pip install sweep-tasks` (also bundled by `pip install sweepx`)
-→ `import sweep_tasks`.
+→ `import sweepx.tasks`.
 
 ![Marmousi FWI](examples/figures/02_vp_final.png)
 

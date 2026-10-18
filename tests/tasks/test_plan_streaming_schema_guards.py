@@ -12,7 +12,7 @@ import pytest
 import yaml
 from pydantic import TypeAdapter
 
-from sweep_tasks.schemas import TaskSpec
+from sweepx.tasks.schemas import TaskSpec
 
 
 def _validate(doc):
@@ -38,7 +38,7 @@ def _plan_streaming_doc(**extra):
 
 def _resolved(tmp_path, **extra):
     """config_resolved.yaml of a plan-streaming run, as a dict."""
-    from sweep_tasks._helpers.metadata import _dump_run_metadata
+    from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
     _dump_run_metadata(_validate(_plan_streaming_doc(**extra)), tmp_path)
     return yaml.safe_load((tmp_path / "config_resolved.yaml").read_text())

@@ -1,8 +1,8 @@
-"""Tests for :func:`sweep_io.crg_plan.load_crg_shot_plan_cache` +
-:class:`sweep_io.crg_dataset.CRGBatchDataset`.
+"""Tests for :func:`sweepx.io.crg_plan.load_crg_shot_plan_cache` +
+:class:`sweepx.io.crg_dataset.CRGBatchDataset`.
 
 The fixture builds a tiny synthetic survey:
-- 2 SEG-Y source-line files via :func:`sweep_io.segy.write_segy_minimal`
+- 2 SEG-Y source-line files via :func:`sweepx.io.segy.write_segy_minimal`
 - a 3-virtual-source plan cache pointing into those files
 - exercises the end-to-end load → dataset → pad_collate path
 
@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.crg_plan import CRGPlan, _remap_segy_path, load_crg_shot_plan_cache
-from sweep_io.segy import (
+from sweepx.io.crg_plan import CRGPlan, _remap_segy_path, load_crg_shot_plan_cache
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
@@ -151,7 +151,7 @@ def test_filter_by_coverage_drops_below_min(tiny_crg_cache):
 
 def test_crg_batch_dataset_returns_correct_traces(tiny_crg_cache):
     plan = load_crg_shot_plan_cache(tiny_crg_cache)
-    from sweep_io.crg_dataset import CRGBatchDataset
+    from sweepx.io.crg_dataset import CRGBatchDataset
 
     ds = CRGBatchDataset(plan)
     assert len(ds) == 3
@@ -169,7 +169,7 @@ def test_crg_batch_dataset_returns_correct_traces(tiny_crg_cache):
 
 def test_pad_collate_fn_padded_layout(tiny_crg_cache):
     plan = load_crg_shot_plan_cache(tiny_crg_cache)
-    from sweep_io.crg_dataset import CRGBatchDataset, pad_collate_fn
+    from sweepx.io.crg_dataset import CRGBatchDataset, pad_collate_fn
 
     ds = CRGBatchDataset(plan)
     batch = [ds[0], ds[1], ds[2]]
@@ -196,7 +196,7 @@ def test_shared_shots_sampler_empty_intersection_raises(tiny_crg_cache):
     """tiny_crg_cache slot 0 = sx [0, 20, 40]; slot 1 = sx [10, 30, ...].
     No (sx, sy) overlap → intersection is empty → sampler raises.
     """
-    from sweep_io.crg_plan import sample_crg_shared_shots
+    from sweepx.io.crg_plan import sample_crg_shared_shots
 
     plan = load_crg_shot_plan_cache(tiny_crg_cache)
     rng = np.random.default_rng(0)
@@ -209,7 +209,7 @@ def test_shared_shots_sampler_finds_intersection_when_present(tmp_path):
     """Build a fixture where two slots share two physical shots (same sx/sy
     but different byte offsets because each slot is a different OBN node).
     """
-    from sweep_io.crg_plan import sample_crg_shared_shots
+    from sweepx.io.crg_plan import sample_crg_shared_shots
 
     f0 = tmp_path / "sourceLine_001.sgy"
     _write_tiny_segy(f0, n_traces=8, seed=11)
@@ -276,7 +276,7 @@ def test_shared_shots_sampler_finds_intersection_when_present(tmp_path):
 
 def test_max_shots_per_slot_truncates(tiny_crg_cache):
     plan = load_crg_shot_plan_cache(tiny_crg_cache)
-    from sweep_io.crg_dataset import CRGBatchDataset
+    from sweepx.io.crg_dataset import CRGBatchDataset
 
     ds = CRGBatchDataset(plan, max_shots_per_slot=2)
     np.testing.assert_array_equal(ds.n_shots_per_slot, [2, 2, 2])

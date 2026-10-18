@@ -13,13 +13,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 def equation_model_names(cls: type) -> list[str]:
     """Ordered required model names for an equation class.
 
-    Mirrors sweep_tasks.runner._model_names_for_equation: prefer MODEL_SPECS,
+    Mirrors sweepx.tasks.runner._model_names_for_equation: prefer MODEL_SPECS,
     fall back to a ``models`` class attribute. Order matters — the runner expects
     multi-model lists in MODEL_SPECS order.
     """
@@ -183,13 +183,13 @@ def list_equations(args: ListEquationsParams) -> dict[str, Any]:
 
 
 # ===========================================================================
-# describe_task_schema — expose the full sweep_tasks parameter surface so the
+# describe_task_schema — expose the full sweepx.tasks parameter surface so the
 # LLM can understand and fill ANY field of ANY task type, not just the flat
 # build_forward_spec shortcuts.
 # ===========================================================================
 
 def _task_classes() -> dict[str, type]:
-    from sweep_tasks import schemas
+    from sweepx.tasks import schemas
 
     return {
         "forward": schemas.ForwardSpec,
@@ -312,7 +312,7 @@ def describe_task_schema(args: DescribeTaskSchemaParams) -> dict[str, Any]:
     try:
         classes = _task_classes()
     except Exception as exc:
-        return {"error": f"could not import sweep_tasks.schemas: {exc}"}
+        return {"error": f"could not import sweepx.tasks.schemas: {exc}"}
     cls = classes.get(args.task_type)
     if cls is None:
         return {"error": f"unknown task_type '{args.task_type}'. choices: {sorted(classes)}"}

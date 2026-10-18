@@ -1,4 +1,4 @@
-"""Smoke tests for sweep_tasks.viz (absorbed from the retired sweep-viz) —
+"""Smoke tests for sweepx.tasks.viz (absorbed from the retired sweep-viz) —
 render to a non-interactive backend."""
 
 import matplotlib
@@ -8,15 +8,15 @@ matplotlib.use("Agg")  # noqa: E402
 import matplotlib.pyplot as plt
 import numpy as np
 
-import sweep_tasks.viz
-from sweep_tasks.viz.convergence import plot_band_progress, plot_loss
-from sweep_tasks.viz.metrics import psnr_db, relative_l2, snr_db, ssim
-from sweep_tasks.viz.model import plot_vp, plot_vp_diff
-from sweep_tasks.viz.seismic import plot_shot, plot_wiggle
+import sweepx.tasks.viz
+from sweepx.tasks.viz.convergence import plot_band_progress, plot_loss
+from sweepx.tasks.viz.metrics import psnr_db, relative_l2, snr_db, ssim
+from sweepx.tasks.viz.model import plot_vp, plot_vp_diff
+from sweepx.tasks.viz.seismic import plot_shot, plot_wiggle
 
 
 def test_viz_package_exposes_submodules():
-    assert set(sweep_tasks.viz.__all__) == {
+    assert set(sweepx.tasks.viz.__all__) == {
         "colormaps", "convergence", "metrics", "model", "seismic", "wavefield"
     }
 

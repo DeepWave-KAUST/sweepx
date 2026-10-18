@@ -7,9 +7,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from sweep_agent.agent import Agent, AgentStep
-from sweep_agent.llm.base import BaseLLM, ChatMessage, ToolCall
-from sweep_agent.webui import _describe_call, run_agent_turn
+from sweepx.agent.agent import Agent, AgentStep
+from sweepx.agent.llm.base import BaseLLM, ChatMessage, ToolCall
+from sweepx.agent.webui import _describe_call, run_agent_turn
 
 
 def test_describe_call_templates_and_fallback():

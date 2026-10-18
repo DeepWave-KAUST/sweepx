@@ -1,6 +1,6 @@
 """Extract frequency-comb coefficient shards straight from SEG-Y.
 
-:func:`sweep_tasks.freqsel.extract_shard_gathers` takes gathers a caller has
+:func:`sweepx.tasks.freqsel.extract_shard_gathers` takes gathers a caller has
 already assembled; a :class:`SeismicPlan` supplies them when the survey has
 been through the plan machinery. Raw field SEG-Y has neither: the traces of one
 common-node gather are scattered across every shot file, so the only way to

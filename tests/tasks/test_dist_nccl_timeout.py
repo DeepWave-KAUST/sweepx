@@ -14,7 +14,7 @@ from datetime import timedelta
 
 import pytest
 
-import sweep_tasks.runtime.distributed as D
+import sweepx.tasks.runtime.distributed as D
 
 
 @pytest.fixture

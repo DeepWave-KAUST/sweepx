@@ -1,6 +1,6 @@
 # Pseudo-Hessian preconditioner
 
-`sweep_opt.precond.PseudoHessianPrecond` is the diagonal preconditioner from
+`sweepx.opt.precond.PseudoHessianPrecond` is the diagonal preconditioner from
 Plessix & Mulder (2004) - the de-facto industrial preconditioner for FWI.
 It approximates the diagonal of the Hessian by the product of source and
 receiver illumination at each model grid point, then divides the gradient by
@@ -28,7 +28,7 @@ unpreconditioned run.
 ## API
 
 ```python
-sweep_opt.precond.PseudoHessianPrecond(
+sweepx.opt.precond.PseudoHessianPrecond(
     eps=1e-3,           # stabilizer added inside the inverse
     normalize=True,     # rescale so max(diag) = 1
 )
@@ -52,10 +52,10 @@ solver after each forward pass. Plumb them into the preconditioner before
 each optimizer step:
 
 ```python
-import sweep_opt
+import sweepx.opt
 
-precond = sweep_opt.precond.PseudoHessianPrecond(eps=1e-3)
-opt = sweep_opt.optim.SteepestDescent([inv_vp], lr=1.0, preconditioner=precond)
+precond = sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3)
+opt = sweepx.opt.optim.SteepestDescent([inv_vp], lr=1.0, preconditioner=precond)
 
 for _ in range(cfg["epochs"]):
     opt.zero_grad()

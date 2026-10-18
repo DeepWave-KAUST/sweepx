@@ -33,12 +33,12 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import (  # noqa: E402
+from sweepx.loss import (  # noqa: E402
     GlobalCorrelationLoss,
     L2Loss,
     TraceNormalizedL2Loss,
 )
-from sweep_loss._utils import l2_normalize  # noqa: E402
+from sweepx.loss._utils import l2_normalize  # noqa: E402
 
 
 NAME = "02_correlation"

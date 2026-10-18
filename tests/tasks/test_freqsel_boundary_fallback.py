@@ -12,9 +12,9 @@ itself.
 """
 import pytest
 
-from sweep_tasks.schemas import (BackendSpec, BoundaryOptionsModel,
+from sweepx.tasks.schemas import (BackendSpec, BoundaryOptionsModel,
                                  CUDAOptionsModel, MemoryOptionsModel)
-from sweep_tasks.tasks.fwi_freqsel import backend_with_boundary_storage
+from sweepx.tasks.tasks.fwi_freqsel import backend_with_boundary_storage
 
 
 def _backend(storage="gpu", strategy="boundary"):

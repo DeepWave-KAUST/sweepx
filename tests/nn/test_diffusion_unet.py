@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sweep_nn.diffusion import GaussianDiffusion, UNet2D, UNet3D
+from sweepx.nn.diffusion import GaussianDiffusion, UNet2D, UNet3D
 
 
 def _tiny(cls):

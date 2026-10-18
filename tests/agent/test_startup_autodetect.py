@@ -13,7 +13,7 @@ import subprocess
 import httpx
 import pytest
 
-from sweep_agent.llm import vllm_backend as vb
+from sweepx.agent.llm import vllm_backend as vb
 
 
 def test_is_ollama_and_default_model_for_backend():

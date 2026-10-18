@@ -28,8 +28,8 @@ from typing import Optional, Tuple
 import torch
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import iter_params
-from sweep_opt.optim._kron import as_matrix, factored_axes, inverse_root
+from sweepx.opt._utils import iter_params
+from sweepx.opt.optim._kron import as_matrix, factored_axes, inverse_root
 
 
 class Shampoo(Optimizer):

@@ -3,9 +3,9 @@ mask off -> bit-identical to legacy; mask on -> excludes window-outside samples.
 import numpy as np
 import torch
 from types import SimpleNamespace
-from sweep_tasks.runner import TaskRunner
-from sweep_tasks._helpers.loss import _compute_loss, _loss_sum
-from sweep_tasks.schemas import LossSpec
+from sweepx.tasks.runner import TaskRunner
+from sweepx.tasks._helpers.loss import _compute_loss, _loss_sum
+from sweepx.tasks.schemas import LossSpec
 
 
 def _pair(shape=(2, 8, 4, 1)):

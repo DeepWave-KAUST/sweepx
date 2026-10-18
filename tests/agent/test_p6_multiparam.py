@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _mk(path, shape, val):
@@ -22,7 +22,7 @@ def _mk(path, shape, val):
 
 def test_elastic_auto_source_and_pml(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _mk(tmp_path / "vp.npy", (40, 48), 1800)
     vs = _mk(tmp_path / "vs.npy", (40, 48), 1000)
     rho = _mk(tmp_path / "rho.npy", (40, 48), 2000)
@@ -39,7 +39,7 @@ def test_elastic_auto_source_and_pml(tmp_path):
 
 def test_3d_auto_explicit_geometry(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _mk(tmp_path / "vp.npy", (16, 16, 16), 1800)
     res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 10.0, "dt": 0.0015, "nt": 30, "equation": "Acoustic3D",
@@ -62,7 +62,7 @@ def test_3d_auto_explicit_geometry(tmp_path):
 ])
 def test_multiparam_forward_endtoend(tmp_path, label, equation, shape, extra):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _mk(tmp_path / f"{label}_vp.npy", shape, 1800)
     extra_models = {n: _mk(tmp_path / f"{label}_{n}.npy", shape, v) for n, v in extra.items()}
     b = registry.get("build_forward_spec").invoke({

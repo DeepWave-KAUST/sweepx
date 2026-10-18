@@ -8,7 +8,7 @@ import numpy as np
 
 
 def _compute_loss(syn, obs, loss_spec):
-    """Elementwise misfit via `sweep_loss` functional API.
+    """Elementwise misfit via `sweepx.loss` functional API.
 
     Returns the pointwise loss tensor; the caller is responsible for the
     final reduction (so multi-rank averaging stays in the runner's hands).
@@ -19,7 +19,7 @@ def _compute_loss(syn, obs, loss_spec):
     keeps the caller's ``.sum() / global_norm`` recipe yielding the correct
     per-trace mean, regardless of the trace count or sample count.
     """
-    from sweep_loss import huber_loss, l1_loss, l2_loss
+    from sweepx.loss import huber_loss, l1_loss, l2_loss
 
     kind = loss_spec.kind
     # Optional early-time mute (mute-then-misfit on BOTH syn & obs): zero the
@@ -52,10 +52,10 @@ def _compute_loss(syn, obs, loss_spec):
         # (eager + c, after geophyai 21041c5) deliver this layout natively
         # so no permutation is needed. The historical 3-D fallback
         # ``(nt, nrec, 1)`` is dropped: sweep no longer produces 3-D, and
-        # the axis-0=time assumption disagreed with ``sweep_loss``'s 3-D
+        # the axis-0=time assumption disagreed with ``sweepx.loss``'s 3-D
         # convention ``(nshots, nt, nrec)`` (time on axis 1) — a 3-D
         # input would have been silently misinterpreted.
-        from sweep_loss import global_correlation_loss
+        from sweepx.loss import global_correlation_loss
         eps = float(getattr(loss_spec, "trace_cosine_eps", 1.0e-8))
         demean = bool(getattr(loss_spec, "trace_cosine_demean", True))
 

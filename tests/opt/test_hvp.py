@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.linalg.hessian_vector_product / gauss_newton_vector_product."""
+"""Tests for sweepx.opt.linalg.hessian_vector_product / gauss_newton_vector_product."""
 import torch
 
-from sweep_opt.linalg import gauss_newton_vector_product, hessian_vector_product
+from sweepx.opt.linalg import gauss_newton_vector_product, hessian_vector_product
 
 
 def test_hvp_matches_explicit_hessian_on_quadratic():

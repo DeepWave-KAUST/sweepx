@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 # Energy in a Ricker wavelet extends to ~2.5×fm; sample the SHORTEST wavelength.
 _FMAX_FACTOR = 2.5

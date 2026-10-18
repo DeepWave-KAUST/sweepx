@@ -1,55 +1,55 @@
 """LSRTM task runner (mixin). Verbatim from runner.py."""
 from pathlib import Path
 import numpy as np
-from sweep_tasks.schemas import LSRTMSpec, PhysicsSpec
-from sweep_tasks._helpers.bounds import _apply_bounds
-from sweep_tasks._helpers.water import (
+from sweepx.tasks.schemas import LSRTMSpec, PhysicsSpec
+from sweepx.tasks._helpers.bounds import _apply_bounds
+from sweepx.tasks._helpers.water import (
     WaterRegion,
     stamp_water_,
     zero_water_grad_,
 )
-from sweep_tasks.runtime.checkpoint import (
+from sweepx.tasks.runtime.checkpoint import (
     load_run_checkpoint as _load_checkpoint,
     save_run_checkpoint as _save_checkpoint,
 )
-from sweep_tasks._helpers.geometry import _build_geometry_2d
-from sweep_tasks._helpers.loss import (
+from sweepx.tasks._helpers.geometry import _build_geometry_2d
+from sweepx.tasks._helpers.loss import (
     _loss_sum,
     _mask_chunk,
 )
-from sweep_tasks._helpers.model import (
+from sweepx.tasks._helpers.model import (
     _model_array,
     _get_equation_class,
     _load_model_tensor,
 )
-from sweep_tasks._helpers.optimizer import (
+from sweepx.tasks._helpers.optimizer import (
     _apply_stage_lr_scale,
     _bind_stage_scheduler,
     _build_optimizer,
     _remember_initial_lrs,
 )
-from sweep_tasks._helpers.plotting import (
+from sweepx.tasks._helpers.plotting import (
     _lsrtm_background_equation,
     _plot_loss_curve,
     _save_illumination,
 )
-from sweep_tasks._helpers.solver_build import (
+from sweepx.tasks._helpers.solver_build import (
     _build_solver,
     _resolve_modeling_inputs,
     _validate_single_model,
 )
-from sweep_tasks._helpers.stages import _normalise_stage_list
-from sweep_tasks._helpers.stop import _GracefulStopper
-from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
-from sweep_tasks.progress import optimizer_lr, progress_for
+from sweepx.tasks._helpers.stages import _normalise_stage_list
+from sweepx.tasks._helpers.stop import _GracefulStopper
+from sweepx.tasks._helpers.util import _apply_seed
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks.progress import optimizer_lr, progress_for
 
 
 class LSRTMRunnerMixin:
     def _run_lsrtm(self, spec: LSRTMSpec, task_dir: Path):
         import torch
 
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -302,7 +302,7 @@ class LSRTMRunnerMixin:
                           *, dist_info=None, water_mask=None) -> float:
         import torch
 
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()

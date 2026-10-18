@@ -17,9 +17,9 @@ import pytest
 import torch.optim.optimizer as _toptim
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks.runtime.scheduler import lr_at
-from sweep_tasks.schemas import SchedulerConstant, SchedulerCosine, SchedulerExp
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks.runtime.scheduler import lr_at
+from sweepx.tasks.schemas import SchedulerConstant, SchedulerCosine, SchedulerExp
 
 import test_freqsel_optimizer_settings as _fs
 from test_stage_resume import _REPARAM, _assert_resume_bit_identical, deterministic  # noqa: F401
@@ -97,7 +97,7 @@ def test_bind_keeps_each_groups_checkpointed_lr_on_its_own():
     a checkpoint written before grown levels followed it."""
     import torch
 
-    from sweep_tasks._helpers.optimizer import _bind_stage_scheduler
+    from sweepx.tasks._helpers.optimizer import _bind_stage_scheduler
 
     spec = SchedulerExp(gamma=0.9)
     chained = 8.0

@@ -17,7 +17,7 @@ hide:
     <span class="sweep-features-3__link">Open the solver docs <span aria-hidden="true">→</span></span>
   </a>
   <a class="sweep-features-3__card" href="agent/">
-    <div class="sweep-features-3__tag">PACKAGE · import sweep_agent</div>
+    <div class="sweep-features-3__tag">PACKAGE · import sweepx.agent</div>
     <h3 class="sweep-features-3__title">sweep-agent</h3>
     <p class="sweep-features-3__desc">
       The natural-language <strong>control layer</strong>. Say what you want and a
@@ -121,31 +121,31 @@ from sweep.equations import Acoustic, ElasticTTI   # nine equation families
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-agent</div>
-    <div class="sweep-stack__version">import sweep_agent</div>
+    <div class="sweep-stack__version">import sweepx.agent</div>
     <div class="sweep-stack__desc">Natural-language control via a local LLM.</div>
   </div>
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-tasks</div>
-    <div class="sweep-stack__version">import sweep_tasks · <a href="tasks/">docs</a></div>
+    <div class="sweep-stack__version">import sweepx.tasks · <a href="tasks/">docs</a></div>
     <div class="sweep-stack__desc">Production FWI/LSRTM runner — specs, YAML, multi-GPU, IO.</div>
   </div>
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-loss</div>
-    <div class="sweep-stack__version">import sweep_loss · <a href="loss/">docs</a></div>
+    <div class="sweep-stack__version">import sweepx.loss · <a href="loss/">docs</a></div>
     <div class="sweep-stack__desc">Misfit / loss functions for inversion.</div>
   </div>
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-nn</div>
-    <div class="sweep-stack__version">import sweep_nn · <a href="nn/">docs</a></div>
+    <div class="sweep-stack__version">import sweepx.nn · <a href="nn/">docs</a></div>
     <div class="sweep-stack__desc">Neural reparameterizations and priors — INR / hash / SIREN, TV, diffusion.</div>
   </div>
   <div class="sweep-stack__card">
     <div class="sweep-stack__head"><span class="sweep-stack__dot" style="background:#1AA690"></span><span class="sweep-stack__role">PUBLISHED</span></div>
     <div class="sweep-stack__name">sweep-io</div>
-    <div class="sweep-stack__version">import sweep_io · <a href="io/">docs</a></div>
+    <div class="sweep-stack__version">import sweepx.io · <a href="io/">docs</a></div>
     <div class="sweep-stack__desc">Seismic I/O — SEG-Y index, data plans, prefetched reads, geometry.</div>
   </div>
   <div class="sweep-stack__card">

@@ -15,7 +15,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from sweep_opt.parameterization.base import Parameterization
+from sweepx.opt.parameterization.base import Parameterization
 
 
 class SigmoidBounds(Parameterization):

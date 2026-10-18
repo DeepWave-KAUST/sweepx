@@ -1,6 +1,6 @@
 """Single source of truth mapping task_type strings to schema classes."""
 
-from sweep_tasks.schemas import (
+from sweepx.tasks.schemas import (
     ForwardSpec,
     FWISpec,
     IntrospectSpec,

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.base import BaseLLM, ChatMessage
-from sweep_agent.tools import registry
-from sweep_agent.tools.selection import CORE, select_tool_names
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.base import BaseLLM, ChatMessage
+from sweepx.agent.tools import registry
+from sweepx.agent.tools.selection import CORE, select_tool_names
 
 
 def test_core_always_present():
@@ -80,7 +80,7 @@ def test_followup_keeps_used_tools():
             self._names = [t["function"]["name"] for t in (tools or [])]
             self.turn += 1
             if self.turn == 1:
-                from sweep_agent.llm.base import ToolCall
+                from sweepx.agent.llm.base import ToolCall
                 return ChatMessage(role="assistant", content=None,
                                    tool_calls=[ToolCall(id="c1", name="run_fwi", arguments={})])
             return ChatMessage(role="assistant", content="done")

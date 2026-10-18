@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sweep_nn import GrowingHashGrid, MultiResHashGrid
+from sweepx.nn import GrowingHashGrid, MultiResHashGrid
 
 CFG = dict(n_features_per_level=2, log2_hashmap_size=12,
            base_resolution=8, finest_resolution=128)
@@ -100,7 +100,7 @@ def test_grow_to_progress_schedule():
 
 
 def test_velocity_inr_hash_growing():
-    from sweep_nn.velocity_inr import VelocityINR
+    from sweepx.nn.velocity_inr import VelocityINR
     base = torch.full((8, 10, 12), 1500.0)
     net = VelocityINR(base, hash_growing=True, hash_levels=6, hash_c2f_base_levels=2,
                       hash_base_resolution=4, hash_finest_resolution=64, hash_log2_size=12,
@@ -123,7 +123,7 @@ def test_cross_run_resume_auto_grows_on_load():
 
 
 def test_cross_run_resume_via_velocity_inr():
-    from sweep_nn.velocity_inr import VelocityINR
+    from sweepx.nn.velocity_inr import VelocityINR
     base = torch.full((8, 10, 12), 1500.0)
     mk = lambda init: VelocityINR(base, hash_growing=True, hash_levels=8,
                                   hash_c2f_base_levels=init, hash_base_resolution=4,

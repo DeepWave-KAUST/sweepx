@@ -77,7 +77,7 @@ class _GracefulStopper:
     def should_stop(self, dist_info=None) -> bool:
         if dist_info is None or not getattr(dist_info, "is_distributed", False):
             return self.requested
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         flag = self.requested if dist_info.is_root else None
         flag = _dist.broadcast_object(flag, dist_info, src=0)

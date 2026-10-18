@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 _ART_GROUPS: dict[str, tuple[str, ...]] = {

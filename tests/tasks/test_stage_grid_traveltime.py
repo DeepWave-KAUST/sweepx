@@ -18,7 +18,7 @@ import pytest
 import torch
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 
 NZ, NX, DH0 = 41, 161, 10.0          # legacy 2x grid: (20, 80) -> z 5.3 % short
 V0, GRAD = 1500.0, 2.0               # vp = V0 + GRAD * z
@@ -81,7 +81,7 @@ def _run_conventional(tmp_path: Path, monkeypatch, *, abort: bool) -> dict:
     stage-0 grid; ``obs`` is the runner's stage-0 obs, i.e. the native-grid
     forward resampled from 2 to 4 ms.
     """
-    from sweep_tasks.tasks.fwi import FWIRunnerMixin
+    from sweepx.tasks.tasks.fwi import FWIRunnerMixin
 
     vp = _gradient_model(tmp_path)
     spec = {
@@ -153,7 +153,7 @@ def test_coarse_stage_traveltimes_match_the_native_grid(tmp_path, monkeypatch):
 
     # negative control: the legacy squeeze puts the far diving waves ~6 ms
     # early (stage 0 is all it needs, so that run stops after capturing it)
-    import sweep_tasks._helpers.stages as stages_mod
+    import sweepx.tasks._helpers.stages as stages_mod
     monkeypatch.undo()                                # drop the first spy
     _patch_legacy(monkeypatch, stages_mod)
     legacy = _run_conventional(tmp_path / "legacy", monkeypatch, abort=True)
@@ -243,7 +243,7 @@ def test_freqsel_band_grid_synthesizes_the_native_data(tmp_path, monkeypatch):
 
     # negative control: the legacy band grid (one band only; the native shard
     # above does not depend on the mapping) drifts ~4 ms at the far offsets
-    import sweep_tasks.tasks.fwi_freqsel as fs_mod
+    import sweepx.tasks.tasks.fwi_freqsel as fs_mod
     _patch_legacy(monkeypatch, fs_mod)
     lspec = _freqsel_spec(tmp_path / "legacy", [{"epochs": 1, "dh_m": 2 * DH0}])
     lres = TaskRunner().run(load_task(_write(lspec, tmp_path / "legacy.yaml")))
@@ -259,7 +259,7 @@ def test_freqsel_band_grid_synthesizes_the_native_data(tmp_path, monkeypatch):
 
 def _frame_spy(monkeypatch, module):
     """Record every stage-grid frame install and the coordinates it leaves."""
-    from sweep_tasks._helpers import stage_grid
+    from sweepx.tasks._helpers import stage_grid
 
     calls = []
 
@@ -286,7 +286,7 @@ _TINY_REPARAM = {"kind": "velocity_inr", "hidden_features": 16, "hidden_layers":
 
 
 def test_conventional_reparam_ladder_keeps_the_native_frame(tmp_path, monkeypatch):
-    import sweep_tasks._helpers.stages as stages_mod
+    import sweepx.tasks._helpers.stages as stages_mod
 
     calls = _frame_spy(monkeypatch, stages_mod)
     tmp_path.mkdir(exist_ok=True)
@@ -327,7 +327,7 @@ def test_conventional_reparam_ladder_keeps_the_native_frame(tmp_path, monkeypatc
 def test_freqsel_reparam_built_on_a_band_grid_uses_the_native_frame(tmp_path, monkeypatch):
     """Stage 0 builds the network ON the band grid; its coordinates must still
     be the native frame, which the native stage then reproduces as-is."""
-    import sweep_tasks.tasks.fwi_freqsel as fs_mod
+    import sweepx.tasks.tasks.fwi_freqsel as fs_mod
 
     calls = _frame_spy(monkeypatch, fs_mod)
     spec = _freqsel_spec(tmp_path, [{"epochs": 1, "dh_m": 2 * DH0}, {"epochs": 1}])

@@ -8,10 +8,10 @@ snippet.
 Two functions:
 
 * :func:`plot_index_qc` — acquisition-geometry plan view + depth /
-  trace-count histograms from a :class:`sweep_io.segy_index.SEGYIndex`.
+  trace-count histograms from a :class:`sweepx.io.segy_index.SEGYIndex`.
 * :func:`plot_plan_qc` — group-center scatter + per-row offset
   histogram + rows-per-group histogram from a
-  :class:`sweep_io.seismic_plan.SeismicPlan`. Optionally overlays the
+  :class:`sweepx.io.seismic_plan.SeismicPlan`. Optionally overlays the
   parent :class:`SEGYIndex` so you can see exactly which rows the
   filters dropped.
 

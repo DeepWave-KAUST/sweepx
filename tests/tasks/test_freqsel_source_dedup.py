@@ -13,7 +13,7 @@ collapse onto shared cells in pairs.
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import PoolScheduler
+from sweepx.tasks.freqsel import PoolScheduler
 
 
 def _grid(n=20, dup=()):
@@ -79,7 +79,7 @@ def test_draw_is_reproducible_for_a_seed():
 
 def test_extract_reports_cell_collisions_on_this_grid(tmp_path, capsys):
     """Collisions belong to a grid — the shard build is where you learn of them."""
-    from sweep_tasks.freqsel import FrequencyComb, extract_shard
+    from sweepx.tasks.freqsel import FrequencyComb, extract_shard
 
     rng = np.random.default_rng(0)
     rec = rng.standard_normal((4, 128, 3)).astype(np.float32)

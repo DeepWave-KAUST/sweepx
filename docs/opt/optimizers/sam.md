@@ -1,6 +1,6 @@
 # SAM - Sharpness-Aware Minimization
 
-`sweep_opt.optim.SAM` wraps **any base optimizer** in Foret et al.'s (2021)
+`sweepx.opt.optim.SAM` wraps **any base optimizer** in Foret et al.'s (2021)
 two-step ascent-then-descent update:
 
 $$
@@ -16,7 +16,7 @@ then call the base optimizer's `step()` using $g_{\text{tmp}}$ at the
 ## API
 
 ```python
-sweep_opt.optim.SAM(
+sweepx.opt.optim.SAM(
     base_optimizer,                 # an Optimizer instance (torch or sweep-opt)
     *,
     rho=0.05,                       # ascent radius
@@ -30,11 +30,11 @@ $g$, once for $g_{\text{tmp}}$).
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
-base = sweep_opt.optim.LBFGS([vp], history_size=10, bounds=(1500.0, 5500.0))
-opt = sweep_opt.optim.SAM(base, rho=0.05)
+base = sweepx.opt.optim.LBFGS([vp], history_size=10, bounds=(1500.0, 5500.0))
+opt = sweepx.opt.optim.SAM(base, rho=0.05)
 
 def closure():
     base.zero_grad()

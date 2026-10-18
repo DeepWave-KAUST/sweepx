@@ -1,12 +1,12 @@
-"""Smoke tests for sweep_tasks.preproc (filter + resample, absorbed from the
+"""Smoke tests for sweepx.tasks.preproc (filter + resample, absorbed from the
 retired sweep-preproc)."""
 
 import numpy as np
 import pytest
 
-import sweep_tasks.preproc
-from sweep_tasks.preproc.filter import bandpass, lowpass
-from sweep_tasks.preproc.resample import resample_time
+import sweepx.tasks.preproc
+from sweepx.tasks.preproc.filter import bandpass, lowpass
+from sweepx.tasks.preproc.resample import resample_time
 
 
 def _sine(freq_hz, dt, nt):
@@ -15,7 +15,7 @@ def _sine(freq_hz, dt, nt):
 
 
 def test_preproc_package_exposes_submodules():
-    assert set(sweep_tasks.preproc.__all__) == {"filter", "resample"}
+    assert set(sweepx.tasks.preproc.__all__) == {"filter", "resample"}
 
 
 def test_bandpass_attenuates_out_of_band():

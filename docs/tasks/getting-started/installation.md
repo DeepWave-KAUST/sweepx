@@ -16,8 +16,8 @@ pip install sweepx
 Verify the install:
 
 ```python
-import sweep_tasks
-print(sweep_tasks.__version__)
+import sweepx.tasks
+print(sweepx.tasks.__version__)
 ```
 
 `sweep-tasks` runs anywhere `sweep` runs — a CPU for small jobs, CUDA for

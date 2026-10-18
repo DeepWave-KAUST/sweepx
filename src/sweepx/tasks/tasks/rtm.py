@@ -1,37 +1,37 @@
 """RTM task runner (mixin). Verbatim from runner.py."""
 from pathlib import Path
-from sweep_tasks.preproc.filter import bandpass as _bandpass_cpu
+from sweepx.tasks.preproc.filter import bandpass as _bandpass_cpu
 import numpy as np
-from sweep_tasks.schemas import RTMSpec
-from sweep_tasks._helpers.dd import (
+from sweepx.tasks.schemas import RTMSpec
+from sweepx.tasks._helpers.dd import (
     _compute_local_window,
     _rebase_geometry_to_window,
 )
-from sweep_tasks._helpers.geometry import _build_geometry_2d
-from sweep_tasks._helpers.loss import _compute_loss
-from sweep_tasks._helpers.model import (
+from sweepx.tasks._helpers.geometry import _build_geometry_2d
+from sweepx.tasks._helpers.loss import _compute_loss
+from sweepx.tasks._helpers.model import (
     _model_array,
     _get_equation_class,
     _load_model_tensor,
 )
-from sweep_tasks._helpers.plan_apply import _apply_data_plan_to_fwi
-from sweep_tasks._helpers.plotting import (
+from sweepx.tasks._helpers.plan_apply import _apply_data_plan_to_fwi
+from sweepx.tasks._helpers.plotting import (
     _crop_padded_volume_to_model,
     _save_rtm_qc_pngs,
 )
-from sweep_tasks._helpers.solver_build import (
+from sweepx.tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
     _validate_single_model,
 )
-from sweep_tasks._helpers.stages import (
+from sweepx.tasks._helpers.stages import (
     _bandpass_syn_torch,
     _resample_obs_time,
     _trim_or_pad_time,
 )
-from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
-from sweep_tasks.progress import progress_for
+from sweepx.tasks._helpers.util import _apply_seed
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks.progress import progress_for
 
 
 class RTMRunnerMixin:
@@ -52,7 +52,7 @@ class RTMRunnerMixin:
         """
         import torch
 
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -128,7 +128,7 @@ class RTMRunnerMixin:
         # All other obs sources (synthetic, npy, segy, segy_index) fall back
         # to the eager `_fwi_load_obs` route. They could be lazy-fied later
         # by adding similar reader objects; for now they stay one-shot.
-        from sweep_io.seismic_plan import PlanReader, SeismicPlan
+        from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
         plan_reader: "PlanReader | None" = None
         plan_obj: "SeismicPlan | None" = None
@@ -340,7 +340,7 @@ class RTMRunnerMixin:
         # ``spec.loss.kind`` (the imaging block is the authoritative source for
         # post-FWI products), but secondary knobs (huber_delta, trace_cosine_eps)
         # still come from ``spec.loss``.
-        from sweep_tasks.schemas import LossSpec as _LossSpec
+        from sweepx.tasks.schemas import LossSpec as _LossSpec
         loss_spec_for_grad = _LossSpec(
             kind=imaging.loss_kind,
             huber_delta=float(spec.loss.huber_delta),
@@ -541,7 +541,7 @@ class RTMRunnerMixin:
             # so users can iterate on params without re-running the RTM.
             post_filter = getattr(imaging, "post_filter", None)
             if post_filter is not None and bool(post_filter.enabled):
-                from sweep_tasks.postproc.filter_image import filter_image_file
+                from sweepx.tasks.postproc.filter_image import filter_image_file
 
                 all_targets = [
                     "fwi_gradient_image",

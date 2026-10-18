@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 import torch
 
-import sweep_tasks.freqsel as fsl
-from sweep_tasks.freqsel import (FreqSelTargets, FrequencyComb, SteadyGCNLoss,
+import sweepx.tasks.freqsel as fsl
+from sweepx.tasks.freqsel import (FreqSelTargets, FrequencyComb, SteadyGCNLoss,
                                  extract_shard)
 
 NT, N_NODES, N_REC, NY = 192, 4, 24, 64

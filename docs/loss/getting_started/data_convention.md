@@ -1,6 +1,6 @@
 # Data convention
 
-Every `sweep_loss` misfit consumes tensors in the canonical layout
+Every `sweepx.loss` misfit consumes tensors in the canonical layout
 
 ```
 (nshots, nt, nreceivers, nchannel)
@@ -39,6 +39,6 @@ see the per-loss page for the convention.
 covers muted shots, dead receivers, time gating, etc.
 
 ```python
-from sweep_loss import L2Loss
+from sweepx.loss import L2Loss
 loss = L2Loss(mask=mask)(syn, obs)
 ```

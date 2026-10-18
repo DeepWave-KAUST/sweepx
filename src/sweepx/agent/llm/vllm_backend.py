@@ -11,7 +11,7 @@ import json
 import os
 from typing import Any, Iterable
 
-from sweep_agent.llm.base import BaseLLM, ChatMessage
+from sweepx.agent.llm.base import BaseLLM, ChatMessage
 
 # Where a local LLM usually listens. Ollama is the easy cross-platform default
 # (one binary, small quantized models); vLLM is the GPU/production option.

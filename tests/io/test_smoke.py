@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-import sweep_io
-from sweep_io.geometry import Geometry
-from sweep_io.models import load_velocity, save_velocity
+import sweepx.io
+from sweepx.io.geometry import Geometry
+from sweepx.io.models import load_velocity, save_velocity
 
 
 def test_version():
-    assert isinstance(sweep_io.__version__, str)
-    assert sweep_io.__version__.count(".") >= 1
+    assert isinstance(sweepx.io.__version__, str)
+    assert sweepx.io.__version__.count(".") >= 1
 
 
 def test_models_roundtrip_npy(tmp_path):
@@ -69,9 +69,9 @@ def test_lazy_submodules():
     import subprocess
     import sys
     code = (
-        "import sys, sweep_io; "
-        "print(int('sweep_io.datasets' in sys.modules), "
-        "int('sweep_io.cuda_prefetch' in sys.modules))"
+        "import sys, sweepx.io; "
+        "print(int('sweepx.io.datasets' in sys.modules), "
+        "int('sweepx.io.cuda_prefetch' in sys.modules))"
     )
     out = subprocess.check_output([sys.executable, "-c", code], text=True).strip()
     assert out == "0 0", f"expected '0 0', got {out!r}"

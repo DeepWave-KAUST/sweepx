@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from sweep_tasks._helpers import metadata as M
+from sweepx.tasks._helpers import metadata as M
 
 
 def _tree(root: Path, mod: str, *, name: str, version: str, dunder: str) -> Path:
@@ -81,8 +81,8 @@ def test_run_meta_has_the_new_fields(tmp_path):
     import numpy as np
     import yaml
 
-    from sweep_tasks import load_task
-    from sweep_tasks.runner import _dump_run_metadata
+    from sweepx.tasks import load_task
+    from sweepx.tasks.runner import _dump_run_metadata
 
     shape = (48, 48)
     np.save(tmp_path / "true.npy", np.full(shape, 2600.0, dtype=np.float32))

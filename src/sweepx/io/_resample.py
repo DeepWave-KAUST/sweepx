@@ -2,7 +2,7 @@
 
 Self-contained numpy-only copy of the resampler formerly in
 ``sweep_preproc.resample`` — that package was absorbed into
-``sweep_tasks.preproc`` and retired. Kept here so sweep-io's optional
+``sweepx.tasks.preproc`` and retired. Kept here so sweep-io's optional
 ``DataPlan.dt_target_s`` feature has no cross-package dependency, and so
 sweep-io never has to import sweep-tasks (which would be a dependency cycle:
 sweep-tasks already imports sweep-io).

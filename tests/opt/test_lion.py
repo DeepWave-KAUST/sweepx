@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.optim.Lion."""
+"""Tests for sweepx.opt.optim.Lion."""
 import torch
 
-from sweep_opt.optim import Lion
+from sweepx.opt.optim import Lion
 
 
 def test_lion_converges_on_quadratic():

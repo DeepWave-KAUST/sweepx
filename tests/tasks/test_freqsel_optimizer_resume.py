@@ -11,8 +11,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sweep_tasks.schemas import ReparamSpec
-from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
+from sweepx.tasks.schemas import ReparamSpec
+from sweepx.tasks.tasks.fwi_freqsel import FreqselRunnerMixin
 
 restore = FreqselRunnerMixin._restore_optimizer_state
 

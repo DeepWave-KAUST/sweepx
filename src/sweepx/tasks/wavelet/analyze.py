@@ -1,9 +1,9 @@
 """Rank-1 robust direct-wave wavelet analysis (per-group + average).
 
 Ported from ``fwi_workflow-dev/scripts/03_analyze_direct_wavelet_batch.py``.
-Reads a :class:`sweep_io.seismic_plan.SeismicPlan` (CSG or CRG) instead
+Reads a :class:`sweepx.io.seismic_plan.SeismicPlan` (CSG or CRG) instead
 of the legacy ``csg_index_v2`` npz; the inner rank-1 + robust-average
-algorithm lives in :mod:`sweep_tasks.wavelet.direct_arrival` and is
+algorithm lives in :mod:`sweepx.tasks.wavelet.direct_arrival` and is
 reused verbatim. Under CSG one group is a shot with N receivers; under
 CRG (OBN reciprocity) one group is a receiver with N shots. The rank-1
 SVD only sees the physical offset ``|rec_xyz - src_xyz|`` either way,
@@ -35,7 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sweep_io.seismic_plan import PlanReader, SeismicPlan
+from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
 from .direct_arrival import (
     causal_event_time_s,
@@ -248,7 +248,7 @@ def analyze_direct_wavelet_batch(config: AnalyzeWaveletConfig) -> Path:
     """Run the full rank-1 + robust-average pipeline.
 
     Returns the path to ``average/average_direct_wavelet.npz`` (which is
-    what :class:`sweep_tasks.wavelet.sweep_torch.WaveletInversionConfig`
+    what :class:`sweepx.tasks.wavelet.sweep_torch.WaveletInversionConfig`
     expects as ``initial_wavelet_path``).
     """
 

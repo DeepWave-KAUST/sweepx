@@ -12,12 +12,12 @@ the canonical workflow is:
        (:meth:`SEGYIndex.load`) and iterate shots via
        :class:`IndexedShotGatherDataset`, which fetches each shot's
        traces with one coalesced byte-offset read against the underlying
-       SEG-Y files. Pairs naturally with :class:`sweep_io.prefetch.Prefetcher`
-       and :class:`sweep_io.cuda_prefetch.CUDAPrefetcher` for I/O / compute
+       SEG-Y files. Pairs naturally with :class:`sweepx.io.prefetch.Prefetcher`
+       and :class:`sweepx.io.cuda_prefetch.CUDAPrefetcher` for I/O / compute
        overlap.
 
 For single-file mid-sized datasets (Viking line-12: 750 MB), the
-heavier index workflow is overkill — use :class:`sweep_io.segy.SEGYReader`
+heavier index workflow is overkill — use :class:`sweepx.io.segy.SEGYReader`
 directly. The two approaches share the same byte-offset reader; the
 index just persists the catalog so you don't pay header-scan cost on
 every run.
@@ -199,7 +199,7 @@ class SEGYIndex:
 
     # ------------------------------------------------------ geometry adapter
     def to_physical_geometry(self, *, shot_ids: Sequence[int] | None = None):
-        """Materialise a :class:`sweep_io.geometry.PhysicalGeometry`.
+        """Materialise a :class:`sweepx.io.geometry.PhysicalGeometry`.
 
         Expects every shot to have the same receiver count (typical for
         streamers). For OBN / variable-receiver-count layouts, slice the
@@ -235,9 +235,9 @@ class SEGYIndex:
 
     # ------------------------------------------------------ plan hop
     def to_seismic_plan(self, **kwargs):
-        """Convenience: build a :class:`sweep_io.seismic_plan.SeismicPlan`.
+        """Convenience: build a :class:`sweepx.io.seismic_plan.SeismicPlan`.
 
-        All kwargs forward to :func:`sweep_io.seismic_plan.build_seismic_plan`.
+        All kwargs forward to :func:`sweepx.io.seismic_plan.build_seismic_plan`.
         Use ``grouping='csg'`` (default) for shot-gather organisation
         (typical 2-D / 3-D streamer) or ``grouping='crg'`` (plus
         ``receiver_quantize_m``) for common-receiver gathers (OBN).
@@ -449,8 +449,8 @@ class IndexedShotGatherDataset:
     selected shot's traces (sorted ascending, runs merged). Output shape
     is ``(n_recv, n_samples)`` float32.
 
-    Pair with :class:`sweep_io.prefetch.Prefetcher` or
-    :class:`sweep_io.cuda_prefetch.CUDAPrefetcher` for I/O / compute overlap.
+    Pair with :class:`sweepx.io.prefetch.Prefetcher` or
+    :class:`sweepx.io.cuda_prefetch.CUDAPrefetcher` for I/O / compute overlap.
 
     Parameters
     ----------

@@ -5,7 +5,7 @@
 ``data_prep`` — quick-look PNGs for the ``build-index`` / ``build-plan`` steps.
 
 The FWI-run QC functions are re-exported at the package level, so
-``from sweep_tasks.qc import save_vp_png`` keeps working.
+``from sweepx.tasks.qc import save_vp_png`` keeps working.
 """
 
 from . import data_prep, fwi  # noqa: F401

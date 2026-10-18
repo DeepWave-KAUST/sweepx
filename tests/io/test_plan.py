@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sweep_io.geometry import Geometry, PhysicalGeometry
-from sweep_io.plan import (
+from sweepx.io.geometry import Geometry, PhysicalGeometry
+from sweepx.io.plan import (
     DataPlan,
     ModelPlan,
     apply_data_plan,

@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 from pydantic import TypeAdapter
 
-from sweep_tasks.schemas import TaskSpec
+from sweepx.tasks.schemas import TaskSpec
 
 _task_adapter: TypeAdapter[TaskSpec] = TypeAdapter(TaskSpec)
 
@@ -130,7 +130,7 @@ def load_task_from_dict(raw: dict, *, base_dir: Path | str | None = None) -> Tas
 
     Used by the CLI to support ``--override key=value`` flags: the raw
     YAML is loaded into a dict, dotted-key overrides are applied via
-    :func:`sweep_tasks.runtime.config.apply_overrides`, then this function does
+    :func:`sweepx.tasks.runtime.config.apply_overrides`, then this function does
     path resolution + pydantic validation against the same base_dir the
     YAML lived in.
     """
@@ -217,7 +217,7 @@ def _read_bundled_template(task_type: str) -> str:
     """Raw text of the bundled ``templates/<task_type>.yaml`` annotated reference."""
     import importlib.resources as ir
 
-    return ir.files("sweep_tasks").joinpath(f"templates/{task_type}.yaml").read_text()
+    return ir.files("sweepx.tasks").joinpath(f"templates/{task_type}.yaml").read_text()
 
 
 def new_template(

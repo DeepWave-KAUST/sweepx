@@ -1,6 +1,6 @@
 # Truncated Gauss-Newton
 
-`sweep_opt.optim.TruncatedGaussNewton` is the truncated Gauss-Newton
+`sweepx.opt.optim.TruncatedGaussNewton` is the truncated Gauss-Newton
 optimizer for non-linear least-squares problems
 $L(\theta) = \tfrac{1}{2}\|r(\theta)\|^2$ - the standard data-misfit form
 of FWI.
@@ -33,7 +33,7 @@ opt.step(residual_fn)
 ## API
 
 ```python
-sweep_opt.optim.TruncatedGaussNewton(
+sweepx.opt.optim.TruncatedGaussNewton(
     params,
     *,
     bounds=None,

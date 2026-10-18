@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks.progress import METRICS_FILE, ProgressLog
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks.progress import METRICS_FILE, ProgressLog
 
 
 def _strict_loads(line: str) -> dict:

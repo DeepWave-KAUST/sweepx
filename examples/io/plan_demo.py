@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from sweep_io.geometry import PhysicalGeometry
-from sweep_io.plan import DataPlan, ModelPlan, apply_data_plan, apply_model_plan
+from sweepx.io.geometry import PhysicalGeometry
+from sweepx.io.plan import DataPlan, ModelPlan, apply_data_plan, apply_model_plan
 
 
 def make_synthetic_streamer():

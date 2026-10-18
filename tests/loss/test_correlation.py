@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from sweep_loss import (
+from sweepx.loss import (
     GlobalCorrelationLoss,
     TraceNormalizedL2Loss,
     global_correlation_loss,

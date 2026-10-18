@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from sweep_loss import L2Loss, SoftDTWLoss, soft_dtw_loss
+from sweepx.loss import L2Loss, SoftDTWLoss, soft_dtw_loss
 
 
 def _ricker(t, t0, fc=15.0):

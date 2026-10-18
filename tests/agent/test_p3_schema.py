@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 # --- describe_task_schema --------------------------------------------------
 
 def test_describe_top_level_fwi():
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     res = registry.get("describe_task_schema").invoke({"task_type": "fwi"})
     assert res.ok, res.error
     fields = res.value["fields"]
@@ -23,7 +23,7 @@ def test_describe_top_level_fwi():
 
 
 def test_describe_section_optimizer():
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     res = registry.get("describe_task_schema").invoke({"task_type": "fwi", "section": "optimizer"})
     assert res.ok
     variants = res.value["variants"]
@@ -32,7 +32,7 @@ def test_describe_section_optimizer():
 
 
 def test_describe_section_geometry_variants():
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     res = registry.get("describe_task_schema").invoke({"task_type": "forward", "section": "geometry"})
     assert res.ok
     variants = res.value["variants"]
@@ -61,7 +61,7 @@ def _forward_spec_dict(vp_path, nt=50):
 
 
 def test_build_spec_forward_roundtrip(tmp_path):
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((32, 40), 1800.0, dtype=np.float32))
     res = registry.get("build_spec").invoke({
@@ -74,7 +74,7 @@ def test_build_spec_forward_roundtrip(tmp_path):
 
 
 def test_build_spec_validation_error(tmp_path):
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     res = registry.get("build_spec").invoke({
         "task_type": "forward", "spec": {"grid": {"dh": 12.5}},  # missing time/wavelet/geometry/physics/models
         "output_dir": str(tmp_path / "r"),
@@ -86,7 +86,7 @@ def test_build_spec_validation_error(tmp_path):
 @pytest.mark.timeout(120)
 def test_build_spec_forward_e2e(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((32, 40), 1800.0, dtype=np.float32))
     spec = _forward_spec_dict(vp, nt=60)

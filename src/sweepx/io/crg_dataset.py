@@ -322,7 +322,7 @@ def read_traces_cached(
     filesystem block (~1 MB) for more aggressive merging.
 
     Returns a ``(n, n_samples)`` ``float32`` ndarray in caller-order
-    (matches :meth:`sweep_io.segy.MultiFileSEGYReader.read_traces`).
+    (matches :meth:`sweepx.io.segy.MultiFileSEGYReader.read_traces`).
     """
     fids = np.asarray(file_ids, dtype=np.int64)
     offs = np.asarray(byte_offsets, dtype=np.int64)

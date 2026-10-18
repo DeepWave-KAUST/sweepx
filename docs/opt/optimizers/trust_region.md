@@ -1,6 +1,6 @@
 # Trust-Region (TTR / ASTR)
 
-`sweep_opt.optim.TrustRegion` is the trust-region Newton-type optimizer.
+`sweepx.opt.optim.TrustRegion` is the trust-region Newton-type optimizer.
 Two subproblem solvers are exposed via the `variant` flag:
 
 - ``"ttr"`` (default): **truncated CG inside the trust radius** (Steihaug
@@ -38,7 +38,7 @@ opt.step(loss_fn)
 ## API
 
 ```python
-sweep_opt.optim.TrustRegion(
+sweepx.opt.optim.TrustRegion(
     params,
     *,
     variant="ttr",                  # "ttr" | "astr"

@@ -14,7 +14,7 @@ assignment.
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
+from sweepx.tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
 
 
 def _shard(tmp_path, nt=256, k_lo=8, k_hi=40, n_nodes=4, n_rec=3, seed=0):

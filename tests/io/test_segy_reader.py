@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sweep_io.segy import (
+from sweepx.io.segy import (
     FORMAT_IBM_FLOAT32,
     FORMAT_IEEE_FLOAT32,
     MultiFileSEGYReader,

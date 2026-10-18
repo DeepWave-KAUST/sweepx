@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.optim.Shampoo."""
+"""Tests for sweepx.opt.optim.Shampoo."""
 import torch
 
-from sweep_opt.optim import Shampoo
+from sweepx.opt.optim import Shampoo
 
 
 def test_shampoo_converges_on_quadratic():

@@ -21,9 +21,9 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks._helpers.model import _model_array, _infer_shape
-from sweep_tasks.schemas import ModelRef
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks._helpers.model import _model_array, _infer_shape
+from sweepx.tasks.schemas import ModelRef
 
 
 def _write(spec_dict, path: Path) -> Path:

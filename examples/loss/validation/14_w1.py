@@ -31,8 +31,8 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import Wasserstein1Loss  # noqa: E402
-from sweep_loss._utils import normalize_density, positive_transform  # noqa: E402
+from sweepx.loss import Wasserstein1Loss  # noqa: E402
+from sweepx.loss._utils import normalize_density, positive_transform  # noqa: E402
 
 
 NAME = "14_w1"

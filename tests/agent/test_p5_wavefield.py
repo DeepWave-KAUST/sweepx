@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _vp(path, value=1800.0, shape=(32, 40)):
@@ -15,7 +15,7 @@ def _vp(path, value=1800.0, shape=(32, 40)):
 
 def test_build_wavefield_ok(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
     res = registry.get("build_wavefield_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 100,
@@ -28,7 +28,7 @@ def test_build_wavefield_ok(tmp_path):
 
 
 def test_build_wavefield_snaptime_out_of_range(tmp_path):
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
     res = registry.get("build_wavefield_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 50,
@@ -41,7 +41,7 @@ def test_build_wavefield_snaptime_out_of_range(tmp_path):
 
 def test_build_wavefield_bad_equation(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
     res = registry.get("build_wavefield_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 100,
@@ -55,7 +55,7 @@ def test_build_wavefield_bad_equation(tmp_path):
 @pytest.mark.timeout(180)
 def test_wavefield_e2e_cpu(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
     b = registry.get("build_wavefield_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 80, "fm": 15.0,

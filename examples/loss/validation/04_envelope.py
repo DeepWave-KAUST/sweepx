@@ -34,8 +34,8 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import EnvelopeLoss  # noqa: E402
-from sweep_loss._utils import envelope as hilbert_envelope  # noqa: E402
+from sweepx.loss import EnvelopeLoss  # noqa: E402
+from sweepx.loss._utils import envelope as hilbert_envelope  # noqa: E402
 
 
 NAME = "04_envelope"
@@ -57,7 +57,7 @@ def run() -> dict:
     syn_np = pair.syn.detach().numpy().ravel()
     obs_np = pair.obs.detach().numpy().ravel()
 
-    # Envelopes — exactly the helper EnvelopeLoss calls (sweep_loss._utils.envelope)
+    # Envelopes — exactly the helper EnvelopeLoss calls (sweepx.loss._utils.envelope)
     E_syn = hilbert_envelope(pair.syn, dim=-3, eps=0.0).detach().numpy().ravel()
     E_obs = hilbert_envelope(pair.obs, dim=-3, eps=0.0).detach().numpy().ravel()
 
@@ -136,7 +136,7 @@ def run() -> dict:
         summary["variants"][row]["scan_y_at_0"] = float(y[len(y) // 2])
 
     fig.suptitle(
-        "EnvelopeLoss — `sweep_loss.envelope` (=|Hilbert|) and adjoint behave per Wu/Bozdağ/Chi",
+        "EnvelopeLoss — `sweepx.loss.envelope` (=|Hilbert|) and adjoint behave per Wu/Bozdağ/Chi",
         y=1.005,
     )
     fig.tight_layout()

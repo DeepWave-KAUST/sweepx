@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 class CompareEquationWavefieldsParams(BaseModel):
@@ -70,10 +70,10 @@ class CompareEquationWavefieldsParams(BaseModel):
     params_model=CompareEquationWavefieldsParams,
 )
 def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[str, Any]:
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     try:
-        from sweep_agent.tools.introspect import all_equations
+        from sweepx.agent.tools.introspect import all_equations
         eqs_models = all_equations()
     except Exception as exc:
         return {"error": f"could not load equation list: {exc}"}
@@ -197,7 +197,7 @@ class AnimateWavefieldParams(BaseModel):
     params_model=AnimateWavefieldParams,
 )
 def animate_wavefield(args: AnimateWavefieldParams) -> dict[str, Any]:
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     # 1. Resolve the equation from the extra models when not given. vp_path is
     # the primary model; extra_models are everything after it.
@@ -214,7 +214,7 @@ def animate_wavefield(args: AnimateWavefieldParams) -> dict[str, Any]:
             except Exception:
                 ndim = None
             try:
-                from sweep_agent.tools.introspect import equations_for_models
+                from sweepx.agent.tools.introspect import equations_for_models
                 matches = equations_for_models(extra_keys, ndim=ndim)
             except Exception as exc:
                 return {"error": f"could not load equation list to auto-detect: {exc}"}
@@ -326,7 +326,7 @@ class RunFwiParams(BaseModel):
 def run_fwi(args: RunFwiParams) -> dict[str, Any]:
     from pathlib import Path
 
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     sources = [s for s in (args.synthetic_true_vp_path, args.obs_npy_path, args.obs_segy_path) if s]
     if len(sources) != 1:
@@ -409,7 +409,7 @@ class RunForwardPlotParams(BaseModel):
 def run_forward_and_plot(args: RunForwardPlotParams) -> dict[str, Any]:
     from pathlib import Path
 
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     b = registry.get("build_forward_spec").invoke({
         "vp_path": args.vp_path, "equation": args.equation, "extra_models": args.extra_models or None,
@@ -482,7 +482,7 @@ class RunMultiscaleFwiParams(BaseModel):
 def run_multiscale_fwi(args: RunMultiscaleFwiParams) -> dict[str, Any]:
     from pathlib import Path
 
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     freqs = sorted(args.frequencies)
     current_init = args.init_model_path

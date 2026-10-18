@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.SAM."""
+"""Tests for sweepx.opt.optim.SAM."""
 import pytest
 import torch
 
-from sweep_opt.optim import SAM, AdamFWI, SteepestDescent
+from sweepx.opt.optim import SAM, AdamFWI, SteepestDescent
 
 
 def _make_closure(f, x, opt):

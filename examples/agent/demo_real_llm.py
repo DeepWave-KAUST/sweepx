@@ -7,7 +7,7 @@ Prereqs:
     * /tmp/vp_demo.npy already prepared
 
 Usage:
-    python -m sweep_agent.examples.demo_real_llm
+    python -m sweepx.agent.examples.demo_real_llm
     python examples/demo_real_llm.py "your custom prompt"
 """
 
@@ -20,8 +20,8 @@ import sys
 os.environ.setdefault("SWEEP_AGENT_LLM_URL",   "http://localhost:8000/v1")
 os.environ.setdefault("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.vllm_backend import VLLMBackend
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.vllm_backend import VLLMBackend
 
 
 DEFAULT_USER_MSG = (

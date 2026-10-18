@@ -64,7 +64,7 @@ on the damped data.
 ## API
 
 ```python
-from sweep_loss import (
+from sweepx.loss import (
     FrequencyDomainL2Loss, FrequencyPhaseLoss, FrequencyAmplitudeLoss,
     LogarithmicShinMinLoss, LaplaceL2Loss,
 )

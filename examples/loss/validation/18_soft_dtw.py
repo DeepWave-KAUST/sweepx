@@ -30,7 +30,7 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import SoftDTWLoss  # noqa: E402
+from sweepx.loss import SoftDTWLoss  # noqa: E402
 
 
 NAME = "18_soft_dtw"

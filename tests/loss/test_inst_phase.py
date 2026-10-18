@@ -7,14 +7,14 @@ import math
 import numpy as np
 import torch
 
-from sweep_loss import (
+from sweepx.loss import (
     EnvelopeLoss,
     EnvelopePhaseLoss,
     InstantaneousPhaseLoss,
     envelope_phase_loss,
     instantaneous_phase_loss,
 )
-from sweep_loss._utils import instantaneous_phase
+from sweepx.loss._utils import instantaneous_phase
 
 
 def _ricker(t, t0, fc=15.0):

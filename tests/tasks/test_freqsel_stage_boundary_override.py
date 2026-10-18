@@ -9,9 +9,9 @@ where the YAML vocabulary still exists to name them.
 """
 import pytest
 
-from sweep_tasks.schemas import (BackendSpec, BoundaryOptionsModel,
+from sweepx.tasks.schemas import (BackendSpec, BoundaryOptionsModel,
                                  CUDAOptionsModel, MemoryOptionsModel, StageSpec)
-from sweep_tasks.tasks.fwi_freqsel import backend_with_stage_boundary
+from sweepx.tasks.tasks.fwi_freqsel import backend_with_stage_boundary
 
 
 def _backend(**bnd):

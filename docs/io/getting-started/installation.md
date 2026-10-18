@@ -25,6 +25,6 @@ needs `mpi4py`.
 Verify the install:
 
 ```python
-import sweep_io
-print(sweep_io.__version__)
+import sweepx.io
+print(sweepx.io.__version__)
 ```

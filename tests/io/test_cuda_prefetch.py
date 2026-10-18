@@ -1,4 +1,4 @@
-"""Tests for sweep_io.cuda_prefetch — skipped without torch / cuda."""
+"""Tests for sweepx.io.cuda_prefetch — skipped without torch / cuda."""
 
 import numpy as np
 import pytest
@@ -7,7 +7,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("CUDA unavailable; skipping cuda_prefetch tests", allow_module_level=True)
 
-from sweep_io.cuda_prefetch import CUDAPrefetcher  # noqa: E402
+from sweepx.io.cuda_prefetch import CUDAPrefetcher  # noqa: E402
 
 
 def test_cuda_prefetch_yields_device_tensors():

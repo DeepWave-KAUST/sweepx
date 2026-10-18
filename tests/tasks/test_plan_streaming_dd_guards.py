@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 from test_plan_streaming_rank_sync import _ENCODED, _INR, _run
 from test_task_fwi_plan_streaming import (
     _SYN_SHAPE,
@@ -43,7 +43,7 @@ def _asking(key, tmp_path):
 
 @pytest.mark.parametrize("key", _SKIPPED)
 def test_dd_refuses_what_its_loop_skips(tmp_path, monkeypatch, key):
-    from sweep_io.seismic_plan import SeismicPlan
+    from sweepx.io.seismic_plan import SeismicPlan
 
     loaded = []
     load = SeismicPlan.load.__func__
@@ -106,8 +106,8 @@ _UNREAD = {
 
 @pytest.mark.parametrize("named", list(_UNREAD))
 def test_dd_refuses_reparam_backward_options_it_never_reads(tmp_path, monkeypatch, named):
-    from sweep_io.seismic_plan import SeismicPlan
-    from sweep_tasks.tasks.fwi_plan_streaming import _dd_unread_reparam_options
+    from sweepx.io.seismic_plan import SeismicPlan
+    from sweepx.tasks.tasks.fwi_plan_streaming import _dd_unread_reparam_options
 
     loaded = []
     load = SeismicPlan.load.__func__

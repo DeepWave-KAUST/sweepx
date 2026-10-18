@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import yaml
 
-from sweep_tasks import load_task, TaskRunner
+from sweepx.tasks import load_task, TaskRunner
 
 
 def _write(spec_dict, path: Path) -> Path:
@@ -100,7 +100,7 @@ def test_three_modes_produce_equivalent_param_grads():
 
     Bypasses the YAML/runner pipeline and exercises the math directly to
     keep this fast and tightly scoped."""
-    from sweep_nn import VelocityINR
+    from sweepx.nn import VelocityINR
     torch.manual_seed(42)
 
     # Tiny vp grid (avoids real wave-equation cost).
@@ -162,6 +162,6 @@ def test_three_modes_produce_equivalent_param_grads():
 
 def test_default_backward_mode_is_two_pass_full(tmp_path):
     """The reparam default must match fwi_workflow-dev (``inr_backward_mode='full'``)."""
-    from sweep_tasks import ReparamSpec
+    from sweepx.tasks import ReparamSpec
     spec = ReparamSpec()
     assert spec.backward_mode == "two_pass_full"

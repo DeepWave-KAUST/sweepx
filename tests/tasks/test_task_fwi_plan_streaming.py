@@ -1,6 +1,6 @@
 """End-to-end smoke for the unified OBN plan-streaming FWI path (TASK 019).
 
-Synthesises a tiny ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`
+Synthesises a tiny ``grouping='crg'`` :class:`sweepx.io.seismic_plan.SeismicPlan`
 + SEG-Y survey + rotation_metadata.json on disk, then runs
 ``TaskRunner`` with ``geometry.kind='from_plan'`` + ``obs.plan.sampling``
 (PlanSamplingConfig) + ``source_encoding.enabled=true``. Verifies that:
@@ -28,15 +28,15 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_io.segy import (
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
     FORMAT_IEEE_FLOAT32,
     write_segy_minimal,
 )
-from sweep_io.seismic_plan import SeismicPlan
+from sweepx.io.seismic_plan import SeismicPlan
 
 
 SAMPLES_PER_TRACE = 80
@@ -390,7 +390,7 @@ def test_plan_streaming_fwi_qc_flags_gate_each_product(tmp_path):
 
 def test_plan_streaming_fwi_with_smooth_reg_and_water_pin(tmp_path):
     """Wire TVPrior + the `water:` pin through the plan-streaming path."""
-    from sweep_tasks.bathymetry import save_seabed_depth_npz
+    from sweepx.tasks.bathymetry import save_seabed_depth_npz
 
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     # Seabed (ny, nx) = (16, 24) at 100 m everywhere -> rows 0..1 are water
@@ -485,7 +485,7 @@ def test_plan_streaming_stage_grid_spans_the_base_extent(tmp_path, capsys, repar
     out-of-bounds guard. The `water:` layer is rebuilt on the stage grid, and
     with a reparam network the stage coordinates stay in the base frame.
     """
-    from sweep_tasks.bathymetry import save_seabed_depth_npz
+    from sweepx.tasks.bathymetry import save_seabed_depth_npz
 
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     sb_path = save_seabed_depth_npz(tmp_path / "seabed_depth.npz",
@@ -526,9 +526,9 @@ _BAND_LO, _BAND_HI = {"lo_hz": 1.0, "hi_hz": 4.0}, {"lo_hz": 1.0, "hi_hz": 8.0}
 def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> dict:
     """Spec + on-disk fixture for the stage-change tests (default: CPU, per shot)."""
     import torch
-    from sweep_tasks._helpers.solver_build import _build_solver
-    from sweep_tasks._helpers.wavelet_build import _build_wavelet
-    from sweep_tasks.yaml_io import load_task_from_dict
+    from sweepx.tasks._helpers.solver_build import _build_solver
+    from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+    from sweepx.tasks.yaml_io import load_task_from_dict
 
     z, y, x = np.meshgrid(*(np.arange(n) * 50.0 for n in shape), indexing="ij")
     true_vp = (2500.0 + 250.0 * np.exp(-((x - 400.0) ** 2 + (y - 300.0) ** 2
@@ -598,7 +598,7 @@ def _spy_solver_and_optimizers(monkeypatch):
     """Record, per solver call, the model tensor it differentiates (and its value)
     next to the optimizer live at that moment; and every optimizer the run builds."""
     from sweep.propagator.torch import PropTorch
-    import sweep_tasks.tasks.fwi_plan_streaming as ps
+    import sweepx.tasks.tasks.fwi_plan_streaming as ps
 
     rec = {"calls": [], "opts": []}
     forward = PropTorch.forward
@@ -635,7 +635,7 @@ def test_plan_streaming_stage_dh_keeps_inverting(tmp_path, monkeypatch, path):
     here as well.
     """
     import torch
-    from sweep_tasks._helpers.stage_grid import _resample_to_grid
+    from sweepx.tasks._helpers.stage_grid import _resample_to_grid
 
     E = 3
     extra = {}
@@ -711,7 +711,7 @@ def test_plan_streaming_stage_solver_keeps_illumination(tmp_path, monkeypatch):
     on the setup solver: a stage that rebuilt the solver silently turned the
     precondition off (the first stage, when it set its own dh_m).
     """
-    import sweep_tasks.tasks.fwi_plan_streaming as ps
+    import sweepx.tasks.tasks.fwi_plan_streaming as ps
 
     seen = []
     precond = ps._apply_illumination_precond
@@ -751,7 +751,7 @@ def _spy_illumination(monkeypatch):
     next call (or the precondition): snapshot them then, so the record holds
     whether the solver hands out fresh buffers per call or reuses them.
     """
-    import sweep_tasks.tasks.fwi_plan_streaming as ps
+    import sweepx.tasks.tasks.fwi_plan_streaming as ps
     from sweep.propagator.torch import PropTorch
 
     rec = {"calls": [], "used": [], "pending": None}

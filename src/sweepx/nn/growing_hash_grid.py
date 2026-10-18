@@ -1,8 +1,8 @@
 """On-demand *growing* multi-resolution hash-grid encoder.
 
-Same encoding as :class:`~sweep_nn.hash_encoding.MultiResHashGrid` (Instant-NGP,
+Same encoding as :class:`~sweepx.nn.hash_encoding.MultiResHashGrid` (Instant-NGP,
 Müller et al. 2022, https://doi.org/10.1145/3528223.3530127) but the fine levels
-are **allocated lazily**. Where :class:`~sweep_nn.coarse_to_fine.CoarseToFineHashGrid`
+are **allocated lazily**. Where :class:`~sweepx.nn.coarse_to_fine.CoarseToFineHashGrid`
 allocates every level up front and freezes the fine ones behind a zero mask,
 ``GrowingHashGrid`` starts with only ``initial_levels`` and instantiates each
 finer level's latent table on the first :meth:`grow` call.
@@ -177,7 +177,7 @@ class GrowingHashGrid(nn.Module):
     ) -> List[nn.Parameter]:
         """Grow to the level count a coarse-to-fine schedule wants at ``progress``.
 
-        Mirrors :meth:`~sweep_nn.coarse_to_fine.CoarseToFineHashGrid.set_progress`:
+        Mirrors :meth:`~sweepx.nn.coarse_to_fine.CoarseToFineHashGrid.set_progress`:
         an ``alpha`` ramps ``base_levels`` -> ``final_levels`` linearly over
         ``[warmup, ramp_end]`` (fractions of training). A level is *allocated*
         once ``alpha`` reaches it (``floor(alpha)``), so memory is spent lazily

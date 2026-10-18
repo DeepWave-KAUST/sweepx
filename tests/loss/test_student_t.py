@@ -1,4 +1,4 @@
-"""Tests for :class:`sweep_loss.StudentTLoss`."""
+"""Tests for :class:`sweepx.loss.StudentTLoss`."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from sweep_loss import CauchyLoss, L2Loss, StudentTLoss, student_t_loss
+from sweepx.loss import CauchyLoss, L2Loss, StudentTLoss, student_t_loss
 
 
 def test_formula_pointwise():

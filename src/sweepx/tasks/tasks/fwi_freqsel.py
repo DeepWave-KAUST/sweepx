@@ -7,7 +7,7 @@ invariant to any per-node complex scale, which absorbs the source
 spectrum, excitation delay and sensor coupling.
 
 Note the word "encoding" means something different here than in
-:mod:`sweep_tasks.tasks.fwi_plan_streaming`: that path encodes in TIME
+:mod:`sweepx.tasks.tasks.fwi_plan_streaming`: that path encodes in TIME
 with ±1 signs on a supershot, this one divides the FREQUENCY axis into a
 comb. See ``_run_fwi``'s dispatch table.
 
@@ -15,8 +15,8 @@ Extracted from runner.py.
 """
 from pathlib import Path
 import os
-from sweep_tasks.schemas import FWISpec
-from sweep_tasks._helpers.dd import (
+from sweepx.tasks.schemas import FWISpec
+from sweepx.tasks._helpers.dd import (
     _dd_backward_tile,
     _dd_backward_tile_multi,
     _dd_config,
@@ -25,31 +25,31 @@ from sweep_tasks._helpers.dd import (
     _dd_tile_bounds,
     _dd_wrap,
 )
-from sweep_tasks._helpers.illumination import (
+from sweepx.tasks._helpers.illumination import (
     _accumulate_illumination,
     _apply_illumination_precond,
 )
-from sweep_tasks._helpers.model import _solver_models
-from sweep_tasks._helpers.plan_apply import _normalize_fwi_init_models
-from sweep_tasks._helpers.reparam import (
+from sweepx.tasks._helpers.model import _solver_models
+from sweepx.tasks._helpers.plan_apply import _normalize_fwi_init_models
+from sweepx.tasks._helpers.reparam import (
     _advance_hash_schedule,
     _build_reparam_net,
     _has_hash_schedule,
 )
-from sweep_tasks._helpers.solver_build import _build_solver
-from sweep_tasks._helpers.stage_grid import (
+from sweepx.tasks._helpers.solver_build import _build_solver
+from sweepx.tasks._helpers.stage_grid import (
     _resample_to_grid,
     _set_physical_inr_frame,
     _stage_grid_shape,
 )
-from sweep_tasks._helpers.water import WaterRegion, rebake_water_
-from sweep_tasks._helpers.stages import _normalise_stage_list
-from sweep_tasks._helpers.model import _model_array
-from sweep_tasks._helpers.util import (
+from sweepx.tasks._helpers.water import WaterRegion, rebake_water_
+from sweepx.tasks._helpers.stages import _normalise_stage_list
+from sweepx.tasks._helpers.model import _model_array
+from sweepx.tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
 )
-from sweep_tasks.progress import optimizer_lr, progress_for
+from sweepx.tasks.progress import optimizer_lr, progress_for
 
 
 def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None):
@@ -93,7 +93,7 @@ def backend_with_tail_steps(backend, fspec, dd_on: bool, dt: float | None = None
             "backend.use_ckpt=true — checkpointing replays forward segments "
             "and cannot skip the head of the record; use "
             "cuda_options.memory.strategy='boundary'")
-    from sweep_tasks.schemas import (BoundaryOptionsModel, CUDAOptionsModel,
+    from sweepx.tasks.schemas import (BoundaryOptionsModel, CUDAOptionsModel,
                                      MemoryOptionsModel)
     tail = int(fspec.probe_samples) + int(margin)
     out = backend.model_copy(deep=True)
@@ -389,7 +389,7 @@ class FreqselRunnerMixin:
         import numpy as np
         import torch
 
-        from sweep_tasks import freqsel as fsl
+        from sweepx.tasks import freqsel as fsl
 
         comb = fsl.FrequencyComb(
             dt=float(dt), n_p=int(fspec.probe_samples),
@@ -1142,7 +1142,7 @@ class FreqselRunnerMixin:
         coefficients — wavelet-free, plan-free, zero per-iter I/O. Obs are
         pre-extracted coefficient shards (field path) or synthesized from a
         true model once at setup (test path). Heavy lifting lives in
-        :mod:`sweep_tasks.freqsel`.
+        :mod:`sweepx.tasks.freqsel`.
 
         Multi-stage: when ``spec.stages`` is set, runs each stage in one
         process — per-stage ``frequency`` sub-spec (comb + coeff_shards) and

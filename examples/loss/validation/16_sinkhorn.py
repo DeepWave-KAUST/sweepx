@@ -31,9 +31,9 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import SinkhornLoss  # noqa: E402
-from sweep_loss._utils import normalize_density, positive_transform  # noqa: E402
-from sweep_loss.sinkhorn import _sinkhorn_log  # noqa: E402
+from sweepx.loss import SinkhornLoss  # noqa: E402
+from sweepx.loss._utils import normalize_density, positive_transform  # noqa: E402
+from sweepx.loss.sinkhorn import _sinkhorn_log  # noqa: E402
 
 
 NAME = "16_sinkhorn"

@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 WAVEFIELD_EQS = ["Acoustic", "AcousticVTI", "AcousticTTI", "Elastic"]
@@ -19,8 +19,8 @@ WAVEFIELD_EQS = ["Acoustic", "AcousticVTI", "AcousticTTI", "Elastic"]
 @pytest.mark.parametrize("equation", WAVEFIELD_EQS)
 def test_build_wavefield_equation_families(tmp_path, equation):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    from sweep_agent.tools.introspect import all_equations
+    pytest.importorskip("sweepx.tasks")
+    from sweepx.agent.tools.introspect import all_equations
     required = all_equations()[equation]
     shape = (48, 64)
     defaults = {"vp": 2500.0, "vs": 1300.0, "rho": 2200.0, "epsilon": 0.1, "delta": 0.05, "theta": 0.3}
@@ -41,7 +41,7 @@ def test_build_wavefield_equation_families(tmp_path, equation):
 
 def test_snapshot_times_out_of_range(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((40, 40), 2500.0, dtype=np.float32))
     r = registry.get("build_wavefield_spec").invoke({
@@ -53,7 +53,7 @@ def test_snapshot_times_out_of_range(tmp_path):
 
 def test_describe_task_schema_sections():
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     # optimizer section should expose the adam/sgd/lbfgs variants.
     r = registry.get("describe_task_schema").invoke({"task_type": "fwi", "section": "optimizer"})
     assert r.ok and "error" not in r.value, r.value
@@ -63,7 +63,7 @@ def test_describe_task_schema_sections():
 
 def test_describe_task_schema_geometry_variants():
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     r = registry.get("describe_task_schema").invoke({"task_type": "forward", "section": "geometry"})
     assert r.ok and "error" not in r.value, r.value
     blob = str(r.value).lower()

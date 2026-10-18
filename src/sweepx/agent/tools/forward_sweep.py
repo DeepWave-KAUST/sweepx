@@ -1,13 +1,13 @@
 """``run_forward_sweep`` — forward modelling straight through the `sweep` solver.
 
-Every other modelling tool here routes through ``sweep_tasks``: build a spec,
+Every other modelling tool here routes through ``sweepx.tasks``: build a spec,
 write YAML, hand it to ``TaskRunner``. That tier is unreleased, so on a plain
 ``pip install -e .`` plus ``sweep`` the agent can inspect files and list
 equations but cannot actually run a shot.
 
 This tool closes that gap by driving the solver directly —
 ``sweep.equations`` + ``sweep.propagator.torch.PropTorch`` — with no
-``sweep_tasks``, ``sweep_io`` or ``sweep_loss`` anywhere in the path. It needs
+``sweepx.tasks``, ``sweepx.io`` or ``sweepx.loss`` anywhere in the path. It needs
 only ``sweep`` + torch + numpy + matplotlib, so it runs on a laptop, CPU or
 Apple-Silicon MPS.
 
@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 def _require_sweep():
@@ -79,7 +79,7 @@ class RunForwardSweepParams(BaseModel):
     name="run_forward_sweep",
     description=(
         "Run 2-D forward modelling directly on the `sweep` solver and return the shot gather — "
-        "no sweep_tasks spec, no TaskRunner. This is the tool to use when only the core solver is "
+        "no sweepx.tasks spec, no TaskRunner. This is the tool to use when only the core solver is "
         "installed. Supports Acoustic AND multi-parameter equations like Elastic (vp+vs+rho) or "
         "VTI/TTI — set `equation` and pass the extra models via `extra_models` (list_equations shows "
         "what each needs). Give vp_path, dh, and either nt or record_length_s (dt auto-computed if "
@@ -106,7 +106,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
             device = "mps"
         else:
             device = "cpu"
-    from sweep_agent.tools.build_forward import _device_unavailable_reason
+    from sweepx.agent.tools.build_forward import _device_unavailable_reason
     dev_err = _device_unavailable_reason(device)
     if dev_err is not None:
         return {"error": dev_err}
@@ -178,7 +178,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     # Build the model list the equation asks for, in its exact order. vp comes from
     # vp_path; every other model (vs, rho, epsilon, delta, …) from extra_models. The
     # solver supports Elastic/VTI/TTI directly, so this is all it takes to switch
-    # equations on a base install — no sweep_tasks involved.
+    # equations on a base install — no sweepx.tasks involved.
     required = list(equation.models)
     extra = args.extra_models or {}
     models = []

@@ -1,6 +1,6 @@
 # Steepest Descent
 
-`sweep_opt.optim.SteepestDescent` is the simplest first-order optimizer in the
+`sweepx.opt.optim.SteepestDescent` is the simplest first-order optimizer in the
 library. It exists for two reasons:
 
 1. **Baseline.** Compare every other optimizer against SD - you need to know
@@ -34,7 +34,7 @@ solved by Algorithms 3.5 + 3.6 of Nocedal & Wright. Bounds, when supplied as
 ## API
 
 ```python
-sweep_opt.optim.SteepestDescent(
+sweepx.opt.optim.SteepestDescent(
     params,                         # iterable of torch.Tensor
     lr=1e-3,                        # used when line_search is None
     *,
@@ -50,12 +50,12 @@ sweep_opt.optim.SteepestDescent(
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
 
 # (a) Plain SD - no closure required.
-opt = sweep_opt.optim.SteepestDescent([vp], lr=cfg["lr"])
+opt = sweepx.opt.optim.SteepestDescent([vp], lr=cfg["lr"])
 for _ in range(cfg["epochs"]):
     opt.zero_grad()
     loss = (solver(wavelet, sources, receivers, [vp]) - obs).pow(2).sum()
@@ -63,7 +63,7 @@ for _ in range(cfg["epochs"]):
     opt.step()
 
 # (b) SD with strong-Wolfe line search - closure required.
-opt = sweep_opt.optim.SteepestDescent([vp], line_search="strong_wolfe",
+opt = sweepx.opt.optim.SteepestDescent([vp], line_search="strong_wolfe",
                                        bounds=(1500.0, 5500.0))
 
 def closure():

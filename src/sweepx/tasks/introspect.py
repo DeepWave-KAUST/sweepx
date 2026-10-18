@@ -20,15 +20,15 @@ import numpy as np
 import sweep
 import sweep.equations as eq_mod
 
-from sweep_tasks._helpers.geometry import _build_geometry
-from sweep_tasks._helpers.model import (
+from sweepx.tasks._helpers.geometry import _build_geometry
+from sweepx.tasks._helpers.model import (
     _infer_shape,
     _model_array,
     _model_names_for_equation,
 )
-from sweep_tasks._helpers.plan_apply import _normalize_fwi_init_models
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
-from sweep_tasks.schemas import (
+from sweepx.tasks._helpers.plan_apply import _normalize_fwi_init_models
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks.schemas import (
     ForwardSpec,
     FWISpec,
     LSRTMSpec,
@@ -37,7 +37,7 @@ from sweep_tasks.schemas import (
     RTMSpec,
     WavefieldSpec,
 )
-from sweep_tasks.yaml_io import resolve_paths
+from sweepx.tasks.yaml_io import resolve_paths
 
 __all__ = [
     "CFL_RAISE",
@@ -350,7 +350,7 @@ def load_model_array(model_ref: dict | ModelRef, base_dir: str | Path) -> np.nda
     """The float32 array the runner loads for one ``ModelRef``.
 
     ``model_ref`` is treated as a ``models:`` entry of a task YAML that lives
-    in ``base_dir``: :func:`sweep_tasks.yaml_io.resolve_paths` (``$VAR``
+    in ``base_dir``: :func:`sweepx.tasks.yaml_io.resolve_paths` (``$VAR``
     expansion, relative ``path`` made absolute), ``ModelRef`` validation, then
     the runner's loader with its ``path`` / ``constant`` / ``dataset`` /
     ``linear_gradient`` sources and ``smooth_sigma_cells``. A ``ModelRef``
@@ -377,7 +377,7 @@ def _check_task(spec: Any) -> None:
     if not isinstance(spec, _SOLVER_TASKS):
         raise TypeError(
             f"expected a validated forward / wavefield / fwi / rtm / lsrtm spec, "
-            f"got {type(spec).__name__} (validate with sweep_tasks.load_task_from_dict)."
+            f"got {type(spec).__name__} (validate with sweepx.tasks.load_task_from_dict)."
         )
 
 

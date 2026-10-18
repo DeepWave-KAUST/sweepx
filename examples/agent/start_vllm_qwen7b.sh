@@ -15,7 +15,7 @@
 #   bash examples/start_vllm_qwen7b.sh                 # Qwen2.5-7B on first free port from 8000
 #   MODEL=Qwen/Qwen2.5-14B-Instruct bash examples/start_vllm_qwen7b.sh
 #
-# Connect from another shell (in the env that has sweep / sweep_tasks):
+# Connect from another shell (in the env that has sweep / sweepx.tasks):
 #   export SWEEP_AGENT_LLM_URL=http://localhost:<PORT>/v1
 #   export SWEEP_AGENT_LLM_MODEL=<MODEL>
 #   sweep-agent chat

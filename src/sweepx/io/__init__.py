@@ -1,24 +1,24 @@
 """sweep-io — file and dataset I/O for seismic FWI.
 
 Always-available submodules:
-- :mod:`sweep_io.models`       — velocity / parameter model I/O (numpy)
-- :mod:`sweep_io.geometry`     — acquisition geometry, UTM ↔ model-frame rotation
-- :mod:`sweep_io.prefetch`     — background prefetchers (stdlib only)
-- :mod:`sweep_io.segy`         — SEG-Y readers (low-level byte-offset readers
+- :mod:`sweepx.io.models`       — velocity / parameter model I/O (numpy)
+- :mod:`sweepx.io.geometry`     — acquisition geometry, UTM ↔ model-frame rotation
+- :mod:`sweepx.io.prefetch`     — background prefetchers (stdlib only)
+- :mod:`sweepx.io.segy`         — SEG-Y readers (low-level byte-offset readers
                                   are stdlib + numpy; the full-file
-                                  :func:`sweep_io.segy.read_segy` /
-                                  :func:`sweep_io.segy.write_segy` defer
+                                  :func:`sweepx.io.segy.read_segy` /
+                                  :func:`sweepx.io.segy.write_segy` defer
                                   ``segyio`` import until called)
-- :mod:`sweep_io.segy_index`   — header catalog over many SEG-Y files
-- :mod:`sweep_io.seismic_plan` — CSG / CRG plans, lazy reader, samplers
-- :mod:`sweep_io.plan`         — shot / receiver / model-window selection
-- :mod:`sweep_io.crg_build`, :mod:`sweep_io.crg_plan` — CRG plan cache
-- :mod:`sweep_io.wavelet`      — source wavelet from an ``.npz``
+- :mod:`sweepx.io.segy_index`   — header catalog over many SEG-Y files
+- :mod:`sweepx.io.seismic_plan` — CSG / CRG plans, lazy reader, samplers
+- :mod:`sweepx.io.plan`         — shot / receiver / model-window selection
+- :mod:`sweepx.io.crg_build`, :mod:`sweepx.io.crg_plan` — CRG plan cache
+- :mod:`sweepx.io.wavelet`      — source wavelet from an ``.npz``
 
 Lazy-imported (require optional extras):
-- :mod:`sweep_io.datasets`        — torch Dataset wrappers (extra: ``[torch]``)
-- :mod:`sweep_io.cuda_prefetch`   — CUDA-aware prefetcher (extra: ``[torch]``)
-- :mod:`sweep_io.crg_dataset`     — Dataset over a CRG plan (extra: ``[torch]``)
+- :mod:`sweepx.io.datasets`        — torch Dataset wrappers (extra: ``[torch]``)
+- :mod:`sweepx.io.cuda_prefetch`   — CUDA-aware prefetcher (extra: ``[torch]``)
+- :mod:`sweepx.io.crg_dataset`     — Dataset over a CRG plan (extra: ``[torch]``)
 """
 
 from __future__ import annotations
@@ -56,4 +56,4 @@ def __getattr__(name: str):
         # is torch-free until the user asks for the torch dataset wrappers.
         from . import crg_dataset as _m
         return _m
-    raise AttributeError(f"module 'sweep_io' has no attribute {name!r}")
+    raise AttributeError(f"module 'sweepx.io' has no attribute {name!r}")

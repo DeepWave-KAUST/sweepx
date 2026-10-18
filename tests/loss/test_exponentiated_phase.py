@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from sweep_loss import ExponentiatedPhaseLoss, exponentiated_phase_loss
+from sweepx.loss import ExponentiatedPhaseLoss, exponentiated_phase_loss
 
 
 def _ricker(t, t0, fc=15.0):

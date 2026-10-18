@@ -1,7 +1,7 @@
 """Fused Triton kernels for the anisotropic multi-resolution hash encoding.
 
-Optional GPU-only acceleration backend for :class:`~sweep_nn.hash_encoding.MultiResHashGrid`
-(and thus :class:`~sweep_nn.coarse_to_fine.CoarseToFineHashGrid`). Numerically matches the
+Optional GPU-only acceleration backend for :class:`~sweepx.nn.hash_encoding.MultiResHashGrid`
+(and thus :class:`~sweepx.nn.coarse_to_fine.CoarseToFineHashGrid`). Numerically matches the
 pure-PyTorch path — forward and ``dL/dlatent`` agree with the reference at ``cos = 1.0``
 (fp32 reduction-order differences ~1e-6). The win is memory: the fused kernel never
 materializes the ``(L, N, 2**dim, F)`` gathered-latent / vertex intermediates the PyTorch
@@ -13,7 +13,7 @@ support is narrow (no ``list.append`` / comprehensions / ``tuple()``), so explic
 variables are the robust choice. Per-axis ``scale``/``resolution`` make this anisotropy-native:
 different per-axis growth factors cost nothing extra (same code path, different ``scale`` values).
 
-``triton`` is imported lazily; ``import sweep_nn`` works without it. Only constructing an
+``triton`` is imported lazily; ``import sweepx.nn`` works without it. Only constructing an
 encoder with ``backend="triton"`` requires triton + a CUDA device.
 """
 from __future__ import annotations

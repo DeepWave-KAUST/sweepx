@@ -10,7 +10,7 @@ import json
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import (FrequencyComb, extract_shard_gathers, offset_top_mute)
+from sweepx.tasks.freqsel import (FrequencyComb, extract_shard_gathers, offset_top_mute)
 
 
 def _comb(dt=0.001, n_p=6000, k_lo=18, k_hi=36):

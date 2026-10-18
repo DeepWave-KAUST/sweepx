@@ -1,6 +1,6 @@
 """A stage `frequency:` block replaces the global one — warn about what it drops."""
-from sweep_tasks.schemas import FreqSelectionSpec
-from sweep_tasks.tasks.fwi_freqsel import stage_freq_override_warnings
+from sweepx.tasks.schemas import FreqSelectionSpec
+from sweepx.tasks.tasks.fwi_freqsel import stage_freq_override_warnings
 
 
 def _spec(**kw):

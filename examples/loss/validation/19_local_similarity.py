@@ -32,8 +32,8 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import LocalSimilarityLoss  # noqa: E402
-from sweep_loss.local_similarity import _gaussian_kernel, _smooth  # noqa: E402
+from sweepx.loss import LocalSimilarityLoss  # noqa: E402
+from sweepx.loss.local_similarity import _gaussian_kernel, _smooth  # noqa: E402
 
 
 NAME = "19_local_similarity"

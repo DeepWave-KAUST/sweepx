@@ -4,7 +4,7 @@ from typing import get_args
 import numpy as np
 import pytest
 
-from sweep_tasks.schemas import LossSpec
+from sweepx.tasks.schemas import LossSpec
 
 def _freqsel_fwi_doc(**extra):
     doc = dict(
@@ -26,7 +26,7 @@ def _freqsel_fwi_doc(**extra):
 def test_freqsel_rejects_retired_freeze_top_n_rows():
     """freeze_top_n_rows is retired on every path; the error names `water:`."""
     from pydantic import TypeAdapter
-    from sweep_tasks.schemas import TaskSpec
+    from sweepx.tasks.schemas import TaskSpec
 
     ta = TypeAdapter(TaskSpec)
     ta.validate_python(_freqsel_fwi_doc())                    # baseline parses
@@ -38,7 +38,7 @@ def test_freqsel_rejects_retired_freeze_top_n_rows():
 def test_freqsel_makes_wavelet_geometry_obs_optional():
     """The doc above has none of the three and must still validate."""
     from pydantic import TypeAdapter
-    from sweep_tasks.schemas import TaskSpec
+    from sweepx.tasks.schemas import TaskSpec
 
     spec = TypeAdapter(TaskSpec).validate_python(_freqsel_fwi_doc())
     assert spec.wavelet is None and spec.geometry is None and spec.obs is None
@@ -46,7 +46,7 @@ def test_freqsel_makes_wavelet_geometry_obs_optional():
 
 def _validate(doc):
     from pydantic import TypeAdapter
-    from sweep_tasks.schemas import TaskSpec
+    from sweepx.tasks.schemas import TaskSpec
 
     return TypeAdapter(TaskSpec).validate_python(doc)
 
@@ -82,7 +82,7 @@ def test_freqsel_records_the_loss_it_runs(tmp_path):
 
     import yaml
 
-    from sweep_tasks._helpers.metadata import _dump_run_metadata
+    from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
     spec = _validate(_freqsel_fwi_doc())
     assert spec.loss.kind == "steady_gcn"

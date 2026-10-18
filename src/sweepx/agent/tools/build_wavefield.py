@@ -13,8 +13,8 @@ from typing import Any
 
 from pydantic import Field
 
-from sweep_agent.tools import register
-from sweep_agent.tools.build_forward import (
+from sweepx.agent.tools import register
+from sweepx.agent.tools.build_forward import (
     BuildForwardParams,
     _deep_merge,
     _device_unavailable_reason,
@@ -83,10 +83,10 @@ def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, An
 )
 def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
     try:
-        from sweep_tasks.schemas import WavefieldSpec
-        from sweep_tasks import dump_task
+        from sweepx.tasks.schemas import WavefieldSpec
+        from sweepx.tasks import dump_task
     except ImportError as exc:
-        return {"error": f"sweep_tasks is not importable: {exc}"}
+        return {"error": f"sweepx.tasks is not importable: {exc}"}
 
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:

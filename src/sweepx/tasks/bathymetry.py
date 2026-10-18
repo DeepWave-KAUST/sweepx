@@ -1,7 +1,7 @@
 """Bathymetry (seabed-depth) helpers for FWI.
 
 The seabed file is how a task tells every inversion path where the water is:
-``water: {seabed: <file>}`` (:class:`sweep_tasks.schemas.WaterSpec`). Every
+``water: {seabed: <file>}`` (:class:`sweepx.tasks.schemas.WaterSpec`). Every
 grid the run uses -- the native grid, a stage grid with its own ``dh_m``, a
 model_plan crop -- builds its water mask from it with
 :func:`water_mask_from_seabed_depth`, the one runtime definition of "water".
@@ -21,7 +21,7 @@ is all you have, :func:`derive_seabed_depth_from_vp` turns it into a seabed
 file once, as an explicit step you can inspect:
 
     import numpy as np
-    from sweep_tasks.bathymetry import (derive_seabed_depth_from_vp,
+    from sweepx.tasks.bathymetry import (derive_seabed_depth_from_vp,
                                         save_seabed_depth_npz)
 
     init_vp = np.load("init_vp.npy")  # (nz, nx) or (nz, ny, nx)

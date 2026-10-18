@@ -1,4 +1,4 @@
-"""Tests for :class:`sweep_nn.TVPrior` + :class:`sweep_nn.SeabedFreezeMask`."""
+"""Tests for :class:`sweepx.nn.TVPrior` + :class:`sweepx.nn.SeabedFreezeMask`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from sweep_nn import SeabedFreezeMask, TVPrior
+from sweepx.nn import SeabedFreezeMask, TVPrior
 
 
 def test_tv_prior_zero_on_constant_2d():

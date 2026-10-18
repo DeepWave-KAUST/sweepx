@@ -16,10 +16,10 @@ import torch
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks._helpers.water import WaterRegion, _nearest_native
-from sweep_tasks.bathymetry import save_seabed_depth_npz, water_mask_from_seabed_depth
-from sweep_tasks.schemas import FWISpec, LSRTMSpec, TaskSpec, WaterSpec
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks._helpers.water import WaterRegion, _nearest_native
+from sweepx.tasks.bathymetry import save_seabed_depth_npz, water_mask_from_seabed_depth
+from sweepx.tasks.schemas import FWISpec, LSRTMSpec, TaskSpec, WaterSpec
 
 DATA = Path(__file__).parent / "data" / "resolved_before_water"
 _TA = TypeAdapter(TaskSpec)
@@ -184,7 +184,7 @@ def test_resolved_configs_from_before_the_water_block_load(name, tmp_path):
 # ------------------------------------------- the region on every grid ----
 
 def _stage_shape(shape, dh0, dh):
-    from sweep_tasks._helpers.stage_grid import _stage_grid_shape
+    from sweepx.tasks._helpers.stage_grid import _stage_grid_shape
     return _stage_grid_shape(shape, dh0, dh)
 
 
@@ -373,7 +373,7 @@ def _conv_spec(tmp_path, **extra):
 
 
 def _spy_train_steps(monkeypatch):
-    from sweep_tasks.tasks.fwi import FWIRunnerMixin
+    from sweepx.tasks.tasks.fwi import FWIRunnerMixin
 
     seen = []
     original = FWIRunnerMixin._fwi_train_step
@@ -477,7 +477,7 @@ def test_conventional_model_plan_crops_the_water(tmp_path, monkeypatch):
     spec["water"] = {"mask": str(tmp_path / "w.npy")}
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "crop.yaml")))
     assert res.status.state == "success", res.status.error
-    from sweep_tasks._helpers.plan_apply import _model_plan_crop_box
+    from sweepx.tasks._helpers.plan_apply import _model_plan_crop_box
     box = _model_plan_crop_box(load_task(tmp_path / "crop.yaml"), (36, 48), 10.0)
     sl = tuple(slice(a, b) for a, b in zip(*box))
     assert box[0][1] == 10
@@ -601,7 +601,7 @@ def test_freqsel_reparam_modes(tmp_path, mode):
 # ------------------------------------------------------- migrate-water ----
 
 def _migrate(tmp_path, doc_text: str, *, out=True):
-    from sweep_tasks.cli import main
+    from sweepx.tasks.cli import main
 
     src = tmp_path / "old.yaml"
     src.write_text(doc_text)
@@ -742,7 +742,7 @@ def test_migrate_drops_defaults_of_an_old_resolved_config(tmp_path, capsys):
 def test_plan_streaming_stage_grids_hold_the_same_layer(tmp_path, monkeypatch, source):
     """3-D, a 100 m stage then the 50 m base: every grid the reparam network
     renders on pins the same physical layer, rebuilt from the definition."""
-    from sweep_nn import VelocityINR
+    from sweepx.nn import VelocityINR
     from test_task_fwi_plan_streaming import (
         _build_plan_streaming_spec, _build_tiny_plan_streaming_fixture)
 
@@ -809,7 +809,7 @@ def test_examples_hold_exactly_what_they_held_before(rel, old_rule):
     freeze_top_n_rows N -> the same N rows; the frequency-selection value pin
     (and reparam.mask_water_layer) -> the same cells, on the native grid that
     every one of these examples runs on."""
-    from sweep_tasks._helpers.model import _model_array
+    from sweepx.tasks._helpers.model import _model_array
 
     spec = load_task(_REPO / rel)
     assert spec.water is not None and not any(

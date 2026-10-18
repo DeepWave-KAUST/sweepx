@@ -2,7 +2,7 @@
 
 We can't comfortably exercise `torch.distributed` from inside a single pytest
 process, so this test spawns ``torchrun --nproc_per_node=2 --standalone``
-against the real ``sweep_tasks.cli run`` entry point with the gloo backend on CPU.
+against the real ``sweepx.tasks.cli run`` entry point with the gloo backend on CPU.
 
 Skips automatically when ``torchrun`` isn't on PATH (e.g. minimal CI images).
 """
@@ -89,7 +89,7 @@ def test_torchrun_two_ranks_gloo_fwi(tmp_path):
         "torchrun",
         "--nproc_per_node=2",
         "--standalone",
-        "-m", "sweep_tasks.cli", "run", str(yaml_path),
+        "-m", "sweepx.tasks.cli", "run", str(yaml_path),
     ]
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, (
@@ -129,7 +129,7 @@ def test_torchrun_blocks_lbfgs(tmp_path):
         "torchrun",
         "--nproc_per_node=2",
         "--standalone",
-        "-m", "sweep_tasks.cli", "run", str(yaml_path),
+        "-m", "sweepx.tasks.cli", "run", str(yaml_path),
     ]
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     # The task should land state=failed (with a clear error) — the CLI returns 1 in that case.

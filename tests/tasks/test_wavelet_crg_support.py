@@ -23,14 +23,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.segy import (
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
     FORMAT_IEEE_FLOAT32,
     write_segy_minimal,
 )
-from sweep_io.seismic_plan import SeismicPlan
+from sweepx.io.seismic_plan import SeismicPlan
 
 
 SAMPLES_PER_TRACE = 256
@@ -124,7 +124,7 @@ def test_analyze_wavelet_accepts_crg_plan(tmp_path):
 
     The synthetic traces are clean Rickers so the SVD should succeed.
     """
-    from sweep_tasks.wavelet import AnalyzeWaveletConfig, analyze_direct_wavelet_batch
+    from sweepx.tasks.wavelet import AnalyzeWaveletConfig, analyze_direct_wavelet_batch
 
     plan_path = _build_crg_plan_with_traces(tmp_path)
     cfg = AnalyzeWaveletConfig(
@@ -153,7 +153,7 @@ def test_analyze_wavelet_accepts_crg_plan(tmp_path):
 
 def test_analyze_wavelet_rejects_supershot_grouping(tmp_path):
     """Sanity: only CSG/CRG are accepted — supershot must still fail."""
-    from sweep_tasks.wavelet import AnalyzeWaveletConfig, analyze_direct_wavelet_batch
+    from sweepx.tasks.wavelet import AnalyzeWaveletConfig, analyze_direct_wavelet_batch
 
     plan_path = _build_crg_plan_with_traces(tmp_path)
     plan = SeismicPlan.load(plan_path)
@@ -175,7 +175,7 @@ def test_prepare_wavelet_inversion_data_accepts_crg(tmp_path):
     frame under CRG: propagator source = physical receiver (one per
     group), propagator receivers = physical shots (multiple per group).
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -229,7 +229,7 @@ def test_prepare_wavelet_inversion_data_3d_geometry(tmp_path):
     3D geometry: sources / receivers are (..., 3) with order (x, y, z);
     model is (nz, ny, nx); summary carries ny / dy_m / y_origin_m.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -295,7 +295,7 @@ def test_prepare_wavelet_inversion_data_simulation_dt(tmp_path):
     plan.dt_s is 2ms; setting simulation_dt_s=1ms gives stride=2 and
     simulation_nt = (plan_nt - 1) * 2 + 1.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -339,7 +339,7 @@ def test_prepare_wavelet_inversion_data_simulation_dt(tmp_path):
 
 def test_prepare_wavelet_inversion_data_rejects_non_integer_simulation_stride(tmp_path):
     """Non-integer stride must error out — stride sampling requires it."""
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -368,7 +368,7 @@ def test_prepare_wavelet_inversion_data_observed_delay_shift(tmp_path):
     matching sample count (zero-fill prepad). Matches the legacy
     fwi_workflow-dev ``delay_traces`` semantics.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -406,7 +406,7 @@ def test_prepare_wavelet_inversion_data_no_shift_when_not_configured(tmp_path):
     metadata are available, prepare must NOT shift obs and report
     observed_delay_s == 0.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -434,7 +434,7 @@ def test_prepare_wavelet_inversion_data_direct_window_mask(tmp_path):
     mask whose support is around the predicted direct arrival per
     (source, receiver) pair. Mirrors legacy ``direct_window_mask``.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )
@@ -478,7 +478,7 @@ def test_prepare_wavelet_inversion_data_direct_window_mask_disabled_by_default(t
     """Mask must stay None when either rel_t bound is omitted —
     sweep-tasks' default loss path is full-trace.
     """
-    from sweep_tasks.wavelet.sweep_torch import (
+    from sweepx.tasks.wavelet.sweep_torch import (
         WaveletInversionConfig,
         prepare_wavelet_inversion_data,
     )

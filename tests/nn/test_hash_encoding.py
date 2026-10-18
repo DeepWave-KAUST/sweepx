@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sweep_nn import MultiResHashGrid
+from sweepx.nn import MultiResHashGrid
 
 
 def test_2d_output_shape():

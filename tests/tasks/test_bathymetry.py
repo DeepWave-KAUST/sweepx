@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_tasks.bathymetry import (
+from sweepx.tasks.bathymetry import (
     derive_seabed_depth_from_vp,
     load_seabed_depth_npz,
     save_seabed_depth_npz,

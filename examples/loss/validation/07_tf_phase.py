@@ -2,7 +2,7 @@
 
 Recipe:
 * Build a Ricker pair with a time shift.
-* Run the same Gabor STFT the loss uses internally (sweep_loss.tf_phase._gabor_stft).
+* Run the same Gabor STFT the loss uses internally (sweepx.loss.tf_phase._gabor_stft).
 * Panel (a): STFT magnitude |G_o| (time-frequency picture of obs).
 * Panel (b): wrapped time-frequency phase residual w(t,ω) · Δφ.
 * Panel (c): adjoint source.
@@ -27,8 +27,8 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import TimeFrequencyPhaseLoss  # noqa: E402
-from sweep_loss.tf_phase import _gabor_stft  # noqa: E402
+from sweepx.loss import TimeFrequencyPhaseLoss  # noqa: E402
+from sweepx.loss.tf_phase import _gabor_stft  # noqa: E402
 
 
 NAME = "07_tf_phase"

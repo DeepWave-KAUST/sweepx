@@ -12,7 +12,7 @@ They reproduce the two synthetic examples of *Accelerating High Resolution Impli
 Waveform Inversion* (Shaowen Wang and Tariq Alkhalifah, *Geophysics*). Each runs three
 inversions from the same smoothed starting model, conventional FWI, implicit FWI with a
 SIREN, and implicit FWI with the method of the example, and plots the paper's figures.
-The velocity is `sweep_nn.VelocityINR`, `vp = vp_init + vp_std · net(z, x)`; the wave
+The velocity is `sweepx.nn.VelocityINR`, `vp = vp_init + vp_std · net(z, x)`; the wave
 equation is sweep's compiled acoustic solver.
 
 ```bash

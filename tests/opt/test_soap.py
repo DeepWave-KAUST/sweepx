@@ -1,9 +1,9 @@
-"""Tests for sweep_opt.optim.SOAP (bit-for-bit parity with the official code is in test_soap_parity.py)."""
+"""Tests for sweepx.opt.optim.SOAP (bit-for-bit parity with the official code is in test_soap_parity.py)."""
 import pytest
 import torch
 
-from sweep_opt.optim import SOAP
-from sweep_opt.optim.soap import _project_back
+from sweepx.opt.optim import SOAP
+from sweepx.opt.optim.soap import _project_back
 
 
 def test_soap_converges_on_quadratic():

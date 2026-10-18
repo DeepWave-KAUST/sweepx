@@ -38,7 +38,7 @@ Chat needs any **OpenAI-compatible** endpoint:
 Full **FWI / LSRTM** additionally needs `sweep-tasks` (the production runner) —
 **not on PyPI yet**, install from source. Forward modelling and inspection tools
 don't need it; an FWI tool called without it returns a clean
-`{"error": "sweep_tasks is not importable"}`.
+`{"error": "sweepx.tasks is not importable"}`.
 
 !!! note "macOS (Apple Silicon)"
     Runs end-to-end on M-series with MPS (CPU 26.7 s → MPS 5.5 s on a

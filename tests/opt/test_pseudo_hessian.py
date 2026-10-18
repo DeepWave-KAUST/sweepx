@@ -1,9 +1,9 @@
-"""Tests for sweep_opt.precond.PseudoHessianPrecond."""
+"""Tests for sweepx.opt.precond.PseudoHessianPrecond."""
 import pytest
 import torch
 
-from sweep_opt.precond import IdentityPrecond, PseudoHessianPrecond
-from sweep_opt.optim import SteepestDescent
+from sweepx.opt.precond import IdentityPrecond, PseudoHessianPrecond
+from sweepx.opt.optim import SteepestDescent
 
 
 def test_identity_when_no_illumination_passed():

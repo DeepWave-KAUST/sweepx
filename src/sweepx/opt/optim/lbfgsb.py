@@ -6,7 +6,7 @@ properly: at each iteration the optimizer identifies the *active set*
 of the box), zeros the corresponding components of the search direction,
 and performs the L-BFGS update on the *free* subset.
 
-Compared to the projected-gradient L-BFGS in :class:`sweep_opt.optim.LBFGS`,
+Compared to the projected-gradient L-BFGS in :class:`sweepx.opt.optim.LBFGS`,
 this version:
 
 - never accumulates curvature pairs that mix active and free components,
@@ -33,13 +33,13 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 class LBFGSB(Optimizer):
@@ -48,7 +48,7 @@ class LBFGSB(Optimizer):
     Args:
         params: iterable of parameter tensors / param-groups.
         bounds: ``(lo, hi)`` box. **Required** - that's the whole point.
-            Use :class:`sweep_opt.optim.LBFGS` if you do not want bounds.
+            Use :class:`sweepx.opt.optim.LBFGS` if you do not want bounds.
         history_size: number of stored ``(s, y)`` pairs (default 10).
         preconditioner: optional callable used as the initial inverse Hessian
             ``H_0`` inside the two-loop recursion.

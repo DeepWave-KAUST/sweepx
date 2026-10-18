@@ -10,9 +10,9 @@ import pytest
 import torch
 import yaml
 
-from sweep_tasks._helpers.solver_build import _build_solver
-from sweep_tasks.schemas import BackendSpec, BoundaryOptionsModel, MemoryOptionsModel, PhysicsSpec
-from sweep_tasks.yaml_io import load_task, new_template
+from sweepx.tasks._helpers.solver_build import _build_solver
+from sweepx.tasks.schemas import BackendSpec, BoundaryOptionsModel, MemoryOptionsModel, PhysicsSpec
+from sweepx.tasks.yaml_io import load_task, new_template
 
 
 def test_c_defaults_to_boundary():

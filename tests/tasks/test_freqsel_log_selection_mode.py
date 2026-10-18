@@ -18,8 +18,8 @@ import re
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import PoolScheduler
-from sweep_tasks.tasks import fwi_freqsel as FF
+from sweepx.tasks.freqsel import PoolScheduler
+from sweepx.tasks.tasks import fwi_freqsel as FF
 
 
 def _grid(n):

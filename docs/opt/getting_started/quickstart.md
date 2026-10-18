@@ -25,8 +25,8 @@ To use any first-order sweep-opt optimizer, change only the constructor
 this exact loop):
 
 ```python
-import sweep_opt
-optimizer = sweep_opt.optim.SteepestDescent([inv_vp], lr=cfg["lr"])
+import sweepx.opt
+optimizer = sweepx.opt.optim.SteepestDescent([inv_vp], lr=cfg["lr"])
 ```
 
 For algorithms that need a closure (line-search variants, L-BFGS, Newton-type,
@@ -47,10 +47,10 @@ for epoch in range(cfg["epochs"]):
 ## With bounds and a preconditioner
 
 ```python
-import sweep_opt
+import sweepx.opt
 
-precond = sweep_opt.precond.PseudoHessianPrecond(eps=1e-3)
-optimizer = sweep_opt.optim.LBFGS(
+precond = sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3)
+optimizer = sweepx.opt.optim.LBFGS(
     [inv_vp],
     history_size=10,
     bounds=(1500.0, 5500.0),         # m/s velocity bounds

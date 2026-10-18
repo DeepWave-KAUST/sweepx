@@ -15,9 +15,9 @@ class Preconditioner:
 This means any preconditioner composes with any optimizer:
 
 ```python
-optimizer = sweep_opt.optim.LBFGS(
+optimizer = sweepx.opt.optim.LBFGS(
     [inv_vp],
-    preconditioner=sweep_opt.precond.PseudoHessianPrecond(eps=1e-3),
+    preconditioner=sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3),
 )
 ```
 

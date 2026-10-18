@@ -1,6 +1,6 @@
 # DIP-FWI
 
-`sweep_opt.parameterization.DIPParameterization` represents the physical
+`sweepx.opt.parameterization.DIPParameterization` represents the physical
 model as the output of a (typically randomly-initialized) neural-network
 generator. The optimizer iterates the **latent** input to the generator
 (and, optionally, the generator's weights), while the forward solver
@@ -14,7 +14,7 @@ gives smooth velocity updates without an explicit Tikhonov / TV penalty.
 ## API
 
 ```python
-sweep_opt.parameterization.DIPParameterization(
+sweepx.opt.parameterization.DIPParameterization(
     generator,                       # any nn.Module
     latent_shape,                    # the latent's tensor shape
     *,
@@ -26,7 +26,7 @@ sweep_opt.parameterization.DIPParameterization(
 A reference small generator is shipped:
 
 ```python
-sweep_opt.parameterization.SmallUNet2D(
+sweepx.opt.parameterization.SmallUNet2D(
     in_channels=16,
     out_channels=1,
     base_channels=16,
@@ -40,18 +40,18 @@ after).
 ## Drop-in usage
 
 ```python
-import torch, sweep_opt
+import torch, sweepx.opt
 
-generator = sweep_opt.parameterization.SmallUNet2D(
+generator = sweepx.opt.parameterization.SmallUNet2D(
     in_channels=8, out_channels=1, base_channels=32,
 )
-param = sweep_opt.parameterization.DIPParameterization(
+param = sweepx.opt.parameterization.DIPParameterization(
     generator,
     latent_shape=(1, 8, 64, 128),    # batch + channels + (nx, nz)
     out_min=1500.0, out_max=5500.0,  # bounded vp
 )
 latent = param.random_latent(scale=0.1)
-opt = sweep_opt.optim.AdamFWI(
+opt = sweepx.opt.optim.AdamFWI(
     [latent, *generator.parameters()],
     lr=1e-3,
     variant="adamw", weight_decay=1e-4,

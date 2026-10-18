@@ -22,13 +22,13 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 class NCG(Optimizer):

@@ -14,8 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
-from sweep_agent.tools.build_forward import _physics_source_fields, _resolve_geometry
+from sweepx.agent.tools import register
+from sweepx.agent.tools.build_forward import _physics_source_fields, _resolve_geometry
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -103,7 +103,7 @@ def _resolve_init_models(p: BuildFwiParams) -> tuple[dict[str, Any], dict[str, A
     """Validate equation + assemble init_model / init_models block."""
     extra = p.extra_init_models or {}
     try:
-        from sweep_agent.tools.introspect import all_equations
+        from sweepx.agent.tools.introspect import all_equations
         eqs = all_equations()
     except Exception:
         eqs = None
@@ -172,12 +172,12 @@ def _resolve_obs(p: BuildFwiParams) -> tuple[dict[str, Any], str, dict[str, Any]
 )
 def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
     try:
-        from sweep_tasks.schemas import FWISpec
-        from sweep_tasks import dump_task
+        from sweepx.tasks.schemas import FWISpec
+        from sweepx.tasks import dump_task
     except ImportError as exc:
-        return {"error": f"sweep_tasks is not importable: {exc}"}
+        return {"error": f"sweepx.tasks is not importable: {exc}"}
 
-    from sweep_agent.tools.build_forward import _device_unavailable_reason, _resolve_nt
+    from sweepx.agent.tools.build_forward import _device_unavailable_reason, _resolve_nt
 
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:

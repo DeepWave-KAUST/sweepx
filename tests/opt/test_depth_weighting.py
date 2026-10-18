@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.precond.DepthWeighting and Compose."""
+"""Tests for sweepx.opt.precond.DepthWeighting and Compose."""
 import torch
 
-from sweep_opt.precond import (
+from sweepx.opt.precond import (
     Compose,
     DepthWeighting,
     PseudoHessianPrecond,

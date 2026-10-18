@@ -3,12 +3,12 @@
 Ported from ``fwi_workflow.wavelet.sweep_torch``. Two adapter-level
 changes from the legacy code:
 
-* Data input is a :class:`sweep_io.seismic_plan.SeismicPlan` npz path
+* Data input is a :class:`sweepx.io.seismic_plan.SeismicPlan` npz path
   (``WaveletInversionConfig.plan_path``) rather than a legacy
   ``csg_index_v2`` npz + a separate raw SEG-Y path. The plan already
   knows where the SEG-Y bytes live (``row_file_id`` + ``row_trace_offset``)
   and what the time-axis is (``plan.dt_s``, ``plan.samples_per_trace``).
-* ``SirenWavelet`` comes from :mod:`sweep_nn.wavelet` (bit-identical to the old
+* ``SirenWavelet`` comes from :mod:`sweepx.nn.wavelet` (bit-identical to the old
   in-package copy), imported lazily inside the siren-mode branch so the
   CPU-only analyze / convert-farfield paths stay torch-free.
 
@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from sweep_io.seismic_plan import PlanReader, SeismicPlan
+from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
 from .estimation import normalize_wavelet, ricker
 
@@ -960,14 +960,14 @@ def save_wavelet_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     # The wavelet lives on the simulation timeline (which equals the plan
     # timeline when simulation_dt_s is left unset). The npz must report
-    # this dt — both ``dt_s`` (for sweep_io's wavelet loader) and the
+    # this dt — both ``dt_s`` (for sweepx.io's wavelet loader) and the
     # ``time_s`` array are at the wavelet's own sampling rate.
     dt_s = float(data.simulation_dt_s)
     time_s = np.arange(wavelet.size, dtype=np.float32) * dt_s
 
     # ----- FWI-runner compatibility metadata --------------------------------
     # The runner's ``kind: siren_pipeline_npz`` wavelet loader (via
-    # :func:`sweep_io.wavelet.load_wavelet_npz`) needs ``dt_s`` and uses an
+    # :func:`sweepx.io.wavelet.load_wavelet_npz`) needs ``dt_s`` and uses an
     # optional ``source_delay_s`` to right-shift obs so it lines up with
     # syn's main bang.
     #
@@ -1003,7 +1003,7 @@ def save_wavelet_outputs(
         # inferring from ``time_s``).
         "dt_s": np.float64(dt_s),
         # FWI runner reads ``source_delay_s`` via
-        # :func:``sweep_tasks._helpers.wavelet_build._get_wavelet_source_delay_s``
+        # :func:``sweepx.tasks._helpers.wavelet_build._get_wavelet_source_delay_s``
         # and right-
         # shifts obs by that many seconds at iter time.
         "source_delay_s": np.float32(src_delay_s),
@@ -1308,11 +1308,11 @@ def run_wavelet_inversion(config: WaveletInversionConfig) -> Path:
             return wavelet_param
 
     elif config.mode == "siren":
-        # Local import: sweep_nn.wavelet pulls torch at module load, so defer it
+        # Local import: sweepx.nn.wavelet pulls torch at module load, so defer it
         # to this siren-inversion branch (which needs torch anyway) rather than
         # the module top. Bit-identical to the retired in-package
         # _siren.SirenWavelet (verified: same init + forward under one seed).
-        from sweep_nn.wavelet import SirenWavelet
+        from sweepx.nn.wavelet import SirenWavelet
 
         siren = SirenWavelet(
             data.simulation_nt,

@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.linalg.cg and steihaug_cg."""
+"""Tests for sweepx.opt.linalg.cg and steihaug_cg."""
 import torch
 
-from sweep_opt.linalg import cg, steihaug_cg
+from sweepx.opt.linalg import cg, steihaug_cg
 
 
 def _matvec(A: torch.Tensor):

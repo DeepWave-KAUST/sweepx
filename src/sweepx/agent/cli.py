@@ -11,8 +11,8 @@ import sys
 import threading
 from typing import Sequence
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.vllm_backend import (
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.vllm_backend import (
     DEFAULT_URL,
     MODEL_ALIASES,
     VLLMBackend,
@@ -22,8 +22,8 @@ from sweep_agent.llm.vllm_backend import (
     ensure_ollama_model,
     resolve_model,
 )
-from sweep_agent.tools import registry
-from sweep_agent import __version__
+from sweepx.agent.tools import registry
+from sweepx.agent import __version__
 
 
 _SENTINEL = object()
@@ -136,14 +136,14 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     os.environ["SWEEP_AGENT_MAX_STEPS"] = str(args.max_steps)
     ensure_ollama_model(url, resolve_model(model))
     # Single launch path: webui.launch() owns theme/css/js + allowed_paths.
-    from sweep_agent.webui import launch
+    from sweepx.agent.webui import launch
 
     launch(server_name=args.host, server_port=args.port, share=args.share)
     return 0
 
 
 def _cmd_chat(args: argparse.Namespace) -> int:
-    from sweep_agent.tools.selection import select_tool_names
+    from sweepx.agent.tools.selection import select_tool_names
     url = args.url or os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
     hint = backend_hint(url)  # nothing reachable? tell the user how to get an LLM
     if hint is not None:

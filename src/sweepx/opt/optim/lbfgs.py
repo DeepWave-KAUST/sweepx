@@ -6,10 +6,10 @@ three FWI-friendly knobs ``torch.optim.LBFGS`` does not expose:
 
 1. ``bounds=(lo, hi)`` - projected gradient enforcement of velocity (or any)
    box constraints. The active-set Byrd-Lu-Nocedal L-BFGS-B variant lands
-   later as :class:`sweep_opt.optim.LBFGSB` (Tier-2).
+   later as :class:`sweepx.opt.optim.LBFGSB` (Tier-2).
 2. ``preconditioner`` - an optional preconditioner used as the initial
    inverse Hessian ``H_0`` inside the two-loop recursion. Pairs naturally
-   with :class:`sweep_opt.precond.PseudoHessianPrecond`.
+   with :class:`sweepx.opt.precond.PseudoHessianPrecond`.
 3. ``restart_every`` - hard cold restart every ``N`` iterations (clear the
    stored ``(s, y)`` history). Useful for stochastic / source-encoded FWI
    loops where the curvature pairs become stale faster than the iterate.
@@ -32,13 +32,13 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 class LBFGS(Optimizer):

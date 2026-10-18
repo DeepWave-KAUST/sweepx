@@ -25,6 +25,6 @@ Every tool is also a plain function (`.fn`, with a pydantic params model) — ha
 for scripts and tests, no LLM required:
 
 ```python
-from sweep_agent.tools.inspect import inspect_file, InspectFileParams
+from sweepx.agent.tools.inspect import inspect_file, InspectFileParams
 print(inspect_file.fn(InspectFileParams(path="vp_init.npy")))
 ```

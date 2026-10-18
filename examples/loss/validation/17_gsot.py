@@ -32,7 +32,7 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import GSOTLoss  # noqa: E402
+from sweepx.loss import GSOTLoss  # noqa: E402
 
 
 NAME = "17_gsot"

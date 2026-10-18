@@ -5,7 +5,7 @@ with the native extent stretched onto them end to end, while the solver
 stepped with the nominal ``dh`` and the geometry snapped with
 ``round(x / dh)``: every coarse stage inverted a model compressed against its
 own data and acquisition (Marmousi at 100 m: 2.9 % in depth). These tests pin
-the replacement in ``sweep_tasks._helpers.stage_grid``: the extent, exact
+the replacement in ``sweepx.tasks._helpers.stage_grid``: the extent, exact
 values at coincident samples, no resampling artefacts, the edge receiver, the
 frozen layer, the INR frame, and -- end to end -- the traveltimes a coarse
 stage actually models, for conventional FWI and for the freqsel band grids.
@@ -19,7 +19,7 @@ import pytest
 import torch
 import yaml
 
-from sweep_tasks._helpers.stage_grid import (
+from sweepx.tasks._helpers.stage_grid import (
     _resample_to_grid,
     _seabed_to_grid,
     _set_physical_inr_frame,
@@ -168,11 +168,11 @@ def test_seabed_map_follows_the_stage_columns():
 def test_edge_receiver_maps_inside_every_stage_grid(native_shape, native_dh, dhs):
     """A receiver on the native grid's last cell is on every stage grid.
 
-    Geometry snaps with ``round(x / dh)`` (sweep_io ``to_grid``). The legacy
+    Geometry snaps with ``round(x / dh)`` (sweepx.io ``to_grid``). The legacy
     grid was one sample short there (Marmousi at 100 m: index 170 on a
     170-sample axis), so the far receiver recorded the absorbing layer.
     """
-    from sweep_io.geometry import PhysicalGeometry
+    from sweepx.io.geometry import PhysicalGeometry
 
     nd = len(native_shape)
     last = [(n - 1) * native_dh for n in native_shape][::-1]        # (x[, y], z)
@@ -208,7 +208,7 @@ def test_finer_stage_keeps_edge_positions_on_the_grid():
 # ------------------------------------------------------------- INR frame --
 
 def _siren(base):
-    from sweep_nn import VelocityINR
+    from sweepx.nn import VelocityINR
     torch.manual_seed(3)
     return VelocityINR(base, vp_std=100.0, hidden_features=16, hidden_layers=1,
                        use_hash_encoding=False)
@@ -244,7 +244,7 @@ def test_inr_coordinates_stay_in_the_native_frame():
 
 
 def test_inr_frame_clamps_past_the_native_extent_and_refuses_aniso():
-    from sweep_nn import VelocityINR
+    from sweepx.nn import VelocityINR
 
     native_shape, dh0, dh = (12, 9), 10.0, 20.0     # z extent 110 m -> stage 120 m
     net = _siren(torch.full(native_shape, 2000.0))

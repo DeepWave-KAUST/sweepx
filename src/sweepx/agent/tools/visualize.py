@@ -1,9 +1,9 @@
 """Visualization tools — the agent's LLM-callable plotting layer.
 
-Most tools draw with matplotlib here and use ``sweep_tasks.viz`` for the
+Most tools draw with matplotlib here and use ``sweepx.tasks.viz`` for the
 seismic-specific pieces (snapshot / model / convergence renderers, colormaps).
 Three of them — plot_wavelet, plot_velocity_slice, compare_shot_gathers — need
-only matplotlib and work without the sweep_tasks tier. matplotlib is a hard
+only matplotlib and work without the sweepx.tasks tier. matplotlib is a hard
 dependency; imageio (GIF writing) is optional, see the ``animate`` extra.
 
 These tools also own the agent-side concerns: locating a task's snapshots.npy
@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 def _require_matplotlib():
@@ -115,7 +115,7 @@ class PlotWavefieldParams(BaseModel):
 @register(
     name="plot_wavefield",
     description=(
-        "Render one wavefield snapshot from a finished wavefield task to a PNG (via sweep_tasks.viz). "
+        "Render one wavefield snapshot from a finished wavefield task to a PNG (via sweepx.tasks.viz). "
         "Crops the PML border using `abcn`. Returns the saved image path. Use after run_task on a "
         "wavefield spec."
     ),
@@ -129,7 +129,7 @@ def plot_wavefield(args: PlotWavefieldParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import wavefield as viz
+    from sweepx.tasks.viz import wavefield as viz
 
     frame = wf[args.snapshot_index]
     rd = resolve_task_dir(args.task_dir)
@@ -161,7 +161,7 @@ class CompareWavefieldsParams(BaseModel):
     name="compare_wavefields",
     description=(
         "Plot one snapshot from several wavefield tasks side by side with a shared color scale (via "
-        "sweep_tasks.viz) — e.g. Acoustic vs VTI vs TTI wavefronts. task_dirs must be distinct, real "
+        "sweepx.tasks.viz) — e.g. Acoustic vs VTI vs TTI wavefronts. task_dirs must be distinct, real "
         "wavefield runs (no path fallback — a wrong/forward dir errors). Returns the image path."
     ),
     params_model=CompareWavefieldsParams,
@@ -178,7 +178,7 @@ def compare_wavefields(args: CompareWavefieldsParams) -> dict[str, Any]:
         except Exception as exc:
             return {"error": f"{td}: {type(exc).__name__}: {exc}"}
         frames.append(wf[args.snapshot_index])
-    from sweep_tasks.viz import wavefield as viz
+    from sweepx.tasks.viz import wavefield as viz
 
     try:
         viz.compare_snapshots(frames, list(args.labels), args.out_path, suptitle=args.suptitle)
@@ -224,7 +224,7 @@ class MakeGifParams(BaseModel):
 @register(
     name="make_wavefield_gif",
     description=(
-        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweep_tasks.viz animate_snapshots). "
+        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweepx.tasks.viz animate_snapshots). "
         "Returns the saved path. Use after a wavefield run with several snapshot_times — e.g. to show "
         "propagation under topography."
     ),
@@ -240,7 +240,7 @@ def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if wf.shape[0] < 2:
         return {"error": "need >= 2 snapshots for a GIF; re-run with more snapshot_times."}
-    from sweep_tasks.viz import wavefield as viz
+    from sweepx.tasks.viz import wavefield as viz
 
     rd = resolve_task_dir(args.task_dir)
     out = rd / "output" / args.out_name
@@ -278,7 +278,7 @@ class PlotShotGatherParams(BaseModel):
     name="plot_shot_gather",
     description=(
         "Plot a shot gather (synthetic seismic record) from a forward/FWI task's record.npy — image "
-        "display by default, or wiggle. Drawn via sweep_tasks.viz. Use after a forward run when the user "
+        "display by default, or wiggle. Drawn via sweepx.tasks.viz. Use after a forward run when the user "
         "wants to SEE the record / shot gather / 炮记录. Returns the saved image path."
     ),
     params_model=PlotShotGatherParams,
@@ -301,7 +301,7 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import seismic
+    from sweepx.tasks.viz import seismic
 
     out = rd / "output" / args.out_name
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
@@ -334,7 +334,7 @@ class PlotModelParams(BaseModel):
     name="plot_model",
     description=(
         "Plot velocity models side by side from an FWI/migration run — typically initial vs inverted vs "
-        "true, with an inverted−true residual panel — on a shared colour scale (via sweep_tasks.viz). Use after "
+        "true, with an inverted−true residual panel — on a shared colour scale (via sweepx.tasks.viz). Use after "
         "an FWI run when the user wants to SEE the inverted model / result / 反演结果. Pass "
         "true_model_path and init_model_path (the same files you gave the builder) for the full comparison. "
         "Returns the saved image path."
@@ -369,7 +369,7 @@ def plot_model(args: PlotModelParams) -> dict[str, Any]:
     _, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import model as vizmodel
+    from sweepx.tasks.viz import model as vizmodel
 
     out = rd / "output" / args.out_name
     dh = (args.dh, args.dh) if args.dh else None
@@ -396,7 +396,7 @@ class PlotConvergenceParams(BaseModel):
 @register(
     name="plot_convergence",
     description=(
-        "Plot the FWI loss / misfit convergence curve from a task's loss.npy (via sweep_tasks.viz). Use after "
+        "Plot the FWI loss / misfit convergence curve from a task's loss.npy (via sweepx.tasks.viz). Use after "
         "an FWI run when the user wants to see how the inversion converged / loss 曲线 / 收敛. Returns the "
         "saved image path."
     ),
@@ -412,7 +412,7 @@ def plot_convergence(args: PlotConvergenceParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import convergence
+    from sweepx.tasks.viz import convergence
 
     out = rd / "output" / args.out_name
     fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
@@ -467,7 +467,7 @@ def plot_observed_data(args: PlotObservedDataParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import seismic
+    from sweepx.tasks.viz import seismic
 
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +519,7 @@ def plot_segy(args: PlotSegyParams) -> dict[str, Any]:
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweep_tasks.viz import seismic
+    from sweepx.tasks.viz import seismic
 
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -616,8 +616,8 @@ class PlotVelocityModelParams(BaseModel):
         "Plot a velocity/parameter model from a .npy FILE so the user can SEE what a model looks like "
         "BEFORE running anything (2-D heat-map, or three orthogonal slices for a 3-D cube). Use when the "
         "user uploads/points at a model and asks to see it / 看看这个模型 / what does this model look like. "
-        "Drawn with matplotlib (works without the sweep_tasks stack); 3-D orthogonal slices use "
-        "sweep_tasks.viz when it's installed. Returns the saved image path and the model shape."
+        "Drawn with matplotlib (works without the sweepx.tasks stack); 3-D orthogonal slices use "
+        "sweepx.tasks.viz when it's installed. Returns the saved image path and the model shape."
     ),
     params_model=PlotVelocityModelParams,
 )
@@ -633,7 +633,7 @@ def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
     out = Path(args.out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
     if arr.ndim == 2:
-        # Plain matplotlib heat-map — NO sweep_tasks needed, so plotting a model
+        # Plain matplotlib heat-map — NO sweepx.tasks needed, so plotting a model
         # works on a base install (e.g. right after make_synthetic_model).
         nz, nx = arr.shape
         extent = [0, nx * args.dh, nz * args.dh, 0] if args.dh else [0, nx, nz, 0]
@@ -647,10 +647,10 @@ def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
         fig.savefig(out, dpi=130)
         plt.close(fig)
     elif arr.ndim == 3:
-        # 3-D: prefer sweep_tasks' orthogonal-slice helper; fall back to a plain
-        # 3-panel matplotlib view when sweep_tasks isn't installed.
+        # 3-D: prefer sweepx.tasks' orthogonal-slice helper; fall back to a plain
+        # 3-panel matplotlib view when sweepx.tasks isn't installed.
         try:
-            from sweep_tasks.viz import model as vizmodel
+            from sweepx.tasks.viz import model as vizmodel
             dh = args.dh or 1.0
             fig, _axes = vizmodel.plot_vp_ortho_slices(
                 arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
@@ -843,7 +843,7 @@ def animate_fwi_evolution(args: AnimateFwiEvolutionParams) -> dict[str, Any]:
     imageio, _io_err = _require_imageio()
     if _io_err is not None:
         return _io_err
-    from sweep_tasks.viz.colormaps import VP_CMAP
+    from sweepx.tasks.viz.colormaps import VP_CMAP
 
     out = rd / "output" / args.out_name
     extent = None

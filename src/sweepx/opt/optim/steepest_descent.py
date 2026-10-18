@@ -7,13 +7,13 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 class SteepestDescent(Optimizer):
@@ -33,7 +33,7 @@ class SteepestDescent(Optimizer):
     ``clamp_(lo, hi)`` on every parameter after each update (projected gradient).
 
     A preconditioner, when supplied, must follow the
-    :class:`sweep_opt.precond.base.Preconditioner` contract: it is called
+    :class:`sweepx.opt.precond.base.Preconditioner` contract: it is called
     per-parameter before the descent direction is formed.
 
     Args:

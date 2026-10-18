@@ -7,7 +7,7 @@ model and learns the perturbation on top of it:
 
 ```python
 import torch
-from sweep_nn import VelocityINR
+from sweepx.nn import VelocityINR
 
 vp_init = torch.full((141, 341), 3000.0, device="cuda")       # (nz, nx), m/s
 net = VelocityINR(vp_init, vp_std=400.0,                       # perturbation scale, m/s

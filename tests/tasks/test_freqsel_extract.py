@@ -8,7 +8,7 @@ inversion never sees a gather again.
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
+from sweepx.tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
 
 
 def _comb(dt=0.001, n_p=200, k_lo=4, k_hi=8):

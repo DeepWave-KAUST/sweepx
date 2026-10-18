@@ -10,7 +10,7 @@ against the obvious implementation rather than just for not crashing.
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
+from sweepx.tasks.freqsel import FreqSelTargets, FrequencyComb, extract_shard
 
 
 def _shard(tmp_path, n_nodes=5, n_rec=4, nt=256, seed=0):

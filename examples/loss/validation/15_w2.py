@@ -29,9 +29,9 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import Wasserstein2Loss  # noqa: E402
-from sweep_loss._utils import normalize_density, positive_transform  # noqa: E402
-from sweep_loss.w2 import _inverse_cdf  # noqa: E402
+from sweepx.loss import Wasserstein2Loss  # noqa: E402
+from sweepx.loss._utils import normalize_density, positive_transform  # noqa: E402
+from sweepx.loss.w2 import _inverse_cdf  # noqa: E402
 
 
 NAME = "15_w2"

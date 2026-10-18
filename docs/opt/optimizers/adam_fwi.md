@@ -1,6 +1,6 @@
 # Adam-FWI
 
-`sweep_opt.optim.AdamFWI` is a single class wrapping four Adam-family
+`sweepx.opt.optim.AdamFWI` is a single class wrapping four Adam-family
 update rules with FWI-friendly knobs. Choose the rule via the `variant`
 flag:
 
@@ -22,7 +22,7 @@ On top of the stock formulas, every variant accepts:
 ## API
 
 ```python
-sweep_opt.optim.AdamFWI(
+sweepx.opt.optim.AdamFWI(
     params,
     lr=1e-3,
     *,
@@ -42,14 +42,14 @@ behaviour: it just recomputes the loss and returns it for tracking).
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
 
 # Water-layer freeze: top 10 grid rows do not update.
 mask = torch.ones_like(vp); mask[:, :10] = 0.0
 
-opt = sweep_opt.optim.AdamFWI(
+opt = sweepx.opt.optim.AdamFWI(
     [vp],
     lr=cfg["lr"],
     variant="adamw",

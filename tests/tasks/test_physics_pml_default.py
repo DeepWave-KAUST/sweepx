@@ -7,8 +7,8 @@ impl='eager', a process abort in the compiled core on impl='c'.
 """
 import torch
 
-from sweep_tasks._helpers.solver_build import _build_solver
-from sweep_tasks.schemas import BackendSpec, PhysicsSpec
+from sweepx.tasks._helpers.solver_build import _build_solver
+from sweepx.tasks.schemas import BackendSpec, PhysicsSpec
 
 
 def test_default_is_unset():

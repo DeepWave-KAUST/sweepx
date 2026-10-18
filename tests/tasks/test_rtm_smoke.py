@@ -18,7 +18,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from sweep_tasks import (
+from sweepx.tasks import (
     RTMImagingSpec,
     RTMSpec,
     TaskRunner,
@@ -137,7 +137,7 @@ def test_rtm_dispatcher_registered(tmp_path):
     )
     # Touch the underlying helper too so a typo would surface here, not in
     # an end-to-end run.
-    from sweep_tasks._helpers.plotting import (
+    from sweepx.tasks._helpers.plotting import (
         _crop_padded_volume_to_model, _save_rtm_qc_pngs,
     )
     assert callable(_crop_padded_volume_to_model)
@@ -145,7 +145,7 @@ def test_rtm_dispatcher_registered(tmp_path):
 
     # Also exercise the registry path that the runner uses to look up the spec
     # class: it must include "rtm" mapped to RTMSpec.
-    from sweep_tasks.registry import TASK_TYPES
+    from sweepx.tasks.registry import TASK_TYPES
     assert TASK_TYPES["rtm"] is RTMSpec
 
 
@@ -196,7 +196,7 @@ def test_rtm_runs_end_to_end_with_synthetic_obs(tmp_path):
     import numpy as np
     import yaml as _yaml
 
-    from sweep_tasks import TaskRunner, load_task
+    from sweepx.tasks import TaskRunner, load_task
 
     shape = (48, 48)
     true_vp = (2200 + 600 * np.linspace(0, 1, shape[0])[:, None]

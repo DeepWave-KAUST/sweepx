@@ -1,6 +1,6 @@
 # SOAP - Adam in Shampoo's eigenbasis
 
-`sweep_opt.optim.SOAP` (Vyas et al. 2024) runs Adam in the eigenbasis of
+`sweepx.opt.optim.SOAP` (Vyas et al. 2024) runs Adam in the eigenbasis of
 Shampoo's preconditioner. It follows the
 [official implementation](https://github.com/nikhilvyas/SOAP) (commit
 `a1e5535`) step for step; `tests/test_soap_parity.py` checks parameters and
@@ -45,7 +45,7 @@ until their product would exceed `max_precond_dim`.
 ## API
 
 ```python
-sweep_opt.optim.SOAP(
+sweepx.opt.optim.SOAP(
     params,
     lr=3e-3,
     *,

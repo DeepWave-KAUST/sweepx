@@ -1,7 +1,7 @@
 # Installation
 
 `sweep-loss` is a pure-Python package with PyTorch and NumPy as its only
-required runtime dependencies.  The importable Python name is `sweep_loss`
+required runtime dependencies.  The importable Python name is `sweepx.loss`
 (underscore), the project / repo name is `sweep-loss` (hyphen).
 
 ## From PyPI

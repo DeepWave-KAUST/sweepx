@@ -30,7 +30,7 @@ def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
             )
         return float(wavelet_spec.scale) * arr
     if kind == "siren_pipeline_npz":
-        from sweep_io.wavelet import load_wavelet_npz
+        from sweepx.io.wavelet import load_wavelet_npz
         loaded = load_wavelet_npz(
             wavelet_spec.path, explicit_key=wavelet_spec.explicit_key,
         )
@@ -42,9 +42,9 @@ def _build_wavelet(wavelet_spec, time_spec, *, override_dt: float | None = None,
         # the same amount.
         # Resample to solver dt when the wavelet was sampled at a different
         # rate (typical for SIREN wavelets fit at SEG-Y dt while the solver
-        # runs at a finer step). Uses sweep_tasks.preproc.resample_time.
+        # runs at a finer step). Uses sweepx.tasks.preproc.resample_time.
         if abs(loaded.dt_s - dt) > 1.0e-12:
-            from sweep_tasks.preproc.resample import resample_time
+            from sweepx.tasks.preproc.resample import resample_time
             samples = resample_time(
                 samples.astype(np.float32), loaded.dt_s, dt, axis=0,
             ).astype(np.float32)
@@ -74,7 +74,7 @@ def _get_wavelet_source_delay_s(wavelet_spec) -> float:
     kind = getattr(wavelet_spec, "kind", None)
     if kind != "siren_pipeline_npz":
         return 0.0
-    from sweep_io.wavelet import load_wavelet_npz
+    from sweepx.io.wavelet import load_wavelet_npz
     loaded = load_wavelet_npz(
         wavelet_spec.path,
         explicit_key=getattr(wavelet_spec, "explicit_key", None),

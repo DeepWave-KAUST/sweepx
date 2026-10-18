@@ -12,7 +12,7 @@ schema default, which ``config_resolved.yaml`` spells out, still loads.
 import pytest
 import yaml
 
-from sweep_tasks.schemas import DataPlanSpec, StageSpec
+from sweepx.tasks.schemas import DataPlanSpec, StageSpec
 from test_freqsel_optimizer_settings import _REPARAM, _conventional, _doc, _validate
 
 # Per stage key: a value a path could ignore, and the schema default.
@@ -110,7 +110,7 @@ def test_a_materialised_plan_reads_only_dt_target_s(field):
 
 
 def test_a_materialised_plan_keeps_dt_target_s_and_its_record_reruns(tmp_path):
-    from sweep_tasks._helpers.metadata import _dump_run_metadata
+    from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
     spec = _validate(_materialised(
         data_plan={"dt_target_s": 0.002}, epochs=3,

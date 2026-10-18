@@ -32,13 +32,13 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linalg.cg import cg
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linalg.cg import cg
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 class TruncatedNewton(Optimizer):
@@ -49,7 +49,7 @@ class TruncatedNewton(Optimizer):
         bounds: optional ``(lo, hi)`` box-projection enforced after each step.
         preconditioner: optional callable ``(grad, param) -> grad`` used as
             the inner-CG preconditioner. Same contract as in
-            :mod:`sweep_opt.precond`.
+            :mod:`sweepx.opt.precond`.
         forcing: ``"eisenstat_walker"`` or ``"constant"``.
         forcing_constant: tolerance used when ``forcing="constant"``.
         max_inner_iter: cap on PCG iterations per Newton step.

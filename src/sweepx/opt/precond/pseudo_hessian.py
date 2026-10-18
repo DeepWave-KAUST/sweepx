@@ -25,7 +25,7 @@ from typing import Dict, Iterable, Optional, Union
 import torch
 from torch import Tensor
 
-from sweep_opt.precond.base import Preconditioner
+from sweepx.opt.precond.base import Preconditioner
 
 
 _TensorLike = Union[Tensor, Dict[int, Tensor]]

@@ -3,7 +3,7 @@
 ## Task types
 
 Every job is one `task_type`, each backed by a Pydantic spec in
-`sweep_tasks.schemas`:
+`sweepx.tasks.schemas`:
 
 | `task_type` | Spec | Does |
 |---|---|---|
@@ -63,7 +63,7 @@ step by step, with measured numbers, in **[CLI workflow](../cli_workflow.md)**.
 ## Distributed
 
 ```bash
-torchrun --nproc_per_node=2 --standalone -m sweep_tasks.cli run task.yaml
+torchrun --nproc_per_node=2 --standalone -m sweepx.tasks.cli run task.yaml
 ```
 
 Shot-parallel by default; gradient all-reduce + scalar-loss reduction are

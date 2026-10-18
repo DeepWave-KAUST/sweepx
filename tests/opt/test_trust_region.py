@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.TrustRegion (TTR and ASTR variants)."""
+"""Tests for sweepx.opt.optim.TrustRegion (TTR and ASTR variants)."""
 import pytest
 import torch
 
-from sweep_opt.optim import TrustRegion
+from sweepx.opt.optim import TrustRegion
 
 
 def _make_loss_fn(f, x):

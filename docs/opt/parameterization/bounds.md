@@ -1,6 +1,6 @@
 # Bounds parameterizations
 
-`sweep_opt.parameterization` ships three smooth reparameterizations that
+`sweepx.opt.parameterization` ships three smooth reparameterizations that
 let you optimize over a latent variable while the FWI solver still sees
 the physical model:
 
@@ -30,14 +30,14 @@ The library guarantees `inverse(forward(z)) == z` and (modulo clamps)
 ## Drop-in usage
 
 ```python
-import sweep_opt
-from sweep_opt.parameterization import SigmoidBounds
+import sweepx.opt
+from sweepx.opt.parameterization import SigmoidBounds
 
 # Initialise the latent so that forward(latent) == initial_model.
 param = SigmoidBounds(vmin=1500.0, vmax=5500.0)
 latent = param.inverse(initial_model).detach().requires_grad_(True)
 
-opt = sweep_opt.optim.LBFGS([latent], history_size=10)
+opt = sweepx.opt.optim.LBFGS([latent], history_size=10)
 
 def closure():
     opt.zero_grad()

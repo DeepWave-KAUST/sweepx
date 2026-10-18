@@ -18,7 +18,7 @@ import numpy as np
 from scipy import signal as sig
 from scipy.signal import sosfiltfilt, filtfilt as scipy_filtfilt
 
-from sweep_tasks.preproc.filter import bandpass
+from sweepx.tasks.preproc.filter import bandpass
 
 
 def _signal(nt=1500, nrec=4, dt=0.004, seed=0):

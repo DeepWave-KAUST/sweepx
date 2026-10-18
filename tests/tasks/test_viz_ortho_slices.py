@@ -10,7 +10,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pytest
 
-from sweep_tasks.viz.model import plot_vp_ortho_slices
+from sweepx.tasks.viz.model import plot_vp_ortho_slices
 
 
 def _ramp_volume(shape=(8, 8, 16)):

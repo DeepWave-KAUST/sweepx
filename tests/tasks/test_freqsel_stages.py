@@ -14,7 +14,7 @@ def test_grid_mode_stage_carries_the_previous_model():
     import inspect
     import re
 
-    from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
+    from sweepx.tasks.tasks.fwi_freqsel import FreqselRunnerMixin
 
     src = inspect.getsource(FreqselRunnerMixin._freqsel_run_stage)
     # the grid-vp branch of the si>0 (`else:`) arm
@@ -31,7 +31,7 @@ def test_freqsel_clears_carried_model_between_runs():
     """Two tasks through one runner instance must not share a starting model."""
     import inspect
 
-    from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
+    from sweepx.tasks.tasks.fwi_freqsel import FreqselRunnerMixin
 
     src = inspect.getsource(FreqselRunnerMixin._run_fwi_freqsel)
     assert "self._freqsel_last_vp = None" in src, (
@@ -47,7 +47,7 @@ def test_carried_model_stays_a_leaf_across_a_grid_change():
     """
     import torch
 
-    from sweep_tasks._helpers.stage_grid import _resample_to_grid, _stage_grid_shape
+    from sweepx.tasks._helpers.stage_grid import _resample_to_grid, _stage_grid_shape
 
     prev = torch.full((8, 10), 1500.0, requires_grad=True)      # stage N-1 result
 

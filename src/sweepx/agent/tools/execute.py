@@ -1,6 +1,6 @@
 """``run_task`` — load a YAML spec, dispatch to TaskRunner, return task_dir + status.
 
-Single entry point for executing any sweep_tasks spec (forward, fwi, lsrtm, rtm,
+Single entry point for executing any sweepx.tasks spec (forward, fwi, lsrtm, rtm,
 wavefield, introspect). The LLM hands us the YAML path produced by one of the
 ``build_*_spec`` tools; we hand back the on-disk artifacts location and a small
 JSON summary suitable for the next reasoning step.
@@ -14,13 +14,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 class RunTaskParams(BaseModel):
-    """Run a previously-built spec YAML through sweep_tasks.TaskRunner."""
+    """Run a previously-built spec YAML through sweepx.tasks.TaskRunner."""
 
-    yaml_path: str = Field(..., description="Path to a validated sweep_tasks YAML spec (output of a build_*_spec tool).")
+    yaml_path: str = Field(..., description="Path to a validated sweepx.tasks YAML spec (output of a build_*_spec tool).")
     timeout_s: float | None = Field(
         None,
         gt=0,
@@ -48,7 +48,7 @@ def _summarize_status(status_obj: Any) -> dict[str, Any]:
 @register(
     name="run_task",
     description=(
-        "Execute a sweep_tasks YAML spec via TaskRunner. Works for forward, FWI, LSRTM, RTM, "
+        "Execute a sweepx.tasks YAML spec via TaskRunner. Works for forward, FWI, LSRTM, RTM, "
         "wavefield, and introspect tasks (auto-dispatched by `task_type` inside the YAML). "
         "Returns the task_dir on disk, final state ('success' | 'failed'), error message if any, "
         "and a short summary. Always follow up with `read_status` / `list_artifacts` for details "
@@ -58,9 +58,9 @@ def _summarize_status(status_obj: Any) -> dict[str, Any]:
 )
 def run_task(args: RunTaskParams) -> dict[str, Any]:
     try:
-        from sweep_tasks import TaskRunner, load_task
+        from sweepx.tasks import TaskRunner, load_task
     except ImportError as exc:
-        return {"error": f"sweep_tasks is not importable: {exc}"}
+        return {"error": f"sweepx.tasks is not importable: {exc}"}
 
     yaml_path = Path(args.yaml_path).expanduser()
     if not yaml_path.is_file():

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sweep_nn import VelocityINR
+from sweepx.nn import VelocityINR
 
 
 def _make_base(nz=16, nx=24, value=2000.0):

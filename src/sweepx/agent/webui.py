@@ -15,7 +15,7 @@ How it maps onto the existing agent:
 Run:
     pip install -e ".[ui]"          # installs gradio
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    sweep-agent ui                  # or: python -m sweep_agent.webui
+    sweep-agent ui                  # or: python -m sweepx.agent.webui
 """
 
 from __future__ import annotations
@@ -28,10 +28,10 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.vllm_backend import VLLMBackend
-from sweep_agent.prompts import build_system_prompt
-from sweep_agent.tools import registry as default_registry
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.vllm_backend import VLLMBackend
+from sweepx.agent.prompts import build_system_prompt
+from sweepx.agent.tools import registry as default_registry
 
 # Tool-result keys that may hold a saved figure, in priority order.
 _FIGURE_KEYS = ("image_path", "gif_path", "model_image", "convergence_image")
@@ -484,19 +484,19 @@ def build_app(max_steps: int = 24):
             f"(import error: {exc})"
         )
 
-    from sweep_agent.llm.vllm_backend import default_model_for, detect_endpoint
+    from sweepx.agent.llm.vllm_backend import default_model_for, detect_endpoint
 
     url = os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
     model = os.environ.get("SWEEP_AGENT_LLM_MODEL") or default_model_for(url)
     count = _make_token_counter(model)
     # Before the first turn we don't know the subset yet — estimate with the
     # keyword-router's no-match default (CORE + fallback), not all ~30 tools.
-    from sweep_agent.tools.selection import select_tool_names
+    from sweepx.agent.tools.selection import select_tool_names
     tools_tokens = count(json.dumps(default_registry.openai_specs(select_tool_names(""))))
     max_len = _server_max_len(url)
 
     def _new_agent() -> Agent:
-        from sweep_agent.tools.selection import select_tool_names
+        from sweepx.agent.tools.selection import select_tool_names
         return Agent(llm=VLLMBackend(), max_steps=max_steps, tool_selector=select_tool_names)
 
     def _submit(message):
@@ -549,7 +549,7 @@ def build_app(max_steps: int = 24):
         with gr.Row():
             clear = gr.Button("🗑 Clear conversation", variant="secondary", scale=1, elem_id="sw-clear")
         # Quick-start example chips — click to fill the input box.
-        # Quick-start demos — all run on a base install (solver only, no sweep_tasks).
+        # Quick-start demos — all run on a base install (solver only, no sweepx.tasks).
         with gr.Row(elem_classes=["sw-chips"]):
             ex_model = gr.Button("📈 Make a 2-layer model", size="sm")
             ex_fwd = gr.Button("🌊 Forward + shot gather", size="sm")
@@ -641,5 +641,5 @@ def launch(server_name: str = "0.0.0.0", server_port: int = 7860, share: bool = 
             pass
 
 
-if __name__ == "__main__":  # python -m sweep_agent.webui
+if __name__ == "__main__":  # python -m sweepx.agent.webui
     launch()

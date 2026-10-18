@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import json
 
-from sweep_agent.agent import (
+from sweepx.agent.agent import (
     Agent,
     _MAX_STR_FIELD_CHARS,
     _MAX_TOOL_RESULT_CHARS,
     _trim_tool_result,
 )
-from sweep_agent.llm.base import BaseLLM, ChatMessage
+from sweepx.agent.llm.base import BaseLLM, ChatMessage
 
 
 def test_trim_drops_spec_dict():
@@ -35,7 +35,7 @@ def test_trim_keeps_large_informational_result_whole():
     the equation list."""
     import pytest
     pytest.importorskip("sweep")
-    from sweep_agent.tools import registry
+    from sweepx.agent.tools import registry
 
     full = registry.get("list_equations").invoke({}).to_json()
     assert 2000 < len(full) <= _MAX_TOOL_RESULT_CHARS  # bigger than the OLD cap, under the new one
@@ -85,7 +85,7 @@ class _LoopLLM(BaseLLM):
         self.calls += 1
         if self.calls > 8:  # safety
             return ChatMessage(role="assistant", content="done")
-        from sweep_agent.llm.base import ToolCall
+        from sweepx.agent.llm.base import ToolCall
         return ChatMessage(role="assistant", content=None,
                            tool_calls=[ToolCall(id=f"c{self.calls}", name="inspect_file", arguments={"path": "/x.npy"})])
 
@@ -94,7 +94,7 @@ class _LoopLLM(BaseLLM):
 
 
 def test_loop_guard_short_circuits_repeated_calls():
-    from sweep_agent.agent import _REPEAT_LIMIT
+    from sweepx.agent.agent import _REPEAT_LIMIT
     agent = Agent(llm=_LoopLLM(), max_steps=10)
     guard_hits = 0
     for step in agent.iter_chat("loop please"):

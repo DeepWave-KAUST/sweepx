@@ -33,7 +33,7 @@ export PYTHONUNBUFFERED=1
 YAML=${SWEEP_STACK_ROOT}/sweep-tasks/examples/tasks/viking_siren_hash_6stage_30hz.yaml
 
 cd ${SWEEP_USER_ROOT}/sweep-stack
-torchrun --standalone --nproc_per_node=4 -m sweep_tasks run "$YAML"
+torchrun --standalone --nproc_per_node=4 -m sweepx.tasks run "$YAML"
 
 echo "============================================================"
 echo "Finished: $(date -Iseconds)"

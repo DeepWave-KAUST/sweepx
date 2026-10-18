@@ -60,7 +60,7 @@ correlation peaks.
 ## API
 
 ```python
-from sweep_loss import CrossCorrelationTraveltimeLoss
+from sweepx.loss import CrossCorrelationTraveltimeLoss
 loss = CrossCorrelationTraveltimeLoss(
     dt=1e-3, power=4.0, sigma=200.0,
 )(syn, obs)

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _model(tmp_path):
@@ -36,7 +36,7 @@ def test_check_parameters_needs_velocities():
 
 
 def test_plot_observed_data(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     rec = np.random.randn(1, 200, 50, 1).astype(np.float32)
     p = tmp_path / "rec.npy"
     np.save(p, rec)
@@ -46,7 +46,7 @@ def test_plot_observed_data(tmp_path):
 
 
 def test_compare_shot_gathers(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     a = np.random.randn(1, 200, 50, 1).astype(np.float32)
     b = a + 0.5 * np.random.randn(*a.shape).astype(np.float32)
     pa, pb = tmp_path / "a.npy", tmp_path / "b.npy"
@@ -58,7 +58,7 @@ def test_compare_shot_gathers(tmp_path):
 
 
 def test_plot_segy(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     segyio = pytest.importorskip("segyio")
     path = str(tmp_path / "t.segy")
     data = (np.random.randn(40, 300) * 100).astype(np.float32)  # (ntraces, nt)
@@ -73,8 +73,8 @@ def test_run_forward_and_plot_uses_its_own_run(tmp_path):
     """The one-call forward+plot must plot the gather from THE RUN IT JUST DID
     (record_length_s honoured), never a stale task_dir."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks")
+    pytest.importorskip("sweepx.tasks.viz")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((60, 80), 2000.0, dtype=np.float32))
     r = registry.get("run_forward_and_plot").invoke({
@@ -93,8 +93,8 @@ def test_run_forward_and_plot_uses_its_own_run(tmp_path):
 @pytest.mark.timeout(300)
 def test_run_multiscale_fwi_two_bands(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks")
+    pytest.importorskip("sweepx.tasks.viz")
     nz, nx = 48, 60
     true = np.full((nz, nx), 1500.0, dtype=np.float32)
     true[nz // 2:, :] = 2200.0

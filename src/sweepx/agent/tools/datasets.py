@@ -1,5 +1,5 @@
 """Benchmark velocity models — list and fetch the models `sweep.datasets` ships or
-can download (Marmousi, Overthrust, BP, Hess-VTI, …). No ``sweep_tasks`` needed:
+can download (Marmousi, Overthrust, BP, Hess-VTI, …). No ``sweepx.tasks`` needed:
 this is pure ``sweep`` (the core solver package), so it works on a base install.
 
 The Marmousi and Overthrust 2-D demos are *embedded* in the wheel — they load
@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 def _require_datasets():
@@ -39,7 +39,7 @@ class ListBenchmarkModelsParams(BaseModel):
     description=(
         "List the benchmark velocity models from `sweep.datasets` — Marmousi, Overthrust, BP, "
         "Hess-VTI, etc. Each row is marked EMBEDDED (bundled, loads instantly) or DOWNLOAD (fetched "
-        "on first use). Pure core-solver, no sweep_tasks. Use when the user asks what real / benchmark "
+        "on first use). Pure core-solver, no sweepx.tasks. Use when the user asks what real / benchmark "
         "models are available, before get_benchmark_model."
     ),
     params_model=ListBenchmarkModelsParams,
@@ -78,7 +78,7 @@ class GetBenchmarkModelParams(BaseModel):
     name="get_benchmark_model",
     description=(
         "Fetch a benchmark velocity model from `sweep.datasets` (Marmousi, Overthrust, …) and save it "
-        "as a .npy ready for run_forward_sweep — pure core-solver, no sweep_tasks. Returns the saved vp "
+        "as a .npy ready for run_forward_sweep — pure core-solver, no sweepx.tasks. Returns the saved vp "
         "path, its shape, and the model's native grid spacing dh (pass that dh to run_forward_sweep). "
         "Embedded demos (e.g. marmousi/overthrust '2d-demo') load instantly; DOWNLOAD models need "
         "allow_download=true. Use when the user wants to model on a real / named benchmark."

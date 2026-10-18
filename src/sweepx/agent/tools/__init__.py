@@ -3,7 +3,7 @@
 A :class:`Tool` couples a Pydantic params model (which yields a JSON schema for
 the LLM) with a callable that takes the validated model and returns any
 JSON-serializable result. Tools self-register via :func:`register` so importing
-``sweep_agent.tools`` brings them all online.
+``sweepx.agent.tools`` brings them all online.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from typing import Any, Callable, Type
 from pydantic import BaseModel, ValidationError
 
 
-# Tools that work on a base install (no ``sweep_tasks``). When sweep_tasks is not
+# Tools that work on a base install (no ``sweepx.tasks``). When sweepx.tasks is not
 # importable, ONLY these are offered to the LLM (see ``Registry.openai_specs``), so
-# it never picks a tool that fails with "sweep_tasks is not importable". Everything
-# else routes through ``sweep_tasks.TaskRunner`` — the build_*_spec / run_task /
+# it never picks a tool that fails with "sweepx.tasks is not importable". Everything
+# else routes through ``sweepx.tasks.TaskRunner`` — the build_*_spec / run_task /
 # describe_task_schema tools and the orchestrators + plotters that call them.
 _CORE_SAFE_TOOLS = frozenset({
     "inspect_file", "check_parameters", "make_synthetic_model", "list_equations",
@@ -33,16 +33,16 @@ _sweep_tasks_ok: bool | None = None
 
 
 def _sweep_tasks_available() -> bool:
-    """Whether ``sweep_tasks`` (the production runner) is importable — cached."""
+    """Whether ``sweepx.tasks`` (the production runner) is importable — cached."""
     global _sweep_tasks_ok
     if _sweep_tasks_ok is None:
-        # A bare directory named "sweep_tasks" on sys.path — e.g. a task-output
-        # folder in the CWD (`/tmp/sweep_tasks/…`) — resolves as a *namespace
+        # A bare directory named "sweepx.tasks" on sys.path — e.g. a task-output
+        # folder in the CWD (`/tmp/sweepx/tasks/…`) — resolves as a *namespace
         # package* with loader=None. That must NOT count as the real importable
-        # tier, or gating silently switches off and sweep_tasks-only tools get
+        # tier, or gating silently switches off and sweepx.tasks-only tools get
         # offered on a base install (then fail with a cryptic import error). A real
         # package has a concrete loader.
-        spec = importlib.util.find_spec("sweep_tasks")
+        spec = importlib.util.find_spec("sweepx.tasks")
         _sweep_tasks_ok = spec is not None and spec.loader is not None
     return _sweep_tasks_ok
 
@@ -107,7 +107,7 @@ class Registry:
     def openai_specs(self, names: list[str] | None = None) -> list[dict[str, Any]]:
         """OpenAI tool specs. If ``names`` is given, only those tools (in registry
         order) — used for per-query tool subsetting to keep the small model's
-        choice space (and the prompt) small. When ``sweep_tasks`` is not installed,
+        choice space (and the prompt) small. When ``sweepx.tasks`` is not installed,
         the tools that need it are dropped so the LLM never picks a failing path."""
         core_only = not _sweep_tasks_available()
         keep = None if names is None else set(names)
@@ -141,20 +141,20 @@ def register(
 
 # Importing the submodules triggers tool registration via the @register decorator.
 # We use absolute `import` (not `from . import`) so the stdlib `inspect` module
-# at the top of this file does not shadow the sweep_agent.tools.inspect submodule.
-import sweep_agent.tools.inspect          # noqa: E402,F401
-import sweep_agent.tools.introspect       # noqa: E402,F401
-import sweep_agent.tools.build_forward    # noqa: E402,F401
-import sweep_agent.tools.build_fwi        # noqa: E402,F401
-import sweep_agent.tools.build_wavefield  # noqa: E402,F401
-import sweep_agent.tools.build_spec       # noqa: E402,F401
-import sweep_agent.tools.execute          # noqa: E402,F401
-import sweep_agent.tools.status           # noqa: E402,F401
-import sweep_agent.tools.visualize        # noqa: E402,F401
-import sweep_agent.tools.orchestrate      # noqa: E402,F401
-import sweep_agent.tools.synth            # noqa: E402,F401
-import sweep_agent.tools.analysis         # noqa: E402,F401
-import sweep_agent.tools.forward_sweep    # noqa: E402,F401
-import sweep_agent.tools.datasets         # noqa: E402,F401
+# at the top of this file does not shadow the sweepx.agent.tools.inspect submodule.
+import sweepx.agent.tools.inspect          # noqa: E402,F401
+import sweepx.agent.tools.introspect       # noqa: E402,F401
+import sweepx.agent.tools.build_forward    # noqa: E402,F401
+import sweepx.agent.tools.build_fwi        # noqa: E402,F401
+import sweepx.agent.tools.build_wavefield  # noqa: E402,F401
+import sweepx.agent.tools.build_spec       # noqa: E402,F401
+import sweepx.agent.tools.execute          # noqa: E402,F401
+import sweepx.agent.tools.status           # noqa: E402,F401
+import sweepx.agent.tools.visualize        # noqa: E402,F401
+import sweepx.agent.tools.orchestrate      # noqa: E402,F401
+import sweepx.agent.tools.synth            # noqa: E402,F401
+import sweepx.agent.tools.analysis         # noqa: E402,F401
+import sweepx.agent.tools.forward_sweep    # noqa: E402,F401
+import sweepx.agent.tools.datasets         # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]

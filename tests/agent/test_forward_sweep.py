@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def test_registered_with_a_usable_parameter_surface():
@@ -25,7 +25,7 @@ def test_registered_with_a_usable_parameter_surface():
 
 def test_missing_solver_is_reported_as_data(monkeypatch):
     """With no solver installed the tool must return an error, never raise."""
-    import sweep_agent.tools.forward_sweep as fs
+    import sweepx.agent.tools.forward_sweep as fs
 
     monkeypatch.setattr(fs, "_require_sweep", lambda: (None, {"error": "no solver"}))
     out = fs.run_forward_sweep.fn(
@@ -39,7 +39,7 @@ def test_runs_a_shot_end_to_end(tmp_path):
     pytest.importorskip("sweep")
     pytest.importorskip("torch")
 
-    import sweep_agent.tools.forward_sweep as fs
+    import sweepx.agent.tools.forward_sweep as fs
 
     nz, nx, nt = 80, 120, 300
     vp = np.full((nz, nx), 2000.0, dtype=np.float32)
@@ -63,7 +63,7 @@ def test_runs_a_shot_end_to_end(tmp_path):
         assert len(open(out["image_path"], "rb").read(8)) == 8
 def test_selector_includes_run_forward_sweep():
     """A forwrd shot query must surface run_forward_sweep to the model."""
-    from sweep_agent.tools.selection import select_tool_names
+    from sweepx.agent.tools.selection import select_tool_names
 
     picked = select_tool_names("run a forward shot and plot the gather")
     assert "run_forward_sweep" in picked

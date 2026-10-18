@@ -2,7 +2,7 @@
 
 import torch
 
-from sweep_nn import SirenWavelet
+from sweepx.nn import SirenWavelet
 
 
 def test_output_shape():

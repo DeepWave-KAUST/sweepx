@@ -247,7 +247,7 @@ histogram (perfectly flat 120 traces × 1001 shots).
 Verify programmatically with:
 
 ```python
->>> from sweep_io.segy_index import SEGYIndex
+>>> from sweepx.io.segy_index import SEGYIndex
 >>> idx = SEGYIndex.load("$VIKING_HOME/run/viking_index.npz")
 >>> idx.n_traces, idx.n_shots, idx.dt_s, idx.n_samples
 (120120, 1001, 0.004, 1500)
@@ -322,7 +322,7 @@ histogram bins have nothing that can land in them.
 #### Inspect programmatically
 
 ```bash
-python -c "from sweep_io.seismic_plan import SeismicPlan; \
+python -c "from sweepx.io.seismic_plan import SeismicPlan; \
            p=SeismicPlan.load('$VIKING_HOME/run/viking_csg_plan.npz'); \
            print(p.grouping, p.n_groups, p.n_rows); print(p.build_meta)"
 ```
@@ -700,7 +700,7 @@ These rows only build the start; what the inversion holds fixed is the task's
 `water:` block, here a flat seabed at the same depth (`water: {seabed: 350.0,
 velocity: 1485.6}` holds rows 0-27). The flat 350 m is within 1-3 cells of the
 real seabed, measured 343-372 m from the seabed reflection; a per-trace seabed
-`.npz` (`sweep_tasks.bathymetry`) would follow it instead.
+`.npz` (`sweepx.tasks.bathymetry`) would follow it instead.
 
 ---
 
@@ -969,7 +969,7 @@ sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
 # (built in memory by init_model.linear_gradient inside the Step 5 YAML)
 
 # === Step 5: freqsel FWI on one GPU (8 bands, ~10 min) =====================
-SWEEP_TASKS=$(python -c "import sweep_tasks, pathlib; print(pathlib.Path(sweep_tasks.__file__).parent.parent.parent)")
+SWEEP_TASKS=$(python -c "import sweepx.tasks, pathlib; print(pathlib.Path(sweepx.tasks.__file__).parent.parent.parent)")
 mkdir -p $VIKING_HOME/run/shards
 while read lo hi n_p klo khi; do
   sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
@@ -1065,7 +1065,7 @@ for Viking. Remaining nice-to-haves:
 ### CSG-index / SeismicPlan field mapping (for reference)
 
 The wavelet port replaced the legacy `csg_index_v2` npz reader with
-`sweep_io.SeismicPlan` + `PlanReader`. If you're reading the legacy
+`sweepx.io.SeismicPlan` + `PlanReader`. If you're reading the legacy
 scripts and trying to map field names:
 
 | Legacy `csg_index_v2` field | `SeismicPlan` equivalent |

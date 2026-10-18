@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.TruncatedGaussNewton."""
+"""Tests for sweepx.opt.optim.TruncatedGaussNewton."""
 import pytest
 import torch
 
-from sweep_opt.optim import LBFGS, TruncatedGaussNewton
+from sweepx.opt.optim import LBFGS, TruncatedGaussNewton
 
 
 def test_tgn_requires_residual_fn():

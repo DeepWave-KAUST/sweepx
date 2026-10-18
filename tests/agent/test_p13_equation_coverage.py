@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 # Representative equations spanning every family. 3-D ones get 3-D dummy models.
@@ -44,8 +44,8 @@ def _make_model_files(tmp_path, names, shape):
 @pytest.mark.parametrize("equation", EQUATIONS_2D)
 def test_build_forward_spec_2d_equations(tmp_path, equation):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    from sweep_agent.tools.introspect import all_equations
+    pytest.importorskip("sweepx.tasks")
+    from sweepx.agent.tools.introspect import all_equations
     required = all_equations()[equation]
     paths = _make_model_files(tmp_path, required, (48, 64))
     primary = required[0]
@@ -68,8 +68,8 @@ def test_build_forward_spec_2d_equations(tmp_path, equation):
 @pytest.mark.parametrize("equation", EQUATIONS_3D)
 def test_build_forward_spec_3d_equations(tmp_path, equation):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    from sweep_agent.tools.introspect import all_equations
+    pytest.importorskip("sweepx.tasks")
+    from sweepx.agent.tools.introspect import all_equations
     required = all_equations()[equation]
     paths = _make_model_files(tmp_path, required, (16, 18, 20))  # (nz, ny, nx)
     primary = required[0]

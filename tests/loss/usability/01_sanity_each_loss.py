@@ -1,4 +1,4 @@
-"""Sanity test for every loss in sweep_loss.
+"""Sanity test for every loss in sweepx.loss.
 
 For every loss:
   1. Build a small synthetic gather (Ricker pulses at slightly different lags).
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import sweep_loss as sl
+import sweepx.loss as sl
 
 
 HERE = Path(__file__).resolve().parent

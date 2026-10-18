@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 class InspectFileParams(BaseModel):

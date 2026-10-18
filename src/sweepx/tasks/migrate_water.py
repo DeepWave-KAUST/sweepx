@@ -5,7 +5,7 @@ The water layer used to be configured five unrelated ways --
 ``water_vp_m_s`` / ``seabed_depth_path`` / ``water_reset_each_stage``, and the
 frequency-selection path's silent pin of every starting-model cell at exactly
 1500 m/s. This rewrites a task YAML into the single top-level ``water:`` block
-(:class:`sweep_tasks.schemas.WaterSpec`) where the translation is unambiguous,
+(:class:`sweepx.tasks.schemas.WaterSpec`) where the translation is unambiguous,
 and refuses -- saying why -- where it is not. It never guesses the water from
 velocities: where the old run's water was a velocity rule, the user provides
 the file.
@@ -109,8 +109,8 @@ def _native_shape(doc: dict, base: Path) -> tuple | None:
 def _init_model(doc: dict, base: Path):
     """The starting model as an array, or ``None`` if it cannot be read here
     (a ``dataset:`` source is not resolved -- that can mean a download)."""
-    from sweep_tasks._helpers.model import _model_array
-    from sweep_tasks.schemas import ModelRef
+    from sweepx.tasks._helpers.model import _model_array
+    from sweepx.tasks.schemas import ModelRef
 
     ref = _init_ref(doc)
     if ref is None or ref.get("dataset") is not None:
@@ -320,7 +320,7 @@ def plan_migration(text: str, yaml_path: Path, out_path: Path | None = None
     new_text = "".join(lines)
     # The rewrite must be a valid task before it is offered.
     try:
-        from sweep_tasks.yaml_io import load_task_from_dict
+        from sweepx.tasks.yaml_io import load_task_from_dict
 
         load_task_from_dict(yaml.safe_load(new_text), base_dir=out_dir)
     except Exception as err:  # noqa: BLE001
@@ -417,7 +417,7 @@ def _seabed_ok(p, base, what, mig):
         mig.refusals.append(
             f"{what}: {pa} is a plain array; `water.seabed` is an .npz with "
             "key 'seabed_depth'. Convert it once with "
-            "`sweep_tasks.bathymetry.save_seabed_depth_npz(<new>.npz, "
+            "`sweepx.tasks.bathymetry.save_seabed_depth_npz(<new>.npz, "
             "np.load(<old>.npy))` (depths in metres) and rerun")
         return None
     files = list(obj.files)
@@ -429,8 +429,8 @@ def _seabed_ok(p, base, what, mig):
 
 
 def _seabed_mask_fn(doc, seabed: Path, buffer_cells: int):
-    from sweep_tasks._helpers.water import WaterRegion
-    from sweep_tasks.schemas import WaterSpec
+    from sweepx.tasks._helpers.water import WaterRegion
+    from sweepx.tasks.schemas import WaterSpec
 
     dh = float((doc.get("grid") or {}).get("dh", 1.0))
     dxyz = (doc.get("geometry") or {}).get("dh_xyz_m")
@@ -576,8 +576,8 @@ def _check_implicit_pin(doc, base, out_dir, mig, water):
         if "mask" in water and (out_dir / water["mask"]) in mig.files:
             new = mig.files[out_dir / water["mask"]]
         else:
-            from sweep_tasks._helpers.water import WaterRegion
-            from sweep_tasks.schemas import WaterSpec
+            from sweepx.tasks._helpers.water import WaterRegion
+            from sweepx.tasks.schemas import WaterSpec
 
             spec = WaterSpec(**{k: (str(_abs(x, out_dir))
                                     if k in ("seabed", "mask") and isinstance(x, str)

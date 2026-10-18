@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_tasks._helpers.wavelet_build import _get_wavelet_source_delay_s
-from sweep_tasks.schemas import (
+from sweepx.tasks._helpers.wavelet_build import _get_wavelet_source_delay_s
+from sweepx.tasks.schemas import (
     FromNpyWavelet,
     FromSirenPipelineNpzWavelet,
     RickerWavelet,
@@ -91,7 +91,7 @@ def test_get_source_delay_s_siren_explicit_key(tmp_path):
 def _fake_prepared_data(nt: int = 200, dt_s: float = 0.002,
                         observed_delay_s: float = 0.0):
     """Build a minimal PreparedWaveletData stand-in for save_wavelet_outputs."""
-    from sweep_tasks.wavelet.sweep_torch import PreparedWaveletData
+    from sweepx.tasks.wavelet.sweep_torch import PreparedWaveletData
 
     return PreparedWaveletData(
         observed=np.zeros((1, 1, nt), dtype=np.float32),
@@ -110,7 +110,7 @@ def _fake_prepared_data(nt: int = 200, dt_s: float = 0.002,
 
 def _fake_config(nt: int = 200, dt_s: float = 0.002, *, initial_path=None):
     """Minimal WaveletInversionConfig instance for the saver."""
-    from sweep_tasks.wavelet.sweep_torch import WaveletInversionConfig
+    from sweepx.tasks.wavelet.sweep_torch import WaveletInversionConfig
 
     return WaveletInversionConfig(
         plan_path=Path("/nonexistent/plan.npz"),
@@ -131,7 +131,7 @@ def test_estimate_wavelet_npz_has_fwi_metadata(tmp_path):
     Without this metadata, ``_get_wavelet_source_delay_s`` silently
     returns 0 and syn/obs end up cycle-skipped at the wavelet prepad.
     """
-    from sweep_tasks.wavelet.sweep_torch import save_wavelet_outputs
+    from sweepx.tasks.wavelet.sweep_torch import save_wavelet_outputs
 
     nt, dt = 256, 0.002
     wavelet = np.zeros(nt, dtype=np.float32)
@@ -185,7 +185,7 @@ def test_estimate_wavelet_source_delay_tracks_measured_peak(tmp_path):
     the analyze-side prepad if available but does NOT override the
     measured peak.
     """
-    from sweep_tasks.wavelet.sweep_torch import save_wavelet_outputs
+    from sweepx.tasks.wavelet.sweep_torch import save_wavelet_outputs
 
     nt, dt = 256, 0.002
 
@@ -231,7 +231,7 @@ def test_estimate_wavelet_source_delay_follows_obs_delay_when_shifted(tmp_path):
     then reapplies an identical shift downstream, keeping syn/obs in the
     same prepad frame the SIREN trained in.
     """
-    from sweep_tasks.wavelet.sweep_torch import save_wavelet_outputs
+    from sweepx.tasks.wavelet.sweep_torch import save_wavelet_outputs
 
     nt, dt = 256, 0.002
     wavelet = np.zeros(nt, dtype=np.float32)

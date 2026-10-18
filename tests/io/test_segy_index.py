@@ -12,14 +12,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.segy import (
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
     FORMAT_IEEE_FLOAT32,
     write_segy_minimal,
 )
-from sweep_io.segy_index import (
+from sweepx.io.segy_index import (
     SEGY_REV1_BYTES,
     SEGYIndex,
     build_segy_index,
@@ -221,7 +221,7 @@ def test_indexed_dataset_to_physical_geometry(tmp_path):
 
 def test_indexed_dataset_with_prefetch(tmp_path):
     """Glue test: IndexedShotGatherDataset wraps cleanly with the Prefetcher."""
-    from sweep_io.prefetch import Prefetcher
+    from sweepx.io.prefetch import Prefetcher
     p = _write_fixture(tmp_path, nshots=4, nrec=3, nt=16, shot_id_start=100)
     idx = build_segy_index([p], num_workers=1)
     ds = IndexedShotGatherDataset(idx)

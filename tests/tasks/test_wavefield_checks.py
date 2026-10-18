@@ -20,11 +20,11 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from sweep_tasks import TaskRunner, WavefieldSpec, load_task, new_template
-from sweep_tasks._helpers.geometry import _build_geometry
-from sweep_tasks._helpers.util import _nonfinite_summary, _raise_if_nonfinite
-from sweep_tasks.schemas import ExplicitGeometry, LineGeometry
-from sweep_tasks.yaml_io import _read_bundled_template
+from sweepx.tasks import TaskRunner, WavefieldSpec, load_task, new_template
+from sweepx.tasks._helpers.geometry import _build_geometry
+from sweepx.tasks._helpers.util import _nonfinite_summary, _raise_if_nonfinite
+from sweepx.tasks.schemas import ExplicitGeometry, LineGeometry
+from sweepx.tasks.yaml_io import _read_bundled_template
 
 
 def _write(spec_dict, path: Path) -> Path:
@@ -136,7 +136,7 @@ def test_new_template_wavefield_refuses_backend_c():
 
 
 def test_cli_new_wavefield_refuses_backend_c(capsys):
-    from sweep_tasks.cli import main
+    from sweepx.tasks.cli import main
     assert main(["new", "wavefield", "--backend", "c"]) == 2
     assert "eager-only" in capsys.readouterr().out
 
@@ -197,7 +197,7 @@ def test_template_explicit_geometry_is_x_z(template, src_z, rec_z):
 def test_grid_geometry_points_are_xyz_y_fastest():
     """``kind: grid`` points are (x, y, z), enumerated x-major with y varying
     fastest (the order existing shot lists and obs files rely on)."""
-    from sweep_tasks.schemas import GridGeometry
+    from sweepx.tasks.schemas import GridGeometry
     gs = {"x": {"start": 0, "stop": 3, "step": 1},
           "y": {"start": 0, "stop": 2, "step": 1}, "depth": 1}
     sources, _ = _build_geometry(GridGeometry(sources=gs, receivers=gs),

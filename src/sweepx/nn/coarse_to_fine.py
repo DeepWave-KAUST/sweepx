@@ -1,6 +1,6 @@
 """Coarse-to-fine level masking for the multi-resolution hash encoder.
 
-Wraps :class:`~sweep_nn.hash_encoding.MultiResHashGrid` with a per-level soft
+Wraps :class:`~sweepx.nn.hash_encoding.MultiResHashGrid` with a per-level soft
 mask so the fine (high-resolution) levels can be frozen early in FWI and
 progressively unfrozen — recover the low-wavenumber background first, add
 high-wavenumber detail later. This mirrors classical multiscale FWI on the

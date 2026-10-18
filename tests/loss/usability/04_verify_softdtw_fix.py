@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import sweep_loss as sl
+import sweepx.loss as sl
 
 
 HERE = Path(__file__).resolve().parent

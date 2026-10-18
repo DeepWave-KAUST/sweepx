@@ -4,11 +4,11 @@ from pathlib import Path
 
 # The packages run_meta.json records: import name -> distribution name.
 _RECORDED_PACKAGES = (
-    ("sweep_tasks", "sweep-tasks"),
-    ("sweep_nn", "sweep-nn"),
-    ("sweep_io", "sweep-io"),
+    ("sweepx.tasks", "sweep-tasks"),
+    ("sweepx.nn", "sweep-nn"),
+    ("sweepx.io", "sweep-io"),
     ("sweep", "sweep-solver"),
-    ("sweep_loss", "sweep-loss"),
+    ("sweepx.loss", "sweep-loss"),
     ("torch", "torch"),
     ("numpy", "numpy"),
 )
@@ -365,7 +365,7 @@ def _capture_launch_env() -> dict:
     #     is dd._dd_config — the exact reader the runner uses at launch, so
     #     this stays correct if that env contract ever changes. ---
     try:
-        from sweep_tasks._helpers.dd import _dd_config
+        from sweepx.tasks._helpers.dd import _dd_config
         dd_on, py, px, render_chunk = _dd_config()
     except Exception:  # noqa: BLE001 -- fall back to raw env
         dd_on = os.environ.get("SWEEP_DD_ENABLE") == "1"
@@ -439,14 +439,14 @@ def _launch_env_header(info: dict) -> str:
         L += ["# Reproduce the launch:",
               f"#   SWEEP_DD_ENABLE=1 SWEEP_DD_PY={dd['py']} SWEEP_DD_PX={dd['px']} \\",
               "#   torchrun --nnodes=<N> --nproc-per-node=<gpus-per-node> \\",
-              "#            -m sweep_tasks run config_resolved.yaml",
+              "#            -m sweepx.tasks run config_resolved.yaml",
               f"#   (single-node shortcut: sweep-tasks run --dd-py {dd['py']}"
               f" --dd-px {dd['px']} config_resolved.yaml)"]
     elif td.get("initialized") and int(td.get("world_size") or 1) > 1:
         w = td.get("world_size")
         L += [f"# Shot-parallel torchrun: world_size={w}"
               f" backend={td.get('backend')} (no domain decomposition)",
-              f"#   torchrun --nproc-per-node={w} -m sweep_tasks run config_resolved.yaml"]
+              f"#   torchrun --nproc-per-node={w} -m sweepx.tasks run config_resolved.yaml"]
     else:
         L.append("# Single-process run (no torch.distributed / DD).")
     if sl:

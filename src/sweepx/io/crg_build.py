@@ -20,7 +20,7 @@ Pipeline (sweep-tasks self-contained, no dependency on the legacy
 
 Output schema matches the legacy ``crg_fwi_plan_v1``, so files produced
 by this builder are drop-in for any consumer of
-:func:`sweep_io.crg_plan.load_crg_shot_plan_cache`.
+:func:`sweepx.io.crg_plan.load_crg_shot_plan_cache`.
 
 The CLI front-end lives in ``sweep-tasks/cli.py`` as the
 ``sweep-tasks build-crg-plan`` subcommand.
@@ -60,7 +60,7 @@ def build_crg_plan_from_index(
     ----------
     index
         Loaded :class:`SEGYIndex` over all source-line SEG-Y files. Built
-        by :func:`sweep_io.segy_index.build_segy_index`.
+        by :func:`sweepx.io.segy_index.build_segy_index`.
     receiver_quantize_m
         Cell size (m) for receiver position quantisation.
     receiver_stride
@@ -245,7 +245,7 @@ def build_crg_plan_from_index(
 def save_crg_plan(plan: CRGPlan, path: str | Path) -> Path:
     """Write a :class:`CRGPlan` to disk in the ``crg_fwi_plan_v1`` schema.
 
-    Symmetric with :func:`sweep_io.crg_plan.load_crg_shot_plan_cache`;
+    Symmetric with :func:`sweepx.io.crg_plan.load_crg_shot_plan_cache`;
     files written here load back identically (modulo path remapping via
     ``FWI_SEGY_ROOT`` / ``FWI_SEGY_REMAP``).
     """
@@ -499,12 +499,12 @@ def build_crg_plan_from_segy(
 ) -> "CRGPlan | None":
     """End-to-end: scan raw SEG-Y headers, then group into a :class:`CRGPlan`.
 
-    Convenience wrapper around :func:`sweep_io.segy_index.build_segy_index`
+    Convenience wrapper around :func:`sweepx.io.segy_index.build_segy_index`
     (parallel header scan) followed by :func:`build_crg_plan_from_index`
     (receiver grouping + sub-sampling).
 
     Parameters mirror both helpers. See
-    :func:`sweep_io.segy_index.build_segy_index` for the SEG-Y header
+    :func:`sweepx.io.segy_index.build_segy_index` for the SEG-Y header
     knobs (``byte_map``, ``source_depth_m_override`` etc.) and the
     arguments of :func:`build_crg_plan_from_index` for the receiver-side
     knobs.

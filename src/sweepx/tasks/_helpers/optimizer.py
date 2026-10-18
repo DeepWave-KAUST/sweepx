@@ -77,13 +77,13 @@ def _build_reparam_optimizer(opt_spec, net_params, lr: float):
 
 
 def _build_scheduler(sched_spec, optimizer, total_epochs):
-    """Dispatch the LR scheduler via `sweep_tasks.runtime.scheduler.build`.
+    """Dispatch the LR scheduler via `sweepx.tasks.runtime.scheduler.build`.
 
     The runner's `build()` accepts any object with the right `kind` +
     field attributes, so our Pydantic `Scheduler*` discriminated union
     plugs in directly without conversion.
     """
-    from sweep_tasks.runtime.scheduler import build as build_scheduler
+    from sweepx.tasks.runtime.scheduler import build as build_scheduler
     return build_scheduler(sched_spec, optimizer, total_epochs)
 
 
@@ -124,7 +124,7 @@ def _bind_stage_scheduler(sched_spec, optimizer, total_epochs, epoch, *,
     if sched_spec.kind == "constant":
         return None
     import math
-    from sweep_tasks.runtime.scheduler import lr_at
+    from sweepx.tasks.runtime.scheduler import lr_at
     for group in optimizer.param_groups:
         group["initial_lr"] = group["lr"]     # the stage's base lr
     scheduler = _build_scheduler(sched_spec, optimizer, total_epochs)

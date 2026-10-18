@@ -6,9 +6,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
-from sweep_agent.llm.base import BaseLLM, ChatMessage
-from sweep_agent.prompts import build_system_prompt
-from sweep_agent.tools import Registry, registry as default_registry
+from sweepx.agent.llm.base import BaseLLM, ChatMessage
+from sweepx.agent.prompts import build_system_prompt
+from sweepx.agent.tools import Registry, registry as default_registry
 
 # Big tool-result fields that must NOT be echoed back into the conversation —
 # the LLM already has the path it needs; keeping the full nested dict around
@@ -171,7 +171,7 @@ class Agent:
         # *hallucinates* a call to a tool it was never given — e.g. asking for an
         # elastic wavefield makes it invent `animate_wavefield`, which is gated out
         # on a base install. That tool is still in the registry, so running it
-        # anyway leaks a cryptic "sweep_tasks not importable" traceback. Only run
+        # anyway leaks a cryptic "sweepx.tasks not importable" traceback. Only run
         # what was actually offered.
         exposed_names = {s["function"]["name"] for s in tool_specs}
         call_counts: dict[str, int] = {}
@@ -227,7 +227,7 @@ class Agent:
                     result_json = json.dumps({
                         "error": (
                             f"'{call.name}' is not an available tool in this installation "
-                            f"(it may require the unreleased sweep_tasks tier, which is not present). "
+                            f"(it may require the unreleased sweepx.tasks tier, which is not present). "
                             f"Do not call it again. Available tools: {sorted(exposed_names)}."
                         )
                     }, ensure_ascii=False)

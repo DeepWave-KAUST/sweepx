@@ -1,4 +1,4 @@
-"""Unit tests for :func:`sweep_io.wavelet.load_wavelet_npz`."""
+"""Unit tests for :func:`sweepx.io.wavelet.load_wavelet_npz`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.wavelet import WaveletNPZ, load_wavelet_npz
+from sweepx.io.wavelet import WaveletNPZ, load_wavelet_npz
 
 
 def _save(tmp_path: Path, name: str, **arrays) -> Path:

@@ -1,4 +1,4 @@
-"""Tests for :func:`sweep_tasks.preproc.filter.bandpass_torch`."""
+"""Tests for :func:`sweepx.tasks.preproc.filter.bandpass_torch`."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from sweep_tasks.preproc.filter import bandpass, bandpass_torch
+from sweepx.tasks.preproc.filter import bandpass, bandpass_torch
 
 
 def _ricker(nt: int, dt: float, fm: float, delay: float) -> np.ndarray:

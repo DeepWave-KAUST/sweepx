@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.LBFGSB."""
+"""Tests for sweepx.opt.optim.LBFGSB."""
 import pytest
 import torch
 
-from sweep_opt.optim import LBFGSB
+from sweepx.opt.optim import LBFGSB
 
 
 def _run(opt, closure, n_iters):

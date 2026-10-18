@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.TruncatedNewton."""
+"""Tests for sweepx.opt.optim.TruncatedNewton."""
 import pytest
 import torch
 
-from sweep_opt.optim import LBFGS, TruncatedNewton
+from sweepx.opt.optim import LBFGS, TruncatedNewton
 
 
 def _make_loss_fn(f, x):

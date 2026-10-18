@@ -21,7 +21,7 @@ pip install -e .[dev]     # docs + test + ruff + black
 ## Verifying the install
 
 ```bash
-python -c "import sweep_opt; print(sweep_opt.__version__)"
+python -c "import sweepx.opt; print(sweepx.opt.__version__)"
 pytest -q
 mkdocs build --strict
 ```

@@ -109,10 +109,10 @@ def main():
     os.environ["SWEEP_DUMP_GRAD"] = "1"          # rank 0, epoch 0
     os.environ["SWEEP_DUMP_DIR"] = str(out)
 
-    import sweep_tasks
-    import sweep_tasks.tasks.fwi_plan_streaming as ps
+    import sweepx.tasks
+    import sweepx.tasks.tasks.fwi_plan_streaming as ps
     from sweep.propagator.torch import PropTorch
-    from sweep_tasks import TaskRunner, load_task
+    from sweepx.tasks import TaskRunner, load_task
 
     seen, opts, nets = [], [], []
     for name in ("_build_optimizer", "_build_reparam_optimizer"):
@@ -148,7 +148,7 @@ def main():
         model = opts[-1].param_groups[0]["params"][0].detach().cpu().numpy()
         params = np.zeros(0, dtype=np.float32)
     np.savez(out / f"rank{rank}.npz", model=model, params=params,
-             tree=sweep_tasks.__file__, task_dir=str(result.task_dir),
+             tree=sweepx.tasks.__file__, task_dir=str(result.task_dir),
              **{f"seen{i}": s for i, s in enumerate(seen)})
 
 

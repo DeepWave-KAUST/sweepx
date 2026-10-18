@@ -10,8 +10,8 @@ import struct
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import FrequencyComb, _comb_kernel
-from sweep_tasks.preproc.segy_coeff import (
+from sweepx.tasks.freqsel import FrequencyComb, _comb_kernel
+from sweepx.tasks.preproc.segy_coeff import (
     BoxGrid, SegyLayout, TopMute, decode_ibm32, extract_coeff_from_segy,
     filter_by_manifest, source_bbox_manifest)
 
@@ -151,7 +151,7 @@ def test_npart_partitions_nodes(tmp_path):
 
 def test_node_part_is_balanced_on_a_grid():
     """规则网格上的分片必须均衡 —— 这正是 uid % npart 退化的场景。"""
-    from sweep_tasks.preproc.segy_coeff import _node_uid, node_part
+    from sweepx.tasks.preproc.segy_coeff import _node_uid, node_part
     gx, gy = np.meshgrid(np.arange(40) * 250.0, np.arange(25) * 250.0)
     uid = _node_uid(gx.ravel(), gy.ravel(), 0.1)
     for npart in (2, 3, 4):
@@ -209,7 +209,7 @@ def test_manifest_keeps_unknown_files(tmp_path):
 
 def test_cli_extract_coeff_segy(tmp_path):
     """子命令端到端: 与直接调 API 的输出逐位相同, 且 manifest 会被建出来。"""
-    from sweep_tasks.cli import main
+    from sweepx.tasks.cli import main
 
     box, paths, tr, s, g = _case(tmp_path, n_files=3, per_file=5, out_of_box=1)
     comb = _comb()
@@ -236,7 +236,7 @@ def test_cli_extract_coeff_segy(tmp_path):
 
 
 def test_cli_rejects_empty_glob(tmp_path):
-    from sweep_tasks.cli import main
+    from sweepx.tasks.cli import main
     assert main(["extract-coeff-segy", "--segy", str(tmp_path / "none*.sgy"),
                  "-o", str(tmp_path / "x.npz"), "--nt", "8", "--n-p", "64",
                  "--k-lo", "2", "--k-hi", "5", "--dt-solver", "0.004",

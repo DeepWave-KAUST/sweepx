@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import torch
 
-from sweep_loss import (
+from sweepx.loss import (
     AWILoss,
     CauchyLoss,
     CrossCorrelationTraveltimeLoss,
@@ -58,7 +58,7 @@ from sweep_loss import (
 
 try:
     import scipy  # noqa: F401
-    from sweep_loss import GSOTLoss
+    from sweepx.loss import GSOTLoss
     HAS_SCIPY = True
 except ImportError:  # pragma: no cover
     HAS_SCIPY = False

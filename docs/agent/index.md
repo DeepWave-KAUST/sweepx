@@ -8,7 +8,7 @@ what you want in plain language and a **local** LLM turns it into a validated
 > LLM turns that into a validated `sweep` task and runs it.
 
 Installed with `pip install sweep-agent` (also bundled by `pip install sweepx`)
-→ `import sweep_agent`.
+→ `import sweepx.agent`.
 
 ## How it works
 
@@ -26,7 +26,7 @@ user (natural language + files)
             · run_forward_sweep · build_fwi_spec · run_task · plot_* · ...
             │
             ├─ discovery / modelling  ──►  sweep                    (core solver)
-            └─ build + execute + viz  ──►  sweep_tasks.TaskRunner   (production runner)
+            └─ build + execute + viz  ──►  sweepx.tasks.TaskRunner   (production runner)
 ```
 
 Tools import the geophysics stack **lazily** — a missing layer returns a clear

@@ -181,7 +181,7 @@ class MultiResHashGrid(nn.Module):
         pos = pos.reshape(-1, self.dim)
         if self.backend == "triton":
             # Fused GPU path: numerically matches the PyTorch branch (cos=1.0) with
-            # ~7-20x less encoder memory. See sweep_nn.triton_hash_encoding.
+            # ~7-20x less encoder memory. See sweepx.nn.triton_hash_encoding.
             from .triton_hash_encoding import triton_encode
 
             out = triton_encode(

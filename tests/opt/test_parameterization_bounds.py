@@ -1,7 +1,7 @@
 """Tests for parameterization bounds."""
 import torch
 
-from sweep_opt.parameterization import (
+from sweepx.opt.parameterization import (
     IdentityParameterization,
     LogVelocity,
     PerturbationFromBackground,

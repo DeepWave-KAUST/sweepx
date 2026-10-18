@@ -19,8 +19,8 @@ import torch.optim.optimizer as _toptim
 import yaml
 from pydantic import TypeAdapter
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks.schemas import TaskSpec
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks.schemas import TaskSpec
 
 _REPARAM = {"kind": "velocity_inr", "hidden_features": 16, "hidden_layers": 1,
             "hash": {"enabled": False}, "lr": 1.0e-4}
@@ -118,7 +118,7 @@ def test_freqsel_rejects_lr_scale_under_reparam():
 def test_freqsel_resolved_config_reruns(tmp_path):
     """Every optimizer field written out at its default, every stage scale:
     the record a reparam ladder leaves behind has to load as itself."""
-    from sweep_tasks._helpers.metadata import _dump_run_metadata
+    from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
     stages = [{"epochs": 1}, {"epochs": 1, "inr_lr_scale": 0.5}]
     spec = _validate(_doc(reparam=_REPARAM, stages=stages))

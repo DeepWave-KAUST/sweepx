@@ -4,7 +4,7 @@ Two layers:
   - ``test_build_forward_spec_offline``: pure schema check, no torch / sweep run.
   - ``test_forward_endtoend_cpu``: tiny eager-backend run on CPU; ~1-5 seconds.
 
-Requires ``sweep_tasks`` to be importable (it is in the ifwitorch env). The
+Requires ``sweepx.tasks`` to be importable (it is in the ifwitorch env). The
 end-to-end test will be skipped automatically if ``sweep`` itself is not
 available.
 """
@@ -18,9 +18,9 @@ from typing import Any, Iterable
 import numpy as np
 import pytest
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.base import BaseLLM, ChatMessage, ToolCall
-from sweep_agent.tools import registry
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.base import BaseLLM, ChatMessage, ToolCall
+from sweepx.agent.tools import registry
 
 
 class FakeLLM(BaseLLM):
@@ -46,7 +46,7 @@ class FakeLLM(BaseLLM):
 # ---------------------------------------------------------------------------
 
 def test_build_forward_spec_offline(tmp_path):
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp_path = tmp_path / "vp_tiny.npy"
     np.save(vp_path, np.full((32, 40), 1800.0, dtype=np.float32))
     out_root = tmp_path / "runs"
@@ -87,7 +87,7 @@ def test_build_forward_spec_offline(tmp_path):
 @pytest.mark.timeout(120)
 def test_forward_endtoend_cpu(tmp_path):
     sweep = pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
 
     vp_path = tmp_path / "vp_tiny.npy"
     np.save(vp_path, np.full((32, 40), 1800.0, dtype=np.float32))

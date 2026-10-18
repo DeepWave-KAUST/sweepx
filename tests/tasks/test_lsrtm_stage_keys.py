@@ -13,8 +13,8 @@ import pydantic
 import pytest
 import yaml
 
-import sweep_tasks
-from sweep_tasks.schemas import LSRTMSpec, StageSpec
+import sweepx.tasks
+from sweepx.tasks.schemas import LSRTMSpec, StageSpec
 
 _READ = ("epochs", "lr_scale", "wavelet")
 # Per key: a value LSRTM would have ignored, and the schema default.
@@ -60,7 +60,7 @@ def test_lsrtm_refuses_a_stage_key_it_does_not_read(key):
 
 
 def test_lsrtm_template_stage_example_uses_only_keys_lsrtm_reads():
-    path = Path(sweep_tasks.__file__).parent / "templates" / "lsrtm.yaml"
+    path = Path(sweepx.tasks.__file__).parent / "templates" / "lsrtm.yaml"
     lines = path.read_text().splitlines()
     start = lines.index("# stages:") + 1
     example = [line[1:] for line in

@@ -51,7 +51,7 @@ init_model:                   # 1-D cold start, built in memory — Step 4 of th
 # The water column the network renders at 1485.6 m/s instead of inverting:
 # the flat 350 m of the start (rows 0-27), within 1-3 cells of the seabed
 # measured from the seabed reflection (343-372 m). A per-trace seabed .npz
-# (sweep_tasks.bathymetry) would follow the real bathymetry instead.
+# (sweepx.tasks.bathymetry) would follow the real bathymetry instead.
 water:
   seabed: 350.0
   velocity: 1485.6

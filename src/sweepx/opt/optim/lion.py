@@ -23,7 +23,7 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import iter_params
+from sweepx.opt._utils import iter_params
 
 
 class Lion(Optimizer):

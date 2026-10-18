@@ -1,6 +1,6 @@
 """``build_forward_spec`` — turn flat LLM-friendly arguments into a ForwardSpec.
 
-The full ``sweep_tasks.ForwardSpec`` schema is wide and deeply nested; small
+The full ``sweepx.tasks.ForwardSpec`` schema is wide and deeply nested; small
 local models hallucinate field names. We expose a flat surface here that covers
 ~90% of forward-modelling needs and forwards the long-tail via ``extra``
 (deep-merged into the spec dict before validation). The result is a real,
@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -123,7 +123,7 @@ def _resolve_models(p: BuildForwardParams) -> tuple[list[dict[str, Any]], dict[s
     """
     extra = p.extra_models or {}
     try:
-        from sweep_agent.tools.introspect import all_equations
+        from sweepx.agent.tools.introspect import all_equations
         eqs = all_equations()
     except Exception:
         eqs = None
@@ -171,7 +171,7 @@ def _resolve_models(p: BuildForwardParams) -> tuple[list[dict[str, Any]], dict[s
         # If those extras are exactly some equation's non-primary inputs, steer
         # the model to SWITCH equation rather than drop the models.
         try:
-            from sweep_agent.tools.introspect import equations_for_models
+            from sweepx.agent.tools.introspect import equations_for_models
             matches = equations_for_models(set(extra.keys()))
         except Exception:
             matches = []
@@ -202,7 +202,7 @@ def _physics_source_fields(equation: str, source_type: Any, receiver_type: Any, 
     src_t, rec_t = source_type, receiver_type
     if src_t is None or rec_t is None:
         try:
-            from sweep_agent.tools.introspect import equation_default_fields
+            from sweepx.agent.tools.introspect import equation_default_fields
             dsf, drf = equation_default_fields(equation)
             if src_t is None and dsf:
                 src_t = dsf
@@ -213,7 +213,7 @@ def _physics_source_fields(equation: str, source_type: Any, receiver_type: Any, 
     pml = pml_type
     if pml is None:
         try:
-            from sweep_agent.tools.introspect import equation_default_pml
+            from sweepx.agent.tools.introspect import equation_default_pml
             pml = equation_default_pml(equation)
         except Exception:
             pass
@@ -302,7 +302,7 @@ def _maybe_upgrade_3d(equation: str, ndim: int) -> tuple[str, str | None]:
     if ndim != 3 or equation.endswith("3D"):
         return equation, None
     try:
-        from sweep_agent.tools.introspect import all_equations
+        from sweepx.agent.tools.introspect import all_equations
         eqs = all_equations()
     except Exception:
         return equation, None  # can't introspect — trust caller
@@ -400,7 +400,7 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
 @register(
     name="build_forward_spec",
     description=(
-        "Construct a validated sweep_tasks.ForwardSpec for a 2-D / 3-D forward modelling run. "
+        "Construct a validated sweepx.tasks.ForwardSpec for a 2-D / 3-D forward modelling run. "
         "Returns the spec as a dict, the YAML path it was written to, and a human summary. "
         "ALWAYS call `inspect_file` on the velocity model first to learn its shape/dtype, then "
         "pick dh/dt/nt/fm consistent with CFL and pts-per-wavelength constraints. The default "
@@ -413,12 +413,12 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
     params_model=BuildForwardParams,
 )
 def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
-    # Import lazily so the package keeps importing without sweep_tasks installed.
+    # Import lazily so the package keeps importing without sweepx.tasks installed.
     try:
-        from sweep_tasks.schemas import ForwardSpec
-        from sweep_tasks import dump_task
+        from sweepx.tasks.schemas import ForwardSpec
+        from sweepx.tasks import dump_task
     except ImportError as exc:
-        return {"error": f"sweep_tasks is not importable: {exc}"}
+        return {"error": f"sweepx.tasks is not importable: {exc}"}
 
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:

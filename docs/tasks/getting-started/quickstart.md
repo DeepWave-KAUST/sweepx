@@ -66,7 +66,7 @@ sweep-tasks run task.yaml
 ```
 
 ```python
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 
 spec = load_task("task.yaml")
 result = TaskRunner().run(spec)

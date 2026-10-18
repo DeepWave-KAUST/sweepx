@@ -1,6 +1,6 @@
 # Lion
 
-`sweep_opt.optim.Lion` is the **sign-momentum** optimizer of Chen et al.
+`sweepx.opt.optim.Lion` is the **sign-momentum** optimizer of Chen et al.
 (2023). It uses the sign of a momentum-blended gradient as the update
 direction:
 
@@ -20,7 +20,7 @@ inverse problems; sweep-opt ships it for FWI experiments.
 ## API
 
 ```python
-sweep_opt.optim.Lion(
+sweepx.opt.optim.Lion(
     params,
     lr=1e-4,                # use a 3-10x smaller lr than Adam
     *,

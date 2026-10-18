@@ -1,14 +1,14 @@
 """Smoke test that the package imports and fixtures load."""
-import sweep_opt
+import sweepx.opt
 
 
 def test_package_importable():
-    assert sweep_opt.__version__ == "0.1.0"
-    assert hasattr(sweep_opt, "optim")
-    assert hasattr(sweep_opt, "precond")
-    assert hasattr(sweep_opt, "parameterization")
-    assert hasattr(sweep_opt, "linalg")
-    assert hasattr(sweep_opt, "linesearch")
+    assert sweepx.opt.__version__ == "0.1.0"
+    assert hasattr(sweepx.opt, "optim")
+    assert hasattr(sweepx.opt, "precond")
+    assert hasattr(sweepx.opt, "parameterization")
+    assert hasattr(sweepx.opt, "linalg")
+    assert hasattr(sweepx.opt, "linesearch")
 
 
 def test_fixtures_quadratic_2d_exist(quadratic_2d):

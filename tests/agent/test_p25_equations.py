@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _save(path, value, shape=(32, 40)):
@@ -39,7 +39,7 @@ def test_list_equations_filter():
 
 def test_build_rejects_unknown_equation(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _save(tmp_path / "vp.npy", 1800.0)
     res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 50,
@@ -53,7 +53,7 @@ def test_build_rejects_unknown_equation(tmp_path):
 
 def test_build_reports_missing_models(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _save(tmp_path / "vp.npy", 1800.0)
     res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 50,
@@ -66,7 +66,7 @@ def test_build_reports_missing_models(tmp_path):
 
 def test_build_rejects_unneeded_models(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _save(tmp_path / "vp.npy", 1800.0)
     rho = _save(tmp_path / "rho.npy", 1000.0)
     res = registry.get("build_forward_spec").invoke({
@@ -80,7 +80,7 @@ def test_build_rejects_unneeded_models(tmp_path):
 
 def test_build_multimodel_vti_ordered(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _save(tmp_path / "vp.npy", 1800.0)
     eps = _save(tmp_path / "eps.npy", 0.05)
     dlt = _save(tmp_path / "dlt.npy", 0.03)
@@ -101,7 +101,7 @@ def test_build_multimodel_vti_ordered(tmp_path):
 @pytest.mark.timeout(180)
 def test_vti_forward_endtoend_cpu(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = _save(tmp_path / "vp.npy", 1800.0)
     eps = _save(tmp_path / "eps.npy", 0.05)
     dlt = _save(tmp_path / "dlt.npy", 0.03)

@@ -1,4 +1,4 @@
-"""Unit tests for :class:`sweep_io.geometry.RotatedFrame` + JSON loader."""
+"""Unit tests for :class:`sweepx.io.geometry.RotatedFrame` + JSON loader."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.geometry import (
+from sweepx.io.geometry import (
     PhysicalGeometry,
     RotatedFrame,
     load_rotation_metadata,

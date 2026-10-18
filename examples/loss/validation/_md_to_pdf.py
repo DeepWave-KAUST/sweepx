@@ -55,7 +55,7 @@ HTML_TEMPLATE = """<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>sweep_loss formula-level validation report</title>
+<title>sweepx.loss formula-level validation report</title>
 <style>{css}</style>
 </head>
 <body>

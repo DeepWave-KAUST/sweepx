@@ -8,7 +8,7 @@ snapshots.npy and no figure at all.
 import numpy as np
 import pytest
 
-from sweep_tasks._helpers.plotting import _plot_wavefield_snapshots
+from sweepx.tasks._helpers.plotting import _plot_wavefield_snapshots
 
 
 def _snaps2d(nsnap=2, nz=40, nx=90, abcn=5, free_surface=False):

@@ -20,7 +20,7 @@ def _load_segy_single_file_payload(
     ``FromSegyGeometry`` flow through this helper, so when both reference the
     same file the runner reads it once.
     """
-    from sweep_io.segy_index import (
+    from sweepx.io.segy_index import (
         build_segy_index,
         IndexedShotGatherDataset,
     )
@@ -77,7 +77,7 @@ def _load_seismic_plan_payload(
 
     * ``obs.plan.sampling`` set → the per-iter plan-streaming sampler in
       :meth:`TaskRunner._run_fwi_plan_streaming`, which calls
-      :func:`sweep_io.seismic_plan.sample_shared_shots_from_plan` +
+      :func:`sweepx.io.seismic_plan.sample_shared_shots_from_plan` +
       :meth:`PlanReader.read_rows` directly.
     * ``obs.plan.sampling`` unset → :func:`plan_materialize.
       materialize_plan_dataset`, which builds a static reciprocal dataset
@@ -90,8 +90,8 @@ def _load_seismic_plan_payload(
     ``geometry_only=True`` and ``geometry_only=False`` are distinct so a
     subsequent eager-obs lookup still triggers a full load.
     """
-    from sweep_io.seismic_plan import SeismicPlan, PlanReader
-    from sweep_io.geometry import PhysicalGeometry
+    from sweepx.io.seismic_plan import SeismicPlan, PlanReader
+    from sweepx.io.geometry import PhysicalGeometry
 
     plan_path = Path(plan_path)
     key = ("seismic_plan", str(plan_path.resolve()), bool(cache_all),
@@ -191,14 +191,14 @@ def _load_segy_index_payload(
     a single ``(nshots, nrec, nt)`` tensor.
 
     ``lazy=True``: same final layout, but each shot is read by a background
-    :class:`sweep_io.prefetch.Prefetcher` worker — useful when SEG-Y access
+    :class:`sweepx.io.prefetch.Prefetcher` worker — useful when SEG-Y access
     is slow (network mount, cold cache) so the GIL-releasing I/O overlaps
     with whatever the consumer is doing at task-start. True per-step
     streaming during training is a future task: the dataset object is built
     but the materialised tensor is still what the train loop indexes.
     """
-    from sweep_io.segy_index import SEGYIndex, IndexedShotGatherDataset
-    from sweep_io.prefetch import Prefetcher
+    from sweepx.io.segy_index import SEGYIndex, IndexedShotGatherDataset
+    from sweepx.io.prefetch import Prefetcher
 
     key = (str(Path(index_path).resolve()), tuple(shot_ids) if shot_ids else None,
            bool(lazy), int(coalesce_gap))

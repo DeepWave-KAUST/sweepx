@@ -1,4 +1,4 @@
-"""Bit-for-bit parity of sweep_opt.optim.SOAP with the official implementation.
+"""Bit-for-bit parity of sweepx.opt.optim.SOAP with the official implementation.
 
 The reference is a verbatim copy of https://github.com/nikhilvyas/SOAP
 (commit a1e5535) in tests/_reference/soap_official.py. Both optimizers get the
@@ -13,7 +13,7 @@ import pathlib
 import pytest
 import torch
 
-from sweep_opt.optim import SOAP
+from sweepx.opt.optim import SOAP
 
 _REF_PATH = pathlib.Path(__file__).parent / "_reference" / "soap_official.py"
 _REF_SHA256 = "9e9021335ad02371584622fa256e73fe75f3eb74446a8d8a216e956534148f6b"

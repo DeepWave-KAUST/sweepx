@@ -17,15 +17,15 @@ from pathlib import Path
 
 import numpy as np
 
-from sweep_io.prefetch import Prefetcher
-from sweep_io.segy import (
+from sweepx.io.prefetch import Prefetcher
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
     write_segy_minimal,
 )
-from sweep_io.segy_index import SEGY_REV1_BYTES, build_segy_index
-from sweep_io.seismic_plan import PlanReader, SeismicPlan
+from sweepx.io.segy_index import SEGY_REV1_BYTES, build_segy_index
+from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
 
 def write_demo_segy(path: Path, nshots: int = 3, nrec: int = 48, nt: int = 500,

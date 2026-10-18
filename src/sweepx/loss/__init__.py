@@ -1,4 +1,4 @@
-"""sweep_loss - a PyTorch library of FWI misfit functions.
+"""sweepx.loss - a PyTorch library of FWI misfit functions.
 
 The package exposes every loss as a ``torch.nn.Module`` so it can be plugged
 into any FWI training loop. The canonical tensor shape is
@@ -13,7 +13,7 @@ Public API
 ``BaseFWILoss``  - common base class with reduction / masking / shape handling.
 
 Each loss is also re-exported at the top level once it has been implemented,
-e.g. ``from sweep_loss import L2Loss``.
+e.g. ``from sweepx.loss import L2Loss``.
 """
 
 from __future__ import annotations

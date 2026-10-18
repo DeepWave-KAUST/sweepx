@@ -7,13 +7,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 @pytest.mark.timeout(240)
 def test_compare_equation_wavefields(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     sh = (40, 56)
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full(sh, 2500.0, dtype=np.float32))
@@ -37,7 +37,7 @@ def test_compare_equation_wavefields(tmp_path):
 def test_compare_equation_missing_model(tmp_path):
     """AcousticVTI needs epsilon/delta — empty pool must error before running."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((40, 56), 2500.0, dtype=np.float32))
     res = registry.get("compare_equation_wavefields").invoke({

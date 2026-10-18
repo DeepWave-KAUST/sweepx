@@ -60,7 +60,7 @@ wavelet:
 #                          from_segy_index | from_plan
 
 geometry:
-  kind: from_plan                   # sweep_io SeismicPlan (from `build-plan`)
+  kind: from_plan                   # sweepx.io SeismicPlan (from `build-plan`)
   plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
   dedupe: true                      # snap to grid + drop same-cell duplicates
   dedup_method: nearest             # "nearest" | "first"
@@ -93,7 +93,7 @@ geometry:
 #   dedupe: true
 #   dedup_method: nearest
 # geometry:
-#   kind: from_segy_index           # pre-built sweep_io.SEGYIndex (multi-file)
+#   kind: from_segy_index           # pre-built sweepx.io.SEGYIndex (multi-file)
 #   index_path: /path/index.npz
 #   shot_ids: null                  # null = all shots, or [0, 5, 9, ...]
 

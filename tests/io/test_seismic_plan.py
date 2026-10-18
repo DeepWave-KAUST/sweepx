@@ -11,15 +11,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.segy import (
+from sweepx.io.segy import (
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
     FORMAT_IEEE_FLOAT32,
     write_segy_minimal,
 )
-from sweep_io.segy_index import SEGY_REV1_BYTES, build_segy_index
-from sweep_io.seismic_plan import (
+from sweepx.io.segy_index import SEGY_REV1_BYTES, build_segy_index
+from sweepx.io.seismic_plan import (
     SCHEMA_FORMAT,
     PlanReader,
     SeismicPlan,
@@ -180,7 +180,7 @@ def test_crg_plan_group_xyz_round_trip_at_utm_scale(tmp_path):
     multiple of 2^21 * q ≈ 1,048,576 m."""
     import struct
 
-    from sweep_io.segy import (
+    from sweepx.io.segy import (
         SEGY_BIN_HEADER_SIZE,
         SEGY_TEXT_HEADER_SIZE,
         SEGY_TRACE_HEADER_SIZE,
@@ -241,7 +241,7 @@ def test_crg_plan_raises_on_pack_overflow(tmp_path):
     raise a clear error instead of silently corrupting group_xyz."""
     import struct
 
-    from sweep_io.segy import (
+    from sweepx.io.segy import (
         SEGY_BIN_HEADER_SIZE,
         SEGY_TEXT_HEADER_SIZE,
         SEGY_TRACE_HEADER_SIZE,
@@ -569,7 +569,7 @@ def _build_synthetic_crg_plan_with_shared_shots(tmp_path: Path):
 
 def test_sample_shared_shots_basic(tmp_path):
     """Happy path: sample B groups, get the intersection of shots they all saw."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     plan = _build_synthetic_crg_plan_with_shared_shots(tmp_path)
     rng = np.random.default_rng(0)
@@ -597,7 +597,7 @@ def test_sample_shared_shots_basic(tmp_path):
 
 def test_sample_shared_shots_rows_point_to_same_physical_shots(tmp_path):
     """rows[j] across groups must reference the SAME physical shot."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     plan = _build_synthetic_crg_plan_with_shared_shots(tmp_path)
     rng = np.random.default_rng(1)
@@ -622,7 +622,7 @@ def test_sample_shared_shots_rows_point_to_same_physical_shots(tmp_path):
 
 def test_sample_shared_shots_rejects_csg_plan(tmp_path):
     """The sampler only makes sense for grouping='crg'."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     p = _write_synthetic_segy(tmp_path, nshots=2, nrec=4, nt=16)
     idx = build_segy_index([p])
@@ -634,7 +634,7 @@ def test_sample_shared_shots_rejects_csg_plan(tmp_path):
 
 def test_sample_shared_shots_deterministic_under_seed(tmp_path):
     """Same RNG state -> identical batch."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     plan = _build_synthetic_crg_plan_with_shared_shots(tmp_path)
     a = sample_shared_shots_from_plan(plan, np.random.default_rng(42), batch_size=3)
@@ -648,7 +648,7 @@ def test_sample_shared_shots_deterministic_under_seed(tmp_path):
 
 def test_sample_shared_shots_min_coverage_filter(tmp_path):
     """min_coverage drops low-coverage groups before sampling."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     plan = _build_synthetic_crg_plan_with_shared_shots(tmp_path)
     counts = plan.per_group_row_counts()
@@ -667,7 +667,7 @@ def test_sample_shared_shots_min_coverage_filter(tmp_path):
 
 def test_sample_shared_shots_with_read_rows_round_trip(tmp_path):
     """Sampler output + PlanReader.read_rows yields the supershot obs slice."""
-    from sweep_io.seismic_plan import sample_shared_shots_from_plan
+    from sweepx.io.seismic_plan import sample_shared_shots_from_plan
 
     plan = _build_synthetic_crg_plan_with_shared_shots(tmp_path)
     rng = np.random.default_rng(7)
@@ -695,7 +695,7 @@ def test_sample_shared_shots_with_read_rows_round_trip(tmp_path):
 # ============================================================================
 def test_precompute_group_unique_keys_matches_per_call_unique(tmp_path):
     """The precomputed array per group must equal np.unique(_shot_xy_keys)."""
-    from sweep_io.seismic_plan import (
+    from sweepx.io.seismic_plan import (
         _shot_xy_keys,
         precompute_group_unique_keys,
     )
@@ -716,7 +716,7 @@ def test_precompute_group_unique_keys_matches_per_call_unique(tmp_path):
 
 def test_precompute_group_unique_keys_rejects_csg(tmp_path):
     """CRG-only helper — bail out cleanly on CSG plans."""
-    from sweep_io.seismic_plan import precompute_group_unique_keys
+    from sweepx.io.seismic_plan import precompute_group_unique_keys
 
     p = _write_synthetic_segy(tmp_path, nshots=2, nrec=4, nt=16)
     idx = build_segy_index([p])
@@ -733,7 +733,7 @@ def test_sample_shared_shots_precomputed_keys_byte_equivalent(tmp_path):
     set itself or the row look-up. Given identical RNG state, the
     returned ``SharedShotBatch`` must be bit-for-bit identical.
     """
-    from sweep_io.seismic_plan import (
+    from sweepx.io.seismic_plan import (
         precompute_group_unique_keys,
         sample_shared_shots_from_plan,
     )
@@ -759,7 +759,7 @@ def test_sample_shared_shots_precomputed_keys_byte_equivalent(tmp_path):
 
 def test_sample_shared_shots_precomputed_keys_with_subsample(tmp_path):
     """Fast path must stay byte-equivalent with the sub-sampling knobs on."""
-    from sweep_io.seismic_plan import (
+    from sweepx.io.seismic_plan import (
         precompute_group_unique_keys,
         sample_shared_shots_from_plan,
     )

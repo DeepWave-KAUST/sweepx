@@ -36,7 +36,7 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import CrossCorrelationTraveltimeLoss  # noqa: E402
+from sweepx.loss import CrossCorrelationTraveltimeLoss  # noqa: E402
 
 
 NAME = "03_traveltime"
@@ -66,7 +66,7 @@ def run() -> dict:
 
     # (b) Cross-correlation c(tau); reproduce the FFT-based cc used inside
     # the loss for visualisation.
-    from sweep_loss.traveltime import _cross_correlation
+    from sweepx.loss.traveltime import _cross_correlation
 
     syn_f = syn.view(1, nt)
     obs_f = obs.view(1, nt)

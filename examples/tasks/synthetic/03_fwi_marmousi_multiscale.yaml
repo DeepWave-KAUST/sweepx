@@ -141,7 +141,7 @@ stages:
 # does instead of a seabed file: the cells whose centres lie above it -- rows
 # 0-36 of this 12.5 m grid -- are held at 1500 m/s (their gradient zeroed,
 # their value re-stamped after every step). A field task points `seabed:` at
-# an .npz of per-trace depths instead (sweep_tasks.bathymetry).
+# an .npz of per-trace depths instead (sweepx.tasks.bathymetry).
 water:
   seabed: 462.5
   velocity: 1500.0

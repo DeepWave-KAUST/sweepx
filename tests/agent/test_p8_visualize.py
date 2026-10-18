@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _run_wavefield(tmp_path, task_id, snaps=(20, 50, 80)):
@@ -29,7 +29,7 @@ def _run_wavefield(tmp_path, task_id, snaps=(20, 50, 80)):
 @pytest.mark.timeout(180)
 def test_plot_wavefield(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     td = _run_wavefield(tmp_path, "wf")
     res = registry.get("plot_wavefield").invoke({"task_dir": td, "abcn": 10, "snapshot_index": -1})
     assert res.ok and "error" not in res.value, res.value
@@ -39,7 +39,7 @@ def test_plot_wavefield(tmp_path):
 @pytest.mark.timeout(180)
 def test_make_gif(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     td = _run_wavefield(tmp_path, "wf")
     res = registry.get("make_wavefield_gif").invoke({"task_dir": td, "abcn": 10, "fps": 6})
     assert res.ok and "error" not in res.value, res.value
@@ -51,7 +51,7 @@ def test_make_gif(tmp_path):
 def test_gif_path_fallback(tmp_path):
     """Single-task gif tolerates a wrong task_dir by locating the real run."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     td = _run_wavefield(tmp_path, "wf")
     wrong = str(Path(td).parent / "hallucinated-name")
     res = registry.get("make_wavefield_gif").invoke({"task_dir": wrong, "abcn": 10})
@@ -63,7 +63,7 @@ def test_gif_path_fallback(tmp_path):
 def test_compare_rejects_missing(tmp_path):
     """compare must NOT silently fall back — a wrong/forward task_dir errors."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     td = _run_wavefield(tmp_path, "wf")
     res = registry.get("compare_wavefields").invoke({
         "task_dirs": [td, str(Path(td).parent / "nonexistent")],
@@ -75,7 +75,7 @@ def test_compare_rejects_missing(tmp_path):
 @pytest.mark.timeout(240)
 def test_compare_ok(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     td1 = _run_wavefield(tmp_path, "wf1")
     td2 = _run_wavefield(tmp_path, "wf2")
     res = registry.get("compare_wavefields").invoke({

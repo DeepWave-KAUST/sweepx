@@ -287,7 +287,7 @@ class FromSirenPipelineNpzWavelet(_Forbid):
     ``"initial_causal_wavelet"``) and the sample interval (``dt_s`` scalar
     or ``time_s`` array). The runner resamples to the solver's ``dt`` when
     they differ and truncates / zero-pads to length ``time.nt``. Mirrors
-    the loader at :func:`sweep_io.wavelet.load_wavelet_npz`.
+    the loader at :func:`sweepx.io.wavelet.load_wavelet_npz`.
 
     ``explicit_key`` forces one of the listed keys (helpful when the
     container has both an initial and an optimised wavelet and you want
@@ -431,7 +431,7 @@ class FromSegyGeometry(_Forbid):
     the common marine case where the depth bytes are zero.
 
     Physical positions read from the file (meters) are snapped to the FWI
-    grid via :class:`sweep_io.geometry.PhysicalGeometry.to_grid` at
+    grid via :class:`sweepx.io.geometry.PhysicalGeometry.to_grid` at
     ``spec.grid.dh`` (with optional dedupe for coarse grids).
     """
 
@@ -446,10 +446,10 @@ class FromSegyGeometry(_Forbid):
 
 
 class FromSegyIndexGeometry(_Forbid):
-    """Derive sources / receivers from a pre-built :class:`sweep_io.SEGYIndex`.
+    """Derive sources / receivers from a pre-built :class:`sweepx.io.SEGYIndex`.
 
     Use this for multi-file projects (production OBN-scale) where the SEG-Y header
-    catalogue has been built once via ``sweep_io.segy_index.build_segy_index``
+    catalogue has been built once via ``sweepx.io.segy_index.build_segy_index``
     and saved as an ``.npz``. The same index can back :class:`SegyIndexObsSpec`
     for lazy obs loading — see the matching ``obs.kind="segy_index"``.
 
@@ -707,7 +707,7 @@ class DataPlanSpec(_Forbid):
     """Pre-FWI data selection: which shots / receivers / time samples to use.
 
     All fields are optional; omitted ones inherit the full dataset. Maps 1:1
-    to :class:`sweep_io.plan.DataPlan`. Pure positional / sampling logic;
+    to :class:`sweepx.io.plan.DataPlan`. Pure positional / sampling logic;
     signal-processing knobs (filter / mute / wavelet) stay in sweep-preproc.
     """
 
@@ -732,7 +732,7 @@ class DataPlanSpec(_Forbid):
 class ModelPlanSpec(_Forbid):
     """Crop the velocity model to a region of interest; drop out-of-window shots.
 
-    Maps 1:1 to :class:`sweep_io.plan.ModelPlan`. Receivers outside the
+    Maps 1:1 to :class:`sweepx.io.plan.ModelPlan`. Receivers outside the
     window are kept by default (sweep's PML absorbs them) — set
     ``drop_outside_receivers=True`` only if your acquisition truly stops
     at the model edge.
@@ -776,7 +776,7 @@ class ReparamHashC2FSpec(_Forbid):
     Only the ``base_levels`` coarsest levels are open at epoch 0; levels
     unfreeze coarse -> fine over ``[warmup, ramp_end]`` (fractions of the
     stage's epochs), the frontier level soft-weighted by ``ramp``. See
-    :class:`sweep_nn.coarse_to_fine.CoarseToFineHashGrid`.
+    :class:`sweepx.nn.coarse_to_fine.CoarseToFineHashGrid`.
     """
 
     enabled: bool = False
@@ -788,7 +788,7 @@ class ReparamHashC2FSpec(_Forbid):
     # In a multiscale chain set e.g. 8/10/12/16 per band so the finest
     # levels stay frozen until the data actually carries high wavenumbers.
     final_levels: int | None = Field(ge=1, default=None)
-    # Allocate fine levels ON DEMAND (sweep_nn.GrowingHashGrid) instead of
+    # Allocate fine levels ON DEMAND (sweepx.nn.GrowingHashGrid) instead of
     # masking a fully-allocated grid — saves latent memory (finest levels
     # dominate in 3-D). Reuses base_levels -> final_levels over [warmup,
     # ramp_end] as the grow schedule; ``ramp`` is ignored (growth is
@@ -808,10 +808,10 @@ class ReparamHashSpec(_Forbid):
     # Scalar (isotropic) OR a per-axis list [n_z, n_y, n_x] (3-D) / [n_z, n_x]
     # (2-D) for an ANISOTROPIC hash — set proportional to each axis' physical
     # extent so every level resolves the same physical scale on all axes.
-    # sweep_nn.MultiResHashGrid natively supports the per-axis list.
+    # sweepx.nn.MultiResHashGrid natively supports the per-axis list.
     base_resolution: int | list[int] = 4
     finest_resolution: int | list[int] = 512
-    # "triton": fused GPU kernels (sweep_nn.triton_hash_encoding) — numerically
+    # "triton": fused GPU kernels (sweepx.nn.triton_hash_encoding) — numerically
     # matches "pytorch" (cos≈1) with ~10-20x less encoder memory at large batch.
     # Requires triton + CUDA; incompatible with c2f.growing (lazy ParameterList).
     backend: Literal["pytorch", "triton"] = "pytorch"
@@ -892,7 +892,7 @@ class SmoothRegSpec(_Forbid):
 
     Adds a scalar regularizer ``weight * TVPrior(order, x/y/z weights)(vp)``
     to the per-iter loss; the gradient flows back into the velocity (or
-    network params in reparam mode). See :class:`sweep_nn.TVPrior` for
+    network params in reparam mode). See :class:`sweepx.nn.TVPrior` for
     the math and conventions (in particular ``velocity_scale_m_s``).
 
     The weight is in the same scale as the data misfit; values around
@@ -910,7 +910,7 @@ class SmoothRegSpec(_Forbid):
 class DiffusionPriorSpec(_Forbid):
     """Plug-and-play DDPM diffusion prior added to the FWI objective.
 
-    Wraps :class:`sweep_nn.diffusion.DiffusionVelocityPrior` — a DDPM trained on
+    Wraps :class:`sweepx.nn.diffusion.DiffusionVelocityPrior` — a DDPM trained on
     a velocity-model corpus (e.g. OpenFWI CurveVel-A, 64x64, 1500-4500 m/s)
     reused as a denoiser ``D(vp)`` — and adds a plug-and-play regularizer to the
     per-iter loss whose gradient flows into vp (or the reparam-net params):
@@ -948,8 +948,8 @@ class DiffusionPriorSpec(_Forbid):
     """
 
     enabled: bool = True
-    # sweep_nn-format DDPM checkpoint (a dict with ``config`` / ``ema`` (or
-    # ``model``) / ``stats`` keys, as written by the sweep_nn diffusion trainer).
+    # sweepx.nn-format DDPM checkpoint (a dict with ``config`` / ``ema`` (or
+    # ``model``) / ``stats`` keys, as written by the sweepx.nn diffusion trainer).
     ckpt_path: Path
     # In "relative" mode (default) this is the diffusion-to-data gradient-norm
     # ratio per apply (0.05 = a 5% nudge); in "absolute" mode it is the raw
@@ -1020,7 +1020,7 @@ class WaterSpec(_Forbid):
       model's first and last columns). A plain number is a flat seabed at
       that depth, which keeps a synthetic task YAML self-contained. Every grid
       builds its own mask from it with
-      :func:`sweep_tasks.bathymetry.water_mask_from_seabed_depth`, on that
+      :func:`sweepx.tasks.bathymetry.water_mask_from_seabed_depth`, on that
       grid's own columns: a cell is water when its centre lies above
       ``seabed + buffer``.
     * ``mask`` -- a ``.npy`` boolean (or 0/1) array of the NATIVE model grid
@@ -1030,7 +1030,7 @@ class WaterSpec(_Forbid):
       goes to the cell with the larger index).
 
     The water is never inferred from velocities: no "cells at 1500 m/s", no
-    thresholds. :func:`sweep_tasks.bathymetry.derive_seabed_depth_from_vp`
+    thresholds. :func:`sweepx.tasks.bathymetry.derive_seabed_depth_from_vp`
     turns a starting model into a seabed file once, as an explicit step.
 
     ``mode``:
@@ -1145,7 +1145,7 @@ def _retired_top_level_water_keys(data, task: str):
     if fwl is not None:
         if not isinstance(fwl, dict):
             errors.append("`freeze_water_layer` was retired; give the water "
-                          "layer in `water:` (see sweep_tasks.schemas.WaterSpec).")
+                          "layer in `water:` (see sweepx.tasks.schemas.WaterSpec).")
         elif fwl.get("enabled", False):
             sb = fwl.get("seabed_depth_path")
             buf = fwl.get("buffer_cells", 0) or 0
@@ -1229,7 +1229,7 @@ class FreqSelectionSpec(_Forbid):
     invariant to any per-node complex scale, so no wavelet spec, no obs
     prepad, no bandpass filter and no shared-shots sampler exist in this
     mode. Observed data are pre-extracted DTFT coefficients
-    (:mod:`sweep_tasks.freqsel`), fold-averaged onto grid cells — the
+    (:mod:`sweepx.tasks.freqsel`), fold-averaged onto grid cells — the
     inversion performs zero SEG-Y I/O.
 
     ``coeff_shards`` is a glob for the extraction npz shard(s). For
@@ -1376,7 +1376,7 @@ class ReceiverSmoothingSpec(_Forbid):
     receivers lifts the usable SNR. The operator is a row-normalised
     Gaussian over the receivers' *surface* positions (normalised
     convolution, so a varying receiver density introduces no amplitude
-    bias) — see :func:`sweep_tasks.preproc.filter.receiver_smoothing_matrix`.
+    bias) — see :func:`sweepx.tasks.preproc.filter.receiver_smoothing_matrix`.
 
     ``target`` decides whether the synthetic is smoothed too.
 
@@ -1511,7 +1511,7 @@ class QCSpec(_Forbid):
 
 
 class FreeParamSpec(_Forbid):
-    """One output channel of a multi-parameter reparam (:class:`sweep_nn.MultiParamINR`).
+    """One output channel of a multi-parameter reparam (:class:`sweepx.nn.MultiParamINR`).
 
     Each freed solver-model parameter (vp, z, and later vs, rho, eps …) gets its
     own affine scale + clamp; the init model comes from ``init_models`` matched
@@ -1538,7 +1538,7 @@ class ReparamSpec(_Forbid):
     """Neural-network reparameterization of the velocity model (sweep-nn).
 
     When set on an FWISpec, the runner replaces the raw vp tensor with a
-    :class:`sweep_nn.VelocityINR` (hash-encoded SIREN by default). The
+    :class:`sweepx.nn.VelocityINR` (hash-encoded SIREN by default). The
     optimizer is built on the network's parameters instead of the vp
     tensor; multi-stage transitions resample only the network's *base*
     velocity, preserving all learnable parameters (SIREN's multi-scale
@@ -1546,7 +1546,7 @@ class ReparamSpec(_Forbid):
 
     Single-parameter by default (vp only); set :attr:`free_params` to invert
     several solver-model parameters JOINTLY from one shared-trunk network
-    (:class:`sweep_nn.MultiParamINR`) — see that field.
+    (:class:`sweepx.nn.MultiParamINR`) — see that field.
     """
 
     kind: Literal["velocity_inr"] = "velocity_inr"
@@ -1557,7 +1557,7 @@ class ReparamSpec(_Forbid):
         return _retired_reparam_water_keys(data)
 
     # Multi-parameter reparam: predict SEVERAL solver-model parameters jointly
-    # from ONE shared-trunk network (sweep_nn.MultiParamINR), one output channel
+    # from ONE shared-trunk network (sweepx.nn.MultiParamINR), one output channel
     # per entry (channel 0 = vp = primary). When None (default) the reparam is
     # single-channel vp (VelocityINR) and non-vp models fall back to coupling
     # (VRZ option A: z = Gardner(vp)). When set — e.g. ``[{name: vp, std: 500,
@@ -1648,7 +1648,7 @@ class ReparamSpec(_Forbid):
 class StageBandpass(_Forbid):
     """Per-stage bandpass applied to obs at stage entry (Gap 5).
 
-    ``sweep_tasks.preproc.filter.bandpass`` is invoked on the *pristine* obs each
+    ``sweepx.tasks.preproc.filter.bandpass`` is invoked on the *pristine* obs each
     time a new stage starts, so stages don't compose their filters.
 
     ``order``
@@ -1870,9 +1870,9 @@ class ObsSegyConfig(_Forbid):
     """Single-file SEG-Y observed-data loader (Option A).
 
     The runner opens the file once, scans all trace headers in-process, builds
-    a :class:`sweep_io.geometry.PhysicalGeometry` (meters) snapped to
+    a :class:`sweepx.io.geometry.PhysicalGeometry` (meters) snapped to
     ``spec.grid.dh``, and reads the trace payloads in one coalesced pass via
-    :class:`sweep_io.segy.SEGYReader`. Suitable for single-SEG-Y datasets up
+    :class:`sweepx.io.segy.SEGYReader`. Suitable for single-SEG-Y datasets up
     to ~few GB (Viking line 12: 750 MB → ~8 s scan + read).
 
     For multi-file or TB-scale data, use :class:`ObsSegyIndexConfig` instead.
@@ -1889,7 +1889,7 @@ class ObsSegyConfig(_Forbid):
 class ObsSegyIndexConfig(_Forbid):
     """Multi-file lazy SEG-Y observed-data loader (Option B).
 
-    Backed by a pre-built :class:`sweep_io.segy_index.SEGYIndex` (.npz).
+    Backed by a pre-built :class:`sweepx.io.segy_index.SEGYIndex` (.npz).
     The runner loads the index, and either materialises obs eagerly (small
     surveys) or wraps an :class:`IndexedShotGatherDataset` with prefetch
     (when ``lazy=True``).
@@ -1915,7 +1915,7 @@ class PlanSamplingConfig(_Forbid):
     Grouping-agnostic naming: legacy CRG had ``source_lines_per_crg`` /
     ``min_shot_coverage`` — the unified path renames these to
     ``source_lines_per_group`` / ``min_coverage`` because the underlying
-    sampler (:func:`sweep_io.seismic_plan.sample_shared_shots_from_plan`)
+    sampler (:func:`sweepx.io.seismic_plan.sample_shared_shots_from_plan`)
     operates on any grouping that admits a shared-shot intersection.
 
     Parameters
@@ -1962,7 +1962,7 @@ class PlanSamplingConfig(_Forbid):
         picks avoid cold-Lustre reads. ``0`` disables, ``-1`` = unbounded.
     receiver_first
         Use the receiver-first shared-shot sampler
-        (:func:`sweep_io.seismic_plan.sample_shared_shots_receiver_first`)
+        (:func:`sweepx.io.seismic_plan.sample_shared_shots_receiver_first`)
         instead of the default random-group intersection. Picks ONE target
         shot per iter then the nodes that recorded it, so the per-iter
         supershot sweeps the WHOLE survey instead of collapsing toward the
@@ -1986,7 +1986,7 @@ class PlanSamplingConfig(_Forbid):
     trace_cache_bytes: int = 0
     # Per-CRG independent coverage (per-shot / non-encoded path only). When
     # True, each iter draws B random nodes and gives EACH its own sub-sampled
-    # rows (``sweep_io.seismic_plan.sample_percrg_independent``) instead of the
+    # rows (``sweepx.io.seismic_plan.sample_percrg_independent``) instead of the
     # shared-shot intersection. Drops the wide-offset diving-wave bias of the
     # intersection. Each node is a separate solve, so it is refused with
     # source_encoding enabled (the supershot sums every node's obs over ONE
@@ -2012,7 +2012,7 @@ class PlanSamplingConfig(_Forbid):
 class ObsPlanConfig(_Forbid):
     """Unified obs loader backed by a ``seismic_plan_v1`` plan.
 
-    Reads the SEG-Y trace bytes through :class:`sweep_io.seismic_plan.PlanReader`
+    Reads the SEG-Y trace bytes through :class:`sweepx.io.seismic_plan.PlanReader`
     using the file-id / byte-offset records the plan already stores.
     Pair with :class:`FromPlanGeometry` (the two normally share the same
     plan_path so the geometry layout matches what the reader returns).
@@ -2125,10 +2125,10 @@ class ModelingOverride(_Forbid):
 
 class BaseTaskSpec(_Forbid):
     task_id: str | None = None  # auto-generated from timestamp if missing
-    # NOTE: default is `./sweep_runs`, NOT `./sweep_tasks`. The latter would
-    # collide with this package's import name `sweep_tasks` and turn run-output
+    # NOTE: default is `./sweep_runs`, NOT `./sweepx/tasks`. The latter would
+    # collide with this package's import name `sweepx.tasks` and turn run-output
     # directories into PEP-420 namespace packages that shadow real imports
-    # (`python -c "import sweep_tasks"` would pick up the rogue dir before the
+    # (`python -c "import sweepx.tasks"` would pick up the rogue dir before the
     # installed package). Pick any other name when overriding.
     output_dir: Path = Path("./sweep_runs")
     seed: int = 0
@@ -2708,7 +2708,7 @@ class FWISpec(BaseTaskSpec):
 
     # Optional zero-phase Butterworth bandpass applied to the wavelet
     # (once at setup) AND to the per-iter encoded obs supershot (via
-    # the differentiable :func:`sweep_tasks.preproc.filter.bandpass_torch`).
+    # the differentiable :func:`sweepx.tasks.preproc.filter.bandpass_torch`).
     # Used by the OBN CRG path only, which reads lo_hz / hi_hz / order of it
     # (not target or padtype); the multi-stage 2-D / 3-D path
     # uses :class:`StageBandpass` inside ``stages`` instead.
@@ -2726,7 +2726,7 @@ class FWISpec(BaseTaskSpec):
 
     # Optional plug-and-play DDPM diffusion prior on vp. See
     # :class:`DiffusionPriorSpec`. The runner builds a
-    # ``sweep_nn.diffusion.DiffusionVelocityPrior`` from ``ckpt_path`` and adds
+    # ``sweepx.nn.diffusion.DiffusionVelocityPrior`` from ``ckpt_path`` and adds
     # ``weight * red_loss(vp)`` (or ``sds_loss``) to the data misfit every
     # ``every`` steps from stage ``start_band`` on; the gradient propagates back
     # into vp (or net params in reparam mode), exactly like smooth_regularization.
@@ -2769,7 +2769,7 @@ class PostFilterImageSpec(_Forbid):
     """Depth-tapered z-axis low-cut on RTM / FWI gradient images.
 
     When attached to :class:`RTMImagingSpec.post_filter`, the runner
-    auto-applies :func:`sweep_tasks.postproc.filter_image.filter_image_file`
+    auto-applies :func:`sweepx.tasks.postproc.filter_image.filter_image_file`
     to every saved imaging product (raw + globally normalised + per-shot
     normalised) right after the main RTM finishes. Same algorithm is
     available as a standalone CLI (``sweep-tasks filter-image <npy>``) for
@@ -2784,7 +2784,7 @@ class PostFilterImageSpec(_Forbid):
     clip_percentile: float = Field(ge=0, le=49, default=1.0)
     display_scale: float = Field(gt=0, default=1.0)
     # ``sweep_image`` is the bundled diverging LUT from
-    # ``sweep_tasks.viz.colormaps`` (registered as a matplotlib cmap at import
+    # ``sweepx.tasks.viz.colormaps`` (registered as a matplotlib cmap at import
     # time). Tuned for percentile-clipped RTM / kernel images. Override
     # with any matplotlib cmap name (e.g. ``"seismic"``, ``"gray"``) for
     # legacy display.

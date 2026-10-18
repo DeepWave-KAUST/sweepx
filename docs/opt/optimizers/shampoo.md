@@ -1,6 +1,6 @@
 # Shampoo
 
-`sweep_opt.optim.Shampoo` is the **Kronecker-factored 4th-root**
+`sweepx.opt.optim.Shampoo` is the **Kronecker-factored 4th-root**
 preconditioner of Gupta et al. (2018). For a 2-D parameter
 $M \in \mathbb{R}^{d_1 \times d_2}$ it maintains two running
 preconditioners
@@ -28,7 +28,7 @@ Higher-order tensors are flattened to 2-D along the leading axis.
 ## API
 
 ```python
-sweep_opt.optim.Shampoo(
+sweepx.opt.optim.Shampoo(
     params,
     lr=1e-2,
     *,

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _build_forward(tmp_path):
@@ -28,7 +28,7 @@ def _build_forward(tmp_path):
 @pytest.mark.timeout(150)
 def test_plot_shot_gather(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     yaml_path = _build_forward(tmp_path)
     r = registry.get("run_task").invoke({"yaml_path": yaml_path, "timeout_s": 120})
     assert r.value.get("state") == "success", r.value
@@ -44,7 +44,7 @@ def test_plot_shot_gather(tmp_path):
 def test_run_task_yaml_fallback(tmp_path):
     """A hallucinated yaml_path under the same output dir resolves to the real one."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     yaml_path = _build_forward(tmp_path)
     wrong = str(Path(yaml_path).parent / "fake-timestamp" / "forward.yaml")
     r = registry.get("run_task").invoke({"yaml_path": wrong, "timeout_s": 120})
@@ -52,6 +52,6 @@ def test_run_task_yaml_fallback(tmp_path):
 
 
 def test_plot_shot_gather_no_record(tmp_path):
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     res = registry.get("plot_shot_gather").invoke({"task_dir": str(tmp_path / "nope")})
     assert "error" in res.value

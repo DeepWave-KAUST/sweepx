@@ -1,7 +1,7 @@
 """Tests for the strong-Wolfe line search."""
 import pytest
 
-from sweep_opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 
 def test_wolfe_finds_minimum_of_simple_quadratic():

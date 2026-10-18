@@ -3,7 +3,7 @@
 # Drive via sweep-tasks CLI; 8-stage frequency continuation (2-5 → 2-40 Hz).
 #
 # Designed for 8x V100 ibex node; launch with
-#   torchrun --nproc_per_node=8 -m sweep_tasks run <this.yaml>
+#   torchrun --nproc_per_node=8 -m sweepx.tasks run <this.yaml>
 
 task_type: fwi
 output_dir: ${SWEEP_RUNS_ROOT}/viking_sweep

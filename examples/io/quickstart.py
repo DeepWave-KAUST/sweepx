@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sweep_io.geometry import Geometry
-from sweep_io.models import load_velocity, save_velocity
+from sweepx.io.geometry import Geometry
+from sweepx.io.models import load_velocity, save_velocity
 
 
 def main() -> None:

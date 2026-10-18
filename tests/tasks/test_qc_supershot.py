@@ -49,7 +49,7 @@ def _synth_survey(B: int = 24, n_shared: int = 80, seed: int = 1):
 
 
 def test_save_supershot_qc_panel_writes_png(tmp_path):
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, syn4 = _synth_obs_syn()
     picked, used, all_groups, all_shots = _synth_survey()
@@ -70,7 +70,7 @@ def test_save_supershot_qc_panel_writes_png(tmp_path):
 def test_save_supershot_qc_panel_accepts_3d_obs(tmp_path):
     """``obs_super`` from the CRG prefetcher is (1, n_shared, nt) — the
     helper must auto-detect and transpose to (nt, n_shared)."""
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, syn4 = _synth_obs_syn()
     # Convert obs to (1, n_shared, nt) instead of (1, nt, n_shared, 1).
@@ -93,7 +93,7 @@ def test_save_supershot_qc_panel_sourceline_sort(tmp_path):
     """When sourceline_ids is given, traces are reordered by
     (line_id, sx_utm) — the PNG must still write successfully and the
     sort must accept a deliberately scrambled input."""
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     n_shared = 80
     obs4, syn4 = _synth_obs_syn(n_shared=n_shared)
@@ -125,7 +125,7 @@ def test_save_supershot_qc_panel_within_sourceline_key(tmp_path):
     """When ``within_sourceline_sort_key`` is provided, lexsort uses it
     as secondary key instead of the x-coord — must still write the PNG.
     """
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     n_shared = 80
     obs4, syn4 = _synth_obs_syn(n_shared=n_shared)
@@ -150,7 +150,7 @@ def test_save_supershot_qc_panel_within_sourceline_key(tmp_path):
 
 
 def test_save_supershot_qc_panel_within_sourceline_key_length_mismatch(tmp_path):
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, syn4 = _synth_obs_syn(n_shared=80)
     picked, used, all_groups, _ = _synth_survey(n_shared=80)
@@ -169,7 +169,7 @@ def test_save_supershot_qc_panel_within_sourceline_key_length_mismatch(tmp_path)
 
 
 def test_save_supershot_qc_panel_sourceline_length_mismatch_raises(tmp_path):
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, syn4 = _synth_obs_syn(n_shared=80)
     picked, used, all_groups, _ = _synth_survey(n_shared=80)
@@ -188,7 +188,7 @@ def test_save_supershot_qc_panel_sourceline_length_mismatch_raises(tmp_path):
 def test_save_supershot_qc_panel_model_frame_with_extent(tmp_path):
     """Caller passes model-frame coords + inversion grid extent — the
     PNG must still write and the extent rectangle must be drawn."""
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, syn4 = _synth_obs_syn()
     # Simulate model-frame coords (small km-scale numbers, not UTM-scale).
@@ -215,7 +215,7 @@ def test_save_supershot_qc_panel_model_frame_with_extent(tmp_path):
 
 
 def test_save_supershot_qc_panel_shape_mismatch_raises(tmp_path):
-    from sweep_tasks.qc import save_supershot_qc_panel
+    from sweepx.tasks.qc import save_supershot_qc_panel
 
     obs4, _ = _synth_obs_syn(n_shared=80)
     _, syn4_bad = _synth_obs_syn(n_shared=90)

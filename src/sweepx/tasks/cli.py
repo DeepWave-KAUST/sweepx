@@ -121,7 +121,7 @@ def _maybe_reexec_under_torchrun(args) -> None:
 
     Lets users write ``sweep-tasks run --nproc-per-node 4 foo.yaml`` as
     a shortcut for ``torchrun --standalone --nproc_per_node=4 -m
-    sweep_tasks run foo.yaml``. The explicit ``torchrun`` form keeps
+    sweepx.tasks run foo.yaml``. The explicit ``torchrun`` form keeps
     working unchanged: when the current process IS already a torchrun
     worker (detected via ``LOCAL_RANK`` / ``TORCHELASTIC_RUN_ID``), this
     short-circuits and we fall through to the real ``TaskRunner`` call.
@@ -170,12 +170,12 @@ def _maybe_reexec_under_torchrun(args) -> None:
         if tok.startswith("--nproc-per-node=") or tok.startswith("--nproc_per_node="):
             continue
         argv.append(tok)
-    # argv[0] was the sweep-tasks console script; replace with `-m sweep_tasks`
+    # argv[0] was the sweep-tasks console script; replace with `-m sweepx.tasks`
     # so we don't rely on the entrypoint being on PATH in every torchrun env.
     cmd = [
         sys.executable, "-m", "torch.distributed.run",
         "--standalone", f"--nproc_per_node={n}",
-        "-m", "sweep_tasks",
+        "-m", "sweepx.tasks",
         *argv[1:],
     ]
     print(f"[sweep-tasks] re-exec under torchrun --nproc_per_node={n}: "
@@ -188,7 +188,7 @@ def _maybe_reexec_under_torchrun(args) -> None:
 def _cmd_run(args) -> int:
     import yaml
 
-    from sweep_tasks import TaskRunner, load_task, load_task_from_dict
+    from sweepx.tasks import TaskRunner, load_task, load_task_from_dict
 
     # If the user passed --nproc-per-node N (>1) and we're not yet under
     # torchrun, re-exec the same command under `torchrun --standalone
@@ -207,7 +207,7 @@ def _cmd_run(args) -> int:
     elif resume_flag is False:
         overrides.append("resume=false")
     if overrides:
-        from sweep_tasks.runtime.config import apply_overrides
+        from sweepx.tasks.runtime.config import apply_overrides
 
         task_path = Path(args.task_file).resolve()
         with task_path.open("r") as fh:
@@ -243,7 +243,7 @@ def _list_templates() -> list[str]:
     """Return the names of bundled --config YAML templates (without .yaml)."""
     try:
         import importlib.resources as ir
-        anchor = ir.files("sweep_tasks").joinpath("templates")
+        anchor = ir.files("sweepx.tasks").joinpath("templates")
         return sorted(
             p.name[:-len(".yaml")]
             for p in anchor.iterdir()
@@ -256,7 +256,7 @@ def _list_templates() -> list[str]:
 def _cmd_init(args) -> int:
     """``sweep-tasks init`` — emit a starter --config YAML for a dataset.
 
-    Templates live under ``src/sweep_tasks/templates/`` and ship with the
+    Templates live under ``src/sweepx/tasks/templates/`` and ship with the
     package, so they're available after ``pip install sweep-tasks``. Each
     template has one section per sweep-tasks subcommand
     (``build_index:``, ``analyze_wavelet:``, ``estimate_wavelet:``, …)
@@ -290,7 +290,7 @@ def _cmd_init(args) -> int:
             )
         return 2
 
-    text = ir.files("sweep_tasks").joinpath(f"templates/{template}.yaml").read_text()
+    text = ir.files("sweepx.tasks").joinpath(f"templates/{template}.yaml").read_text()
 
     if args.output:
         out_path = Path(args.output).expanduser().resolve()
@@ -330,8 +330,8 @@ def _cmd_new(args) -> int:
 
     import yaml
 
-    from sweep_tasks import new_template
-    from sweep_tasks.yaml_io import _FILE_TEMPLATES, _read_bundled_template
+    from sweepx.tasks import new_template
+    from sweepx.tasks.yaml_io import _FILE_TEMPLATES, _read_bundled_template
 
     if args.task_type == "wavefield" and args.backend == "c":
         print("error: --backend c is not available for a wavefield task: "
@@ -611,7 +611,7 @@ def _cmd_build_index(args) -> int:
     """``sweep-tasks build-index`` — scan raw SEG-Y → SEGYIndex npz."""
     import time
 
-    from sweep_io.segy_index import build_segy_index
+    from sweepx.io.segy_index import build_segy_index
 
     # When invoked with -n N at the shell prompt (not already under MPI),
     # re-exec self via `mpiexec -n N sweep-tasks build-index --mpi ...`
@@ -651,7 +651,7 @@ def _cmd_build_index(args) -> int:
         # Reuse the file-staged MPI scanner from crg_build — it returns
         # a SEGYIndex on rank 0 and None on non-root ranks.
         from mpi4py import MPI  # type: ignore
-        from sweep_io.crg_build import _scan_segy_mpi
+        from sweepx.io.crg_build import _scan_segy_mpi
         index = _scan_segy_mpi(
             paths,
             mpi_comm=MPI.COMM_WORLD,
@@ -684,7 +684,7 @@ def _cmd_build_index(args) -> int:
 
     if not bool(getattr(args, "no_qc_png", False)):
         try:
-            from sweep_tasks.qc.data_prep import plot_index_qc
+            from sweepx.tasks.qc.data_prep import plot_index_qc
             qc_path = out.with_name(out.stem + "_qc.png")
             plot_index_qc(index, qc_path)
             print(f"[build-index] QC PNG -> {qc_path}")
@@ -779,7 +779,7 @@ def _cmd_extract_coeff(args) -> int:
     import numpy as np
     import yaml as _yaml
 
-    from sweep_tasks.freqsel import FrequencyComb, extract_shard
+    from sweepx.tasks.freqsel import FrequencyComb, extract_shard
 
     if args.plan:
         return _extract_coeff_from_plan(args)
@@ -850,9 +850,9 @@ def _extract_coeff_from_plan(args) -> int:
     """
     import numpy as np
 
-    from sweep_io.seismic_plan import PlanReader, SeismicPlan
+    from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
-    from sweep_tasks.freqsel import (FrequencyComb, extract_shard_gathers,
+    from sweepx.tasks.freqsel import (FrequencyComb, extract_shard_gathers,
                                     offset_top_mute)
 
     if args.dh_m is None:
@@ -976,12 +976,12 @@ def _cmd_filter_image(args) -> int:
     """``sweep-tasks filter-image`` — depth-tapered z-low-cut on a 2-D image npy.
 
     Standalone wrapper around
-    :func:`sweep_tasks.postproc.filter_image.filter_image_file`. Use this to
+    :func:`sweepx.tasks.postproc.filter_image.filter_image_file`. Use this to
     iterate on filter parameters without re-running the underlying RTM /
     FWI-gradient computation. Same algorithm is also auto-invoked by the
     runner when ``RTMImagingSpec.post_filter`` is configured in the YAML.
     """
-    from sweep_tasks.postproc.filter_image import filter_image_file
+    from sweepx.tasks.postproc.filter_image import filter_image_file
 
     if not getattr(args, "input", None):
         print("error: filter-image requires a positional input npy path "
@@ -1047,11 +1047,11 @@ def _cmd_filter_image(args) -> int:
 def _cmd_analyze_wavelet(args) -> int:
     """``sweep-tasks analyze-wavelet`` — rank-1 robust direct-wave average.
 
-    Wraps :func:`sweep_tasks.wavelet.analyze.analyze_direct_wavelet_batch`
+    Wraps :func:`sweepx.tasks.wavelet.analyze.analyze_direct_wavelet_batch`
     with a SeismicPlan path + per-shot selection / quality-filter flags.
     """
     import shlex as _shlex
-    from sweep_tasks.wavelet import (
+    from sweepx.tasks.wavelet import (
         AnalyzeWaveletConfig,
         analyze_direct_wavelet_batch,
     )
@@ -1091,7 +1091,7 @@ def _cmd_analyze_wavelet(args) -> int:
 def _cmd_estimate_wavelet(args) -> int:
     """``sweep-tasks estimate-wavelet`` — SIREN + sweep wave-equation refinement."""
     import shlex as _shlex
-    from sweep_tasks.wavelet import (
+    from sweepx.tasks.wavelet import (
         WaveletInversionConfig,
         run_wavelet_inversion,
     )
@@ -1161,7 +1161,7 @@ def _cmd_estimate_wavelet(args) -> int:
 
 def _cmd_convert_farfield(args) -> int:
     """``sweep-tasks convert-farfield`` — ASCII farfield → npz."""
-    from sweep_tasks.wavelet import convert_farfield
+    from sweepx.tasks.wavelet import convert_farfield
 
     missing = [n for n in ("input", "output") if not getattr(args, n, None)]
     if missing:
@@ -1188,7 +1188,7 @@ def _cmd_convert_farfield(args) -> int:
 
 def _cmd_plot_wavelet_steps(args) -> int:
     """``sweep-tasks plot-wavelet-steps`` — 4-panel pipeline QC plot."""
-    from sweep_tasks.wavelet import plot_wavelet_pipeline_steps
+    from sweepx.tasks.wavelet import plot_wavelet_pipeline_steps
 
     if not getattr(args, "pipeline_dir", None):
         print("error: plot-wavelet-steps requires --pipeline-dir "
@@ -1213,8 +1213,8 @@ def _cmd_build_plan(args) -> int:
     """``sweep-tasks build-plan`` — SEGYIndex npz + filters → SeismicPlan npz."""
     import time
 
-    from sweep_io.segy_index import SEGYIndex
-    from sweep_io.seismic_plan import build_seismic_plan
+    from sweepx.io.segy_index import SEGYIndex
+    from sweepx.io.seismic_plan import build_seismic_plan
 
     missing = [n for n in ("index", "out") if not getattr(args, n, None)]
     if missing:
@@ -1264,7 +1264,7 @@ def _cmd_build_plan(args) -> int:
 
     if not bool(getattr(args, "no_qc_png", False)):
         try:
-            from sweep_tasks.qc.data_prep import plot_plan_qc
+            from sweepx.tasks.qc.data_prep import plot_plan_qc
             qc_path = out.with_name(out.stem + "_qc.png")
             plot_plan_qc(plan, qc_path, parent_index=index)
             print(f"[build-plan]  QC PNG -> {qc_path}")
@@ -1293,7 +1293,7 @@ def main(argv: list[str] | None = None) -> int:
             "sweep-tasks re-execs itself under `torchrun --standalone "
             "--nproc_per_node=N` automatically — no need to type `torchrun` "
             "yourself. The explicit form (`torchrun --nproc_per_node=N -m "
-            "sweep_tasks run …`) keeps working unchanged."
+            "sweepx.tasks run …`) keeps working unchanged."
         ),
     )
     run_parser.add_argument(
@@ -1690,7 +1690,7 @@ def main(argv: list[str] | None = None) -> int:
     fi.add_argument("--cmap", default="sweep_image",
                     help="matplotlib colormap for PNG output (default: "
                          "sweep_image, the bundled diverging LUT from "
-                         "sweep_tasks.viz tuned for percentile-clipped RTM / "
+                         "sweepx.tasks.viz tuned for percentile-clipped RTM / "
                          "kernel images; pass 'seismic' or 'gray' for "
                          "legacy display).")
     fi.add_argument("--output-dir", default=None,
@@ -1959,7 +1959,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plot-wavelet-steps":
         return _cmd_plot_wavelet_steps(args)
     if args.command == "migrate-water":
-        from sweep_tasks.migrate_water import main_migrate
+        from sweepx.tasks.migrate_water import main_migrate
 
         return main_migrate(args.task_file, args.output)
     if args.command == "tasks":

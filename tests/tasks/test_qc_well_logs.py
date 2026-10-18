@@ -23,7 +23,7 @@ def _synth_vp(nz: int = 60, ny: int = 40, nx: int = 30):
 
 
 def test_save_vp_well_logs_png_writes(tmp_path):
-    from sweep_tasks.qc import save_vp_well_logs_png
+    from sweepx.tasks.qc import save_vp_well_logs_png
 
     vp_init = _synth_vp()
     vp_cur = vp_init.copy()
@@ -52,7 +52,7 @@ def test_save_vp_well_logs_png_out_of_grid_well_renders_stub(tmp_path):
     """OUT-OF-GRID wells render an empty stub without crashing —
     important when the user picks well coords that miss the cropped
     grid by a couple of cells."""
-    from sweep_tasks.qc import save_vp_well_logs_png
+    from sweepx.tasks.qc import save_vp_well_logs_png
 
     vp = _synth_vp(ny=20, nx=20)
     wells = np.array([
@@ -76,7 +76,7 @@ def test_save_vp_well_logs_png_out_of_grid_well_renders_stub(tmp_path):
 
 
 def test_save_vp_well_logs_png_shape_mismatch_raises(tmp_path):
-    from sweep_tasks.qc import save_vp_well_logs_png
+    from sweepx.tasks.qc import save_vp_well_logs_png
 
     a = _synth_vp(nz=10, ny=5, nx=5)
     b = _synth_vp(nz=12, ny=5, nx=5)
@@ -91,7 +91,7 @@ def test_save_vp_well_logs_png_shape_mismatch_raises(tmp_path):
 
 
 def test_save_vp_well_logs_png_label_mismatch_raises(tmp_path):
-    from sweep_tasks.qc import save_vp_well_logs_png
+    from sweepx.tasks.qc import save_vp_well_logs_png
 
     vp = _synth_vp()
     with pytest.raises(ValueError, match="well_labels length"):

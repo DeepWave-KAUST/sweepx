@@ -27,7 +27,7 @@ export SWEEP_AGENT_LLM_MODEL=...    # or --model
 export SWEEP_AGENT_LLM_API_KEY=...  # or --api-key
 ```
 
-For a fully custom backend, subclass `BaseLLM` from `sweep_agent.llm`.
+For a fully custom backend, subclass `BaseLLM` from `sweepx.agent.llm`.
 
 !!! tip "Model quality matters for tool-calling"
     Heavily-quantized (Q4) local models are weaker at tool-calling and can drift
@@ -39,7 +39,7 @@ Every tool is a plain callable (`.fn`) with a pydantic params model, so the whol
 toolset is usable from scripts and tests without an LLM:
 
 ```python
-from sweep_agent.tools.inspect import inspect_file, InspectFileParams
+from sweepx.agent.tools.inspect import inspect_file, InspectFileParams
 print(inspect_file.fn(InspectFileParams(path="vp_init.npy")))
 ```
 

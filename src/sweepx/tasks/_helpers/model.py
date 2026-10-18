@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 import sweep.equations as eq_mod
-from sweep_tasks.schemas import ModelRef
+from sweepx.tasks.schemas import ModelRef
 
 def _get_equation_class(name: str) -> type:
     classes = eq_mod._equation_classes()
@@ -60,7 +60,7 @@ def _solver_models(leaf, spec):
         # the task's water velocity as it was to reparam.water_vp_m_s. Moving
         # it onto the `water:` mask itself changes the coupling's physics and
         # is left to its own change.
-        from sweep_tasks.schemas import water_of
+        from sweepx.tasks.schemas import water_of
 
         w = water_of(spec)
         wthr = float(w.velocity) + 5.0 if w is not None else 1505.0

@@ -6,8 +6,8 @@ Scan the trace headers once, organise the traces as gathers, and read them back 
 number:
 
 ```python
-from sweep_io.segy_index import build_segy_index
-from sweep_io.seismic_plan import PlanReader, SeismicPlan
+from sweepx.io.segy_index import build_segy_index
+from sweepx.io.seismic_plan import PlanReader, SeismicPlan
 
 index = build_segy_index(["line_001.sgy", "line_002.sgy"])    # headers only, in parallel
 plan = index.to_seismic_plan(grouping="csg", offset_min_m=200.0)
@@ -33,7 +33,7 @@ Wrap any iterator in a `Prefetcher` and the next item is read in a background th
 while the loop body runs:
 
 ```python
-from sweep_io.prefetch import Prefetcher
+from sweepx.io.prefetch import Prefetcher
 
 gathers = (reader.read_group(g) for g in range(plan.n_groups))
 with Prefetcher(gathers, queue_depth=2) as pf:
@@ -53,7 +53,7 @@ model and rebases the geometry onto it. Both work on a `PhysicalGeometry` (posit
 metres) and the observed data:
 
 ```python
-from sweep_io.plan import DataPlan, ModelPlan, apply_data_plan, apply_model_plan
+from sweepx.io.plan import DataPlan, ModelPlan, apply_data_plan, apply_model_plan
 
 data_plan = DataPlan(shot_stride=5, offset_max_m=2000.0, dt_target_s=0.008)
 geom_m, obs, receiver_mask = apply_data_plan(data_plan, geom_m, obs)
@@ -69,8 +69,8 @@ dropping receivers that land on the same cell.
 
 ```python
 import numpy as np
-from sweep_io.geometry import Geometry
-from sweep_io.models import load_velocity, save_velocity
+from sweepx.io.geometry import Geometry
+from sweepx.io.models import load_velocity, save_velocity
 
 save_velocity("vp.npy", vp)                 # .npy, .npz, .h5 or raw binary, by extension
 vp = load_velocity("vp.npy")

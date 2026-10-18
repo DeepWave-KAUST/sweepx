@@ -1,6 +1,6 @@
 # Truncated Newton (Hessian-Free Newton)
 
-`sweep_opt.optim.TruncatedNewton` solves the Newton system
+`sweepx.opt.optim.TruncatedNewton` solves the Newton system
 
 $$
 H_k\, d_k = -g_k
@@ -42,7 +42,7 @@ $g \cdot v$ inner product to get $H v$.
 ## API
 
 ```python
-sweep_opt.optim.TruncatedNewton(
+sweepx.opt.optim.TruncatedNewton(
     params,
     *,
     bounds=None,
@@ -64,12 +64,12 @@ Diagnostics:
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
-precond = sweep_opt.precond.PseudoHessianPrecond(eps=1e-3)
+precond = sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3)
 
-opt = sweep_opt.optim.TruncatedNewton(
+opt = sweepx.opt.optim.TruncatedNewton(
     [vp],
     bounds=(1500.0, 5500.0),
     preconditioner=precond,

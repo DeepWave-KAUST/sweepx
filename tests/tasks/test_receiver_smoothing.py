@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from sweep_tasks.preproc.filter import (  # noqa: E402
+from sweepx.tasks.preproc.filter import (  # noqa: E402
     apply_receiver_smoothing,
     receiver_smoothing_matrix,
 )
@@ -95,7 +95,7 @@ def test_scattered_2d_receivers_normalised_despite_density_variation():
 
 def test_target_obs_only_leaves_syn_untouched():
     """target='obs' must smooth the observation and pass the synthetic through."""
-    from sweep_tasks.schemas import ReceiverSmoothingSpec
+    from sweepx.tasks.schemas import ReceiverSmoothingSpec
     assert ReceiverSmoothingSpec().target == "both"          # safe default
     assert ReceiverSmoothingSpec(target="obs").target == "obs"
     w = receiver_smoothing_matrix(_line_receivers(32), 2.0)

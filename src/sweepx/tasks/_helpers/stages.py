@@ -3,31 +3,31 @@ import os
 import numpy as np
 import torch
 
-from sweep_tasks.preproc.filter import bandpass as _bandpass_cpu
-from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
-from sweep_tasks._helpers.optimizer import (
+from sweepx.tasks.preproc.filter import bandpass as _bandpass_cpu
+from sweepx.tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
+from sweepx.tasks._helpers.optimizer import (
     _apply_stage_lr_scale,
     _build_optimizer,
     _build_reparam_optimizer,
     _remember_initial_lrs,
 )
-from sweep_tasks._helpers.solver_build import _build_solver
-from sweep_tasks._helpers.stage_grid import (
+from sweepx.tasks._helpers.solver_build import _build_solver
+from sweepx.tasks._helpers.stage_grid import (
     _resample_to_grid,
     _set_physical_inr_frame,
     _snap_covered,
     _stage_grid_shape,
 )
-from sweep_tasks._helpers.water import rebake_water_, stamp_water_
-from sweep_tasks._helpers.util import _is_cuda_dev
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks._helpers.water import rebake_water_, stamp_water_
+from sweepx.tasks._helpers.util import _is_cuda_dev
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
 
 def _normalise_stage_list(spec) -> list:
     """Return the effective stage list (single-stage fallback when spec.stages is None)."""
 
     if spec.stages:
         return list(spec.stages)
-    from sweep_tasks.schemas import StageSpec
+    from sweepx.tasks.schemas import StageSpec
     return [StageSpec(epochs=spec.epochs, wavelet=None, lr_scale=1.0)]
 
 
@@ -295,7 +295,7 @@ def _prepare_stage(
         or state.get("dedupe_grid_snap", False)
     )
     if need_geom_resnap:
-        from sweep_io.geometry import PhysicalGeometry
+        from sweepx.io.geometry import PhysicalGeometry
         pg: PhysicalGeometry = state["pristine_physical_geom"]
         dedupe_flag = state.get("dedupe_grid_snap", True)
         dedup_method = state.get("dedup_method", "nearest")
@@ -605,7 +605,7 @@ def _prepare_stage(
     # 4) bandpass (per-stage; uses the new dt, so it's correctly normalised)
     #
     # GPU path (default when obs is on CUDA): reuse the canonical FFT
-    # zero-phase Butterworth from sweep_tasks.preproc — same implementation
+    # zero-phase Butterworth from sweepx.tasks.preproc — same implementation
     # used by ``_run_fwi_plan_streaming``'s per-iter encoded supershot path.
     # ~30× faster than scipy ``sosfiltfilt`` on Marmousi-scale obs
     # (1 GB float32), drops stage-entry time from ~10 s to <0.5 s.
@@ -634,7 +634,7 @@ def _prepare_stage(
                         dt=new_dt, order=stage.bandpass.order,
                         axis=time_axis_pristine,
                     )
-            _flavor = "GPU FFT (sweep_tasks.preproc.bandpass_torch)"
+            _flavor = "GPU FFT (sweepx.tasks.preproc.bandpass_torch)"
         else:
             obs_np2 = _bandpass_cpu(
                 obs_t.cpu().numpy(),
@@ -783,10 +783,10 @@ def _prepare_stage(
 
 def _resample_obs_time(obs_np: "np.ndarray", dt_old: float, dt_new: float,
                        *, time_axis: int = -1) -> "np.ndarray":
-    """Resample obs along the time axis via sweep_tasks.preproc.resample.resample_time."""
+    """Resample obs along the time axis via sweepx.tasks.preproc.resample.resample_time."""
     if abs(dt_old - dt_new) < 1e-12:
         return obs_np
-    from sweep_tasks.preproc.resample import resample_time
+    from sweepx.tasks.preproc.resample import resample_time
     return resample_time(obs_np, dt_old, dt_new, axis=time_axis)
 
 
@@ -795,13 +795,13 @@ def _resample_obs_to_solver_dt(obs_t, dt_segy: float, dt_solver: float,
     """Resample a torch obs tensor along the last axis to solver dt + length.
 
     Mirrors the legacy 3-D CRG FWI runner's per-iter obs prep: drop to
-    numpy, run scipy.signal.resample_poly via sweep_tasks.preproc, truncate /
+    numpy, run scipy.signal.resample_poly via sweepx.tasks.preproc, truncate /
     zero-pad to nt_solver, and ship back to the original device.
     """
     if abs(dt_segy - dt_solver) < 1.0e-12 and obs_t.shape[-1] == nt_solver:
         return obs_t
     import torch
-    from sweep_tasks.preproc.resample import resample_time
+    from sweepx.tasks.preproc.resample import resample_time
 
     arr = obs_t.detach().cpu().numpy()
     arr = resample_time(arr, dt_segy, dt_solver, axis=-1)
@@ -819,7 +819,7 @@ def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
                         *, order: int) -> "torch.Tensor":
     """Differentiable bandpass on a synthetic torch tensor.
 
-    Thin wrapper around :func:`sweep_tasks.preproc.filter.bandpass_torch` —
+    Thin wrapper around :func:`sweepx.tasks.preproc.filter.bandpass_torch` —
     the same canonical zero-phase GPU FFT Butterworth used by the obs
     stage-entry filter and by the plan-streaming encoded FWI path. Going
     through one impl across syn, obs, and wavelet ensures the filter
@@ -831,7 +831,7 @@ def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,
     helper only accepts 4-D and raises on anything else. The historical
     3-D fallback ``(nt, nrec, 1)`` (time at axis 0) is removed because
     (a) sweep no longer produces it, and (b) the layout it assumed
-    disagreed with ``sweep_loss.to_canonical``'s 3-D convention
+    disagreed with ``sweepx.loss.to_canonical``'s 3-D convention
     ``(nshots, nt, nrec)`` (time at axis 1), so any 3-D input would be
     silently filtered on the wrong axis. Manual 3-D inputs now fail
     loud here instead.

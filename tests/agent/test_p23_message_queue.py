@@ -7,9 +7,9 @@ same ``drain_queue`` sweep. No gradio dependency — pure-logic tests.
 
 from __future__ import annotations
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.base import BaseLLM, ChatMessage
-from sweep_agent.webui import _chat, _pending, _queued_lines, drain_queue, queue_message
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.base import BaseLLM, ChatMessage
+from sweepx.agent.webui import _chat, _pending, _queued_lines, drain_queue, queue_message
 
 
 class FakeLLM(BaseLLM):

@@ -1,10 +1,10 @@
 """Truncated-backward wiring: frequency.bwd_tail_margin -> boundary tail_steps."""
 import pytest
 
-from sweep_tasks.schemas import (BackendSpec, BoundaryOptionsModel,
+from sweepx.tasks.schemas import (BackendSpec, BoundaryOptionsModel,
                                  CUDAOptionsModel, FreqSelectionSpec,
                                  MemoryOptionsModel)
-from sweep_tasks.tasks.fwi_freqsel import backend_with_tail_steps
+from sweepx.tasks.tasks.fwi_freqsel import backend_with_tail_steps
 
 
 def _fspec(**kw):
@@ -66,7 +66,7 @@ def test_non_boundary_strategy_is_refused():
 
 def test_stage_override_warning_covers_the_new_key():
     """The wholesale-replacement trap applies to bwd_tail_margin too."""
-    from sweep_tasks.tasks.fwi_freqsel import stage_freq_override_warnings
+    from sweepx.tasks.tasks.fwi_freqsel import stage_freq_override_warnings
     g = _fspec(bwd_tail_margin=2000)
     stage = _fspec(coeff_shards="y.npz")
     assert any("bwd_tail_margin" in w

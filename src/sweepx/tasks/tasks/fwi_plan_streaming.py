@@ -10,14 +10,14 @@ Source encoding is an OPTION WITHIN this path, not what selects it:
 ``source_encoding.enabled=true`` runs the ±1 encoded supershot (one
 forward+adjoint per iter), ``false`` runs the per-shot CRG mode. Do not
 read the module name as "the encoded path" — the frequency-domain encoded
-path is :mod:`sweep_tasks.tasks.fwi_freqsel`, and the static CRG path is
-:mod:`sweep_tasks.plan_materialize`. See ``_run_fwi``'s dispatch table.
+path is :mod:`sweepx.tasks.tasks.fwi_freqsel`, and the static CRG path is
+:mod:`sweepx.tasks.plan_materialize`. See ``_run_fwi``'s dispatch table.
 
 Extracted from runner.py.
 """
 from pathlib import Path
-from sweep_tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
-from sweep_tasks.preproc.filter import (
+from sweepx.tasks.preproc.filter import bandpass_torch as _bandpass_torch_fft
+from sweepx.tasks.preproc.filter import (
     apply_receiver_smoothing as _apply_receiver_smoothing,
     receiver_smoothing_matrix as _receiver_smoothing_matrix,
 )
@@ -26,66 +26,66 @@ import math
 import numpy as np
 import os
 import time
-from sweep_tasks.schemas import FWISpec, ReparamSpec, _leaf_gradient_features
-from sweep_tasks._helpers.bounds import _effective_bound
-from sweep_tasks._helpers.dd import (
+from sweepx.tasks.schemas import FWISpec, ReparamSpec, _leaf_gradient_features
+from sweepx.tasks._helpers.bounds import _effective_bound
+from sweepx.tasks._helpers.dd import (
     _dd_backward_tile,
     _dd_config,
     _dd_render_tile,
     _dd_tile_bounds,
     _dd_wrap,
 )
-from sweep_tasks._helpers.illumination import (
+from sweepx.tasks._helpers.illumination import (
     _accumulate_illumination,
     _apply_illumination_precond,
 )
-from sweep_tasks._helpers.loss import (
+from sweepx.tasks._helpers.loss import (
     _compute_loss,
     _diving_asinh_for_nodes,
     _diving_window_mask,
 )
-from sweep_tasks._helpers.metadata import _dump_run_metadata
-from sweep_tasks._helpers.optimizer import (
+from sweepx.tasks._helpers.metadata import _dump_run_metadata
+from sweepx.tasks._helpers.optimizer import (
     _build_optimizer,
     _build_reparam_optimizer,
 )
-from sweep_tasks._helpers.plan_apply import _normalize_fwi_init_models
-from sweep_tasks._helpers.plotting import (
+from sweepx.tasks._helpers.plan_apply import _normalize_fwi_init_models
+from sweepx.tasks._helpers.plotting import (
     _dump_diving_window_qc,
     _dump_receiver_rotation_qc,
     _plot_loss_curve,
 )
-from sweep_tasks._helpers.reparam import (
+from sweepx.tasks._helpers.reparam import (
     _advance_hash_schedule,
     _build_reparam_net,
     _has_hash_schedule,
     _render_full_to_cpu_tiled,
 )
-from sweep_tasks._helpers.model import _model_array
-from sweep_tasks._helpers.solver_build import (
+from sweepx.tasks._helpers.model import _model_array
+from sweepx.tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
 )
-from sweep_tasks._helpers.stage_grid import (
+from sweepx.tasks._helpers.stage_grid import (
     _resample_to_grid,
     _set_physical_inr_frame,
     _stage_grid_shape,
 )
-from sweep_tasks._helpers.water import (
+from sweepx.tasks._helpers.water import (
     WaterRegion,
     rebake_water_,
     stamp_water_,
 )
-from sweep_tasks._helpers.stages import _normalise_stage_list
-from sweep_tasks._helpers.util import (
+from sweepx.tasks._helpers.stages import _normalise_stage_list
+from sweepx.tasks._helpers.util import (
     _apply_seed,
     _resolve_device,
 )
-from sweep_tasks._helpers.wavelet_build import (
+from sweepx.tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
-from sweep_tasks.progress import band_desc, optimizer_lr, progress_for
+from sweepx.tasks.progress import band_desc, optimizer_lr, progress_for
 
 
 def _dd_skipped_features(spec) -> list[tuple[str, str]]:
@@ -140,7 +140,7 @@ class PlanStreamingFWIMixin:
 
         Implements the production OBN 1-GPU path on the unified plan stack:
         every iteration draws a shared-shots batch from a
-        ``grouping='crg'`` :class:`sweep_io.seismic_plan.SeismicPlan`,
+        ``grouping='crg'`` :class:`sweepx.io.seismic_plan.SeismicPlan`,
         encodes it as a ±1-signed supershot, runs one ``Acoustic3D``
         forward + adjoint on that supershot, and steps the
         optimizer. Per-shot multi-GPU CRG mode (without encoding) is not
@@ -152,10 +152,10 @@ class PlanStreamingFWIMixin:
           ``rotation_metadata`` + (optionally) ``dh_xyz_m`` /
           ``grid_origin_xyz_m`` / ``auto_origin_pad_cells``. UTM source /
           shot positions get rotated via
-          :class:`sweep_io.geometry.RotatedFrame` into the model frame,
+          :class:`sweepx.io.geometry.RotatedFrame` into the model frame,
           then quantised to grid indices.
         * Obs is streamed per iter via
-          :class:`sweep_io.seismic_plan.PlanReader.read_rows` (one SEG-Y
+          :class:`sweepx.io.seismic_plan.PlanReader.read_rows` (one SEG-Y
           read pass per iter). No giant ``(nshots, nrec, nt)`` tensor
           materialised at task start.
         * Source encoding flips ``signs ∈ {-1, +1}^B`` per iter; the
@@ -169,8 +169,8 @@ class PlanStreamingFWIMixin:
         """
         import torch
 
-        from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
-        from sweep_io.seismic_plan import (
+        from sweepx.tasks._helpers.plan_apply import resolve_rotation_frame
+        from sweepx.io.seismic_plan import (
             PlanReader,
             SeismicPlan,
             build_shotkey_to_nodes_index,
@@ -179,7 +179,7 @@ class PlanStreamingFWIMixin:
             sample_shared_shots_from_plan,
             sample_shared_shots_receiver_first,
         )
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -733,7 +733,7 @@ class PlanStreamingFWIMixin:
         # in the stage-entry block below when a stage sets dt_s/nt.
         _wav_pristine_np = wavelet_orig.detach().cpu().numpy().copy()
         _wav_orig_dt = float(effective_dt)
-        from sweep_tasks.preproc.resample import resample_time as _resample_time_wav
+        from sweepx.tasks.preproc.resample import resample_time as _resample_time_wav
 
         def _stage_bandpass(_st):
             return (_st.bandpass if _st.bandpass is not None
@@ -1346,7 +1346,7 @@ class PlanStreamingFWIMixin:
             # Resample obs time axis on the prefetcher thread too so the
             # main loop's wait_io covers resample as well.
             if abs(plan.dt_s - effective_dt) > 1.0e-12:
-                from sweep_tasks.preproc.resample import resample_time
+                from sweepx.tasks.preproc.resample import resample_time
                 t_np = resample_time(t_np, plan.dt_s, effective_dt, axis=-1)
             tstats["resample"] = time.perf_counter() - t_resample0
 
@@ -1388,7 +1388,7 @@ class PlanStreamingFWIMixin:
         tv_prior = None
         smooth_spec = getattr(spec, "smooth_regularization", None)
         if smooth_spec is not None and float(smooth_spec.weight) > 0.0:
-            from sweep_nn import TVPrior
+            from sweepx.nn import TVPrior
 
             tv_prior = TVPrior(
                 order=smooth_spec.order,
@@ -2578,7 +2578,7 @@ class PlanStreamingFWIMixin:
                 )
                 if _qc_dump_panel:
                     try:
-                        from sweep_tasks.qc import save_supershot_qc_panel
+                        from sweepx.tasks.qc import save_supershot_qc_panel
                         # All coords in MODEL frame (post-rotation, in meters)
                         # so the QC map matches the frame the inversion
                         # runs in, and the dashed grid-extent rectangle
@@ -2641,7 +2641,7 @@ class PlanStreamingFWIMixin:
                 # across the water column is the strong expected signal.
                 if bool(getattr(spec.qc, "well_logs", True)):
                     try:
-                        from sweep_tasks.qc import save_vp_well_logs_png
+                        from sweepx.tasks.qc import save_vp_well_logs_png
                         vp_now_np = inv_by_name["vp"].detach().cpu().numpy()
                         save_vp_well_logs_png(
                             vp_now_np, init_vp_np,
@@ -2669,7 +2669,7 @@ class PlanStreamingFWIMixin:
                 # Gated on ``qc.gradient_png`` (shared with the 2D path).
                 if bool(getattr(spec.qc, "gradient_png", False)):
                     try:
-                        from sweep_tasks.qc import save_gradient_ortho_slices_png
+                        from sweepx.tasks.qc import save_gradient_ortho_slices_png
                         grad_now = None
                         if (v_leaf_for_illum is not None
                                 and v_leaf_for_illum.grad is not None):

@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from sweep_tasks._helpers.model import _model_array
+from sweepx.tasks._helpers.model import _model_array
 
 
 def _stamp(msg: str, t0: float, *, verbose: bool) -> float:
@@ -97,9 +97,9 @@ def materialize_plan_dataset(
                          starting model's grid, model axes (``(z, x)`` in 2-D)
       ``native_dt``      float — the dt the obs tensor is sampled at
     """
-    from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
-    from sweep_io.seismic_plan import PlanReader, SeismicPlan
-    from sweep_tasks.preproc.resample import resample_time
+    from sweepx.tasks._helpers.plan_apply import resolve_rotation_frame
+    from sweepx.io.seismic_plan import PlanReader, SeismicPlan
+    from sweepx.tasks.preproc.resample import resample_time
 
     geom = spec.geometry
     ocfg = spec.obs.plan

@@ -18,7 +18,7 @@ from typing import Iterable, Optional
 import torch
 from torch import Tensor
 
-from sweep_opt.precond.base import Preconditioner
+from sweepx.opt.precond.base import Preconditioner
 
 
 class DepthWeighting(Preconditioner):

@@ -1,12 +1,12 @@
 """Model reparameterizations (sigmoid bounds, log-velocity, DIP, ...)."""
 
-from sweep_opt.parameterization.base import IdentityParameterization, Parameterization
-from sweep_opt.parameterization.bounds import (
+from sweepx.opt.parameterization.base import IdentityParameterization, Parameterization
+from sweepx.opt.parameterization.bounds import (
     LogVelocity,
     PerturbationFromBackground,
     SigmoidBounds,
 )
-from sweep_opt.parameterization.dip import DIPParameterization, SmallUNet2D
+from sweepx.opt.parameterization.dip import DIPParameterization, SmallUNet2D
 
 __all__ = [
     "DIPParameterization",

@@ -1,10 +1,10 @@
-"""Tests for sweep_io.prefetch — order, errors, lifecycle, overlap."""
+"""Tests for sweepx.io.prefetch — order, errors, lifecycle, overlap."""
 
 import time
 
 import pytest
 
-from sweep_io.prefetch import (
+from sweepx.io.prefetch import (
     Prefetcher,
     ThreadPoolPrefetcher,
     TimingPrefetcher,

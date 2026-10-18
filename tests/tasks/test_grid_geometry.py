@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 
 def test_grid_geometry_builds_the_outer_product():
-    from sweep_tasks._helpers.geometry import _build_geometry
-    from sweep_tasks.schemas import AxisSpan, GridGeometry, GridSet
+    from sweepx.tasks._helpers.geometry import _build_geometry
+    from sweepx.tasks.schemas import AxisSpan, GridGeometry, GridSet
 
     g = GridGeometry(
         sources=GridSet(x=AxisSpan(start=10, stop=40, step=10),
@@ -23,8 +23,8 @@ def test_grid_geometry_builds_the_outer_product():
 
 
 def test_grid_geometry_is_3d_only():
-    from sweep_tasks._helpers.geometry import _build_geometry
-    from sweep_tasks.schemas import AxisSpan, GridGeometry, GridSet
+    from sweepx.tasks._helpers.geometry import _build_geometry
+    from sweepx.tasks.schemas import AxisSpan, GridGeometry, GridSet
 
     g = GridGeometry(
         sources=GridSet(x=AxisSpan(step=10), y=AxisSpan(step=10), depth=1),
@@ -35,8 +35,8 @@ def test_grid_geometry_is_3d_only():
 
 
 def test_grid_geometry_rejects_an_empty_span():
-    from sweep_tasks._helpers.geometry import _build_geometry
-    from sweep_tasks.schemas import AxisSpan, GridGeometry, GridSet
+    from sweepx.tasks._helpers.geometry import _build_geometry
+    from sweepx.tasks.schemas import AxisSpan, GridGeometry, GridSet
 
     g = GridGeometry(
         sources=GridSet(x=AxisSpan(start=50, stop=20, step=5),

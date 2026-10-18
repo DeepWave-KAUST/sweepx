@@ -12,9 +12,9 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from sweep_agent.agent import Agent
-from sweep_agent.llm.base import BaseLLM, ChatMessage, ToolCall
-from sweep_agent.tools import registry
+from sweepx.agent.agent import Agent
+from sweepx.agent.llm.base import BaseLLM, ChatMessage, ToolCall
+from sweepx.agent.tools import registry
 
 
 class FakeLLM(BaseLLM):

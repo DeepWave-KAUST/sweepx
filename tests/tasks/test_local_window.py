@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import load_task, TaskRunner
-from sweep_tasks._helpers.dd import _compute_local_window, _rebase_geometry_to_window
+from sweepx.tasks import load_task, TaskRunner
+from sweepx.tasks._helpers.dd import _compute_local_window, _rebase_geometry_to_window
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def test_local_window_disabled_acts_like_full_grid(tmp_path):
 
 def test_local_window_yaml_shortcut_true(tmp_path):
     """``local_model_window: true`` enables it with default parameters."""
-    from sweep_tasks import LocalModelWindowSpec
+    from sweepx.tasks import LocalModelWindowSpec
     true_path, init_path = _tiny_grid_models(tmp_path)
     spec = _base_fwi_spec(tmp_path, init_path, true_path)
     spec.update({

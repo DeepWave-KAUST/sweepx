@@ -29,7 +29,7 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import OTMFLoss  # noqa: E402
+from sweepx.loss import OTMFLoss  # noqa: E402
 
 
 NAME = "11_otmf"

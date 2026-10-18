@@ -7,7 +7,7 @@ because gradio only serves files through its /file= proxy — a raw local path
 
 from __future__ import annotations
 
-from sweep_agent.webui import _strip_local_image_embeds
+from sweepx.agent.webui import _strip_local_image_embeds
 
 
 def test_strips_local_image_and_tidies_bullet():

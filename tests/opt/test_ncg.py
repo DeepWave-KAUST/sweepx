@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.NCG."""
+"""Tests for sweepx.opt.optim.NCG."""
 import pytest
 import torch
 
-from sweep_opt.optim import NCG, SteepestDescent
+from sweepx.opt.optim import NCG, SteepestDescent
 
 
 def _run(opt, closure, n_iters):

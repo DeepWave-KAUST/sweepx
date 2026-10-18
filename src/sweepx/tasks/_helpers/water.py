@@ -1,6 +1,6 @@
 """The run's water layer: one definition (``water:``), sampled on every grid.
 
-:class:`sweep_tasks.schemas.WaterSpec` says WHERE the water is once, on the
+:class:`sweepx.tasks.schemas.WaterSpec` says WHERE the water is once, on the
 native model grid (``grid.dh``, the starting model's shape): a seabed map or a
 mask. Every inversion path asks :class:`WaterRegion` for the water on the grid
 it is about to use -- a stage grid with its own ``dh_m``, a model_plan crop --
@@ -9,8 +9,8 @@ a grid for DD tiles stays with the caller: it pads the mask the way it pads
 the model there (an edge replicate).
 
 * seabed: the grid's columns sample the map at their physical positions
-  (:func:`sweep_tasks._helpers.stage_grid._seabed_to_grid`) and
-  :func:`sweep_tasks.bathymetry.water_mask_from_seabed_depth` marks every cell
+  (:func:`sweepx.tasks._helpers.stage_grid._seabed_to_grid`) and
+  :func:`sweepx.tasks.bathymetry.water_mask_from_seabed_depth` marks every cell
   whose centre lies above ``seabed + buffer``. The buffer is a DEPTH,
   ``buffer_cells`` cells of the native grid, whatever the grid's own spacing.
 * mask: each cell takes the value of the native cell nearest to its position
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sweep_tasks._helpers.stage_grid import (
+from sweepx.tasks._helpers.stage_grid import (
     _SNAP_CELLS,
     _per_axis,
     _same_spacing,
@@ -71,13 +71,13 @@ def _load_mask(path: Path, native_shape: tuple[int, ...]) -> np.ndarray:
 
 
 def _load_seabed(path: Path, native_shape: tuple[int, ...]) -> np.ndarray:
-    from sweep_tasks.bathymetry import load_seabed_depth_npz
+    from sweepx.tasks.bathymetry import load_seabed_depth_npz
 
     obj = np.load(path, allow_pickle=False)
     if isinstance(obj, np.ndarray):
         raise ValueError(
             f"water.seabed {path} is a plain array; the seabed file is an .npz "
-            "with key 'seabed_depth' (sweep_tasks.bathymetry."
+            "with key 'seabed_depth' (sweepx.tasks.bathymetry."
             "save_seabed_depth_npz)")
     obj.close()
     try:
@@ -150,7 +150,7 @@ class WaterRegion:
     @classmethod
     def from_task(cls, task_spec, native_shape, native_dh) -> "WaterRegion | None":
         """The task's water region, or ``None`` when ``water`` is unset/false."""
-        from sweep_tasks.schemas import water_of
+        from sweepx.tasks.schemas import water_of
 
         w = water_of(task_spec)
         return None if w is None else cls(w, native_shape, native_dh)
@@ -200,7 +200,7 @@ class WaterRegion:
             raise ValueError(f"water: grid {shape} vs frame {self.frame_shape}")
         d = _per_axis(dh, len(shape), "dh")
         if self.kind == "seabed":
-            from sweep_tasks.bathymetry import water_mask_from_seabed_depth
+            from sweepx.tasks.bathymetry import water_mask_from_seabed_depth
 
             sd = _seabed_to_grid(self._seabed, self.frame_shape[1:],
                                  self.frame_dh[1:], shape[1:], d[1:])

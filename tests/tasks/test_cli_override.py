@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from sweep_tasks.cli import main
+from sweepx.tasks.cli import main
 
 
 def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
@@ -79,7 +79,7 @@ def test_cli_build_plan_crg_grouping_end_to_end(tmp_path, capsys):
     """
     import struct
 
-    from sweep_io.segy import (
+    from sweepx.io.segy import (
         FORMAT_IEEE_FLOAT32,
         SEGY_BIN_HEADER_SIZE,
         SEGY_TEXT_HEADER_SIZE,
@@ -137,7 +137,7 @@ def test_cli_build_plan_crg_grouping_end_to_end(tmp_path, capsys):
     assert rc == 0, captured.out
     assert out.exists()
 
-    from sweep_io.seismic_plan import SeismicPlan
+    from sweepx.io.seismic_plan import SeismicPlan
     plan = SeismicPlan.load(out)
     assert plan.grouping == "crg"
     # 2 files × 2 shots × 2 receivers = 8 traces; receiver-quantize=1 m
@@ -154,7 +154,7 @@ def test_cli_build_plan_crg_grouping_end_to_end(tmp_path, capsys):
 
 
 def test_build_mpi_reexec_cmd_strips_short_form_and_adds_mpi():
-    from sweep_tasks.cli import _build_mpi_reexec_cmd
+    from sweepx.tasks.cli import _build_mpi_reexec_cmd
     argv = ["/path/to/sweep-tasks", "build-index",
             "--segy-root", "/a", "-o", "/b", "-n", "50"]
     cmd = _build_mpi_reexec_cmd(50, argv)
@@ -172,7 +172,7 @@ def test_build_mpi_reexec_cmd_strips_short_form_and_adds_mpi():
 
 
 def test_build_mpi_reexec_cmd_strips_long_form():
-    from sweep_tasks.cli import _build_mpi_reexec_cmd
+    from sweepx.tasks.cli import _build_mpi_reexec_cmd
     argv = ["/p/sweep-tasks", "build-index", "--mpi-ranks", "8",
             "--segy-root", "/a", "--out", "/b"]
     cmd = _build_mpi_reexec_cmd(8, argv)
@@ -183,7 +183,7 @@ def test_build_mpi_reexec_cmd_strips_long_form():
 
 
 def test_build_mpi_reexec_cmd_strips_equals_form():
-    from sweep_tasks.cli import _build_mpi_reexec_cmd
+    from sweepx.tasks.cli import _build_mpi_reexec_cmd
     argv = ["/p/sweep-tasks", "build-index", "-n=8", "--mpi-ranks=8",
             "--segy-root", "/a"]
     cmd = _build_mpi_reexec_cmd(8, argv)
@@ -195,7 +195,7 @@ def test_build_mpi_reexec_cmd_strips_equals_form():
 
 
 def test_build_mpi_reexec_cmd_does_not_duplicate_mpi_flag():
-    from sweep_tasks.cli import _build_mpi_reexec_cmd
+    from sweepx.tasks.cli import _build_mpi_reexec_cmd
     argv = ["/p/sweep-tasks", "build-index", "--mpi", "-n", "4",
             "--segy-root", "/a"]
     cmd = _build_mpi_reexec_cmd(4, argv)
@@ -209,7 +209,7 @@ def test_build_mpi_reexec_cmd_does_not_duplicate_program_path():
     `mpiexec -n N /path/sweep-tasks /path/sweep-tasks build-index ...`
     and argparse rejected the second program path as an invalid command.
     """
-    from sweep_tasks.cli import _build_mpi_reexec_cmd
+    from sweepx.tasks.cli import _build_mpi_reexec_cmd
     argv = ["/full/path/sweep-tasks", "build-index",
             "--segy-root", "/a", "-o", "/b", "-n", "16"]
     cmd = _build_mpi_reexec_cmd(16, argv)
@@ -223,7 +223,7 @@ def test_build_mpi_reexec_cmd_does_not_duplicate_program_path():
 
 def test_maybe_reexec_under_mpi_noop_when_n_unset(monkeypatch):
     """No --mpi-ranks → no re-exec, no exception."""
-    from sweep_tasks.cli import _maybe_reexec_under_mpi
+    from sweepx.tasks.cli import _maybe_reexec_under_mpi
 
     class _Args:
         mpi_ranks = None
@@ -236,7 +236,7 @@ def test_maybe_reexec_under_mpi_noop_when_n_unset(monkeypatch):
 
 def test_maybe_reexec_under_mpi_noop_when_already_under_mpi(monkeypatch):
     """--mpi-ranks=N + MPI env var set → no re-exec (we ARE the child)."""
-    from sweep_tasks.cli import _maybe_reexec_under_mpi
+    from sweepx.tasks.cli import _maybe_reexec_under_mpi
 
     class _Args:
         mpi_ranks = 50
@@ -251,7 +251,7 @@ def test_maybe_reexec_under_mpi_noop_when_already_under_mpi(monkeypatch):
 def test_maybe_reexec_under_mpi_does_exec_when_eligible(monkeypatch):
     """--mpi-ranks=N at the shell prompt → triggers os.execvp."""
     import sys
-    from sweep_tasks.cli import _maybe_reexec_under_mpi
+    from sweepx.tasks.cli import _maybe_reexec_under_mpi
 
     class _Args:
         mpi_ranks = 4

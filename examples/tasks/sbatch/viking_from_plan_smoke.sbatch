@@ -33,7 +33,7 @@ export PYTHONUNBUFFERED=1
 YAML=${SWEEP_STACK_ROOT}/sweep-tasks/examples/tasks/viking_from_plan_smoke.yaml
 
 cd ${SWEEP_USER_ROOT}/sweep-stack
-torchrun --standalone --nproc_per_node=1 -m sweep_tasks run "$YAML"
+torchrun --standalone --nproc_per_node=1 -m sweepx.tasks run "$YAML"
 
 echo "============================================================"
 echo "Finished: $(date -Iseconds)"

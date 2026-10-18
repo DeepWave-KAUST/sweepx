@@ -26,22 +26,22 @@ from typing import Any
 # ``bandpass_torch`` is the FFT |H(z)|² Butterworth on torch (GPU/CPU,
 # autograd-friendly). Importing once at module load avoids the ~50 µs
 # import-on-call cost previously paid by half a dozen inline imports.
-from sweep_tasks.schemas import (
+from sweepx.tasks.schemas import (
     TaskSpec,
 )
-from sweep_tasks._helpers.util import (
+from sweepx.tasks._helpers.util import (
     _make_task_id,
     _now_iso,
 )
-from sweep_tasks.tasks.forward import ForwardRunnerMixin
-from sweep_tasks.tasks.lsrtm import LSRTMRunnerMixin
-from sweep_tasks.tasks.fwi_freqsel import FreqselRunnerMixin
-from sweep_tasks.tasks.rtm import RTMRunnerMixin
-from sweep_tasks.tasks.fwi import FWIRunnerMixin
-from sweep_tasks.tasks.fwi_plan_streaming import PlanStreamingFWIMixin
-from sweep_tasks._helpers.logtee import tee_run_logs
-from sweep_tasks._helpers.metadata import _dump_run_metadata, _write_manifest
-from sweep_tasks.progress import ProgressLog
+from sweepx.tasks.tasks.forward import ForwardRunnerMixin
+from sweepx.tasks.tasks.lsrtm import LSRTMRunnerMixin
+from sweepx.tasks.tasks.fwi_freqsel import FreqselRunnerMixin
+from sweepx.tasks.tasks.rtm import RTMRunnerMixin
+from sweepx.tasks.tasks.fwi import FWIRunnerMixin
+from sweepx.tasks.tasks.fwi_plan_streaming import PlanStreamingFWIMixin
+from sweepx.tasks._helpers.logtee import tee_run_logs
+from sweepx.tasks._helpers.metadata import _dump_run_metadata, _write_manifest
+from sweepx.tasks.progress import ProgressLog
 
 
 # ---------- result + status containers -----------------------------------
@@ -111,7 +111,7 @@ class TaskRunner(
         """``source``: where the spec came from -- ``{"path": <task file>,
         "overrides": [...]}`` (the CLI passes it); the file is kept in the run
         dir as ``task_source.yaml``."""
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         dist_info = _dist.init_distributed_if_needed()
         self._dist = dist_info
@@ -132,7 +132,7 @@ class TaskRunner(
             (task_dir / "logs").mkdir(exist_ok=True)
         _dist.barrier(dist_info)
         # metrics.jsonl: rank 0 only, like status.json. Tasks reach it via
-        # sweep_tasks.progress.progress_for(self).
+        # sweepx.tasks.progress.progress_for(self).
         self._progress = ProgressLog(task_dir, enabled=dist_info.is_root)
         # the run's stdout / stderr also go to <run>/logs/ (see _helpers/logtee.py);
         # the manifest is taken last, once those are closed
@@ -147,7 +147,7 @@ class TaskRunner(
                     print(f"[runner] failed to write manifest.json: {merr!r}")
 
     def _run_in(self, spec: TaskSpec, task_dir: Path, task_id: str, dist_info, source: dict | None) -> TaskResult:
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         status = TaskStatus(
             task_id=task_id,

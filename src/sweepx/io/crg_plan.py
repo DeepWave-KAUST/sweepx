@@ -98,7 +98,7 @@ class CRGPlan:
         These become the FWI **sources**.
     plan_file_ids, plan_trace_offsets
         Flat per-row arrays of (file index, byte offset) tuples handed
-        to :meth:`sweep_io.segy.MultiFileSEGYReader.read_traces`.
+        to :meth:`sweepx.io.segy.MultiFileSEGYReader.read_traces`.
     plan_sx, plan_sy, plan_sz
         Flat per-row physical shot positions in UTM (m). These become
         the FWI **receivers** (one per recorded trace).

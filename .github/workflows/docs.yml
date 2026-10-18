@@ -57,7 +57,7 @@ jobs:
           # CPU torch — sweep's equation modules import torch at module top,
           # so mkdocstrings' force_inspection needs it present.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # Published packages (import as `sweep` / `sweep_agent` / `sweep_tasks`;
+          # Published packages (import as `sweep` / `sweepx.agent` / `sweepx.tasks`;
           # sweep-tasks brings sweep-loss, sweep-io and sweep-nn):
           pip install sweep-solver sweep-agent sweep-tasks
           # mkdocs.yml imports the Solver docs from sweep@dev, so an API page can
@@ -89,10 +89,10 @@ jobs:
           print("sweep-solver", version("sweep-solver"), "| sweep-agent", version("sweep-agent"),
                 "| sweep-tasks", version("sweep-tasks"))
           print("sweep imported from", importlib.import_module("sweep").__file__)
-          for mod in ("sweep", "sweep.parallel", "sweep_agent",
-                      "sweep_tasks.runner", "sweep_tasks.yaml_io", "sweep_tasks.schemas",
-                      "sweep_nn", "sweep_nn.diffusion.prior",
-                      "sweep_io.seismic_plan", "sweep_io.cuda_prefetch"):
+          for mod in ("sweep", "sweep.parallel", "sweepx.agent",
+                      "sweepx.tasks.runner", "sweepx.tasks.yaml_io", "sweepx.tasks.schemas",
+                      "sweepx.nn", "sweepx.nn.diffusion.prior",
+                      "sweepx.io.seismic_plan", "sweepx.io.cuda_prefetch"):
               try:
                   importlib.import_module(mod)
               except Exception as exc:

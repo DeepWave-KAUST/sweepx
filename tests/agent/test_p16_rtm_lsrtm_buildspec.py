@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 @pytest.mark.parametrize("task_type", ["forward", "wavefield", "fwi", "rtm", "lsrtm"])
 def test_build_spec_validates_templates(tmp_path, task_type):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    from sweep_tasks import new_template
+    pytest.importorskip("sweepx.tasks")
+    from sweepx.tasks import new_template
 
     spec = dict(new_template(task_type))
     spec.pop("task_type", None)
@@ -33,8 +33,8 @@ def test_build_spec_validates_templates(tmp_path, task_type):
 def test_build_spec_rtm_imaging_block(tmp_path):
     """RTM carries an imaging block distinct from forward/fwi."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
-    from sweep_tasks import new_template
+    pytest.importorskip("sweepx.tasks")
+    from sweepx.tasks import new_template
 
     spec = dict(new_template("rtm"))
     spec.pop("task_type", None)
@@ -48,7 +48,7 @@ def test_build_spec_rtm_imaging_block(tmp_path):
 def test_build_spec_invalid_returns_error(tmp_path):
     """A structurally wrong spec comes back as a data error, not an exception."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     r = registry.get("build_spec").invoke({
         "task_type": "forward",
         "spec": {"grid": {"dh": "not-a-number"}, "output_dir": str(tmp_path)},
@@ -58,7 +58,7 @@ def test_build_spec_invalid_returns_error(tmp_path):
 
 def test_build_spec_unknown_task_type(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     r = registry.get("build_spec").invoke({
         "task_type": "frobnicate", "spec": {"output_dir": str(tmp_path)},
     })

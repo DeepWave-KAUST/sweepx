@@ -5,11 +5,11 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask=None,
                        water_vp=1500.0, param_bases=None):
     """Construct the reparam network from a ReparamSpec.
 
-    Single-parameter (default): a :class:`sweep_nn.VelocityINR` over ``base_vp``
+    Single-parameter (default): a :class:`sweepx.nn.VelocityINR` over ``base_vp``
     (the initial vp tensor at the first stage's grid); its forward returns
     ``base + delta`` clamped to ``bounds``.
 
-    Multi-parameter (``spec.free_params`` set): a :class:`sweep_nn.MultiParamINR`
+    Multi-parameter (``spec.free_params`` set): a :class:`sweepx.nn.MultiParamINR`
     with one output channel per freed parameter. ``param_bases`` is the list of
     per-channel init tensors (same order as ``spec.free_params``, already
     resampled+padded to the stage grid); channel 0 is vp. Each channel's
@@ -24,7 +24,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask=None,
     ``FreeParamSpec.water_value`` (null = free).
     """
     import torch  # local import — runner.py keeps torch imports per-function
-    from sweep_nn import VelocityINR
+    from sweepx.nn import VelocityINR
 
     bounds_tuple = None
     if bounds is not None and bounds.min is not None and bounds.max is not None:
@@ -39,7 +39,7 @@ def _build_reparam_net(spec, base_vp, bounds, water_mask=None,
     # ---- multi-parameter reparam (free_params) -> MultiParamINR ---------- #
     free_params = getattr(spec, "free_params", None)
     if free_params:
-        from sweep_nn import MultiParamINR
+        from sweepx.nn import MultiParamINR
         if param_bases is None or len(param_bases) != len(free_params):
             raise ValueError(
                 f"free_params has {len(free_params)} entries but got "

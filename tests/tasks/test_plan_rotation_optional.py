@@ -4,7 +4,7 @@ import json
 import numpy as np
 import pytest
 
-from sweep_tasks._helpers.plan_apply import resolve_rotation_frame
+from sweepx.tasks._helpers.plan_apply import resolve_rotation_frame
 
 
 def test_none_gives_an_identity_frame():

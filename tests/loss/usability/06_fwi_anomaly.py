@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import sweep_loss as sl
+import sweepx.loss as sl
 from sweep.equations import Acoustic
 from sweep.propagator.options import BoundaryOptions, CUDAOptions, MemoryOptions
 from sweep.propagator.torch import PropTorch

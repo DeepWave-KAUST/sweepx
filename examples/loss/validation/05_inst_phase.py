@@ -33,8 +33,8 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import EnvelopePhaseLoss, InstantaneousPhaseLoss  # noqa: E402
-from sweep_loss._utils import envelope, hilbert, instantaneous_phase  # noqa: E402
+from sweepx.loss import EnvelopePhaseLoss, InstantaneousPhaseLoss  # noqa: E402
+from sweepx.loss._utils import envelope, hilbert, instantaneous_phase  # noqa: E402
 
 
 NAME = "05_inst_phase"

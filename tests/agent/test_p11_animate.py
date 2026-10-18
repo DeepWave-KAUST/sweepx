@@ -7,12 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def test_equations_for_models_ranking():
     pytest.importorskip("sweep")
-    from sweep_agent.tools.introspect import equations_for_models
+    from sweepx.agent.tools.introspect import equations_for_models
 
     # Matched on the NON-primary models (vp / vp0 come from vp_path).
     assert equations_for_models({"vs", "rho"}, ndim=2)[0] == "Elastic"
@@ -27,7 +27,7 @@ def test_equations_for_models_ranking():
 def test_build_wavefield_vp0_primary(tmp_path):
     """vp_path supplies the equation's FIRST model even when it's named vp0."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     shape = (60, 60)
 
     def npy(name, val):
@@ -76,7 +76,7 @@ def test_wrong_equation_for_extra_models_hint(tmp_path):
 def test_animate_wavefield_acoustic(tmp_path):
     """End-to-end one-call animation on a tiny acoustic model."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((60, 60), 2000.0, dtype=np.float32))
     a = registry.get("animate_wavefield").invoke({

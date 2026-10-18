@@ -1,6 +1,6 @@
 """CUDA-aware prefetching with pinned host buffers and a side stream.
 
-Sits on top of :mod:`sweep_io.prefetch` and adds two GPU-specific tricks:
+Sits on top of :mod:`sweepx.io.prefetch` and adds two GPU-specific tricks:
 
 1. **Pinned host buffers.** Page-locked memory is required for true
    async H2D copies. Without it, ``tensor.to(device, non_blocking=True)``
@@ -27,7 +27,7 @@ try:
     import torch
 except ImportError as e:  # pragma: no cover
     raise ImportError(
-        "sweep_io.cuda_prefetch requires `torch`. "
+        "sweepx.io.cuda_prefetch requires `torch`. "
         "Install with `pip install sweep-io[torch]`."
     ) from e
 

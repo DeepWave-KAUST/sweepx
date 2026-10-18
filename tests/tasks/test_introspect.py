@@ -1,4 +1,4 @@
-"""``sweep_tasks.introspect`` and ``yaml_io.resolve_paths``: the public views
+"""``sweepx.tasks.introspect`` and ``yaml_io.resolve_paths``: the public views
 tools such as sweep-studio build forms, previews and pre-flight checks on.
 
 Each view must agree with the code path the runner actually takes, so most
@@ -22,18 +22,18 @@ from pydantic import TypeAdapter
 
 import sweep.equations as eq_mod
 
-from sweep_tasks import TaskRunner, introspect, load_task_from_dict
-from sweep_tasks._helpers.geometry import _build_geometry_2d
-from sweep_tasks._helpers.model import (
+from sweepx.tasks import TaskRunner, introspect, load_task_from_dict
+from sweepx.tasks._helpers.geometry import _build_geometry_2d
+from sweepx.tasks._helpers.model import (
     _get_equation_class,
     _infer_shape,
     _model_array,
     _model_names_for_equation,
 )
-from sweep_tasks._helpers.solver_build import _cfl_check
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
-from sweep_tasks.schemas import ModelRef, TaskSpec
-from sweep_tasks.yaml_io import (
+from sweepx.tasks._helpers.solver_build import _cfl_check
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks.schemas import ModelRef, TaskSpec
+from sweepx.tasks.yaml_io import (
     RESOLVED_PATH_KEYS,
     RESOLVED_WATER_PATH_KEYS,
     _resolve_paths,
@@ -174,7 +174,7 @@ def test_unknown_equation_lists_close_matches():
 
 def _cfl_check_before_refactor(vmax_m_s, dh_m, dt_s, *, threshold=0.85):
     # Verbatim body of _helpers.solver_build._cfl_check before it moved its
-    # number and limits into sweep_tasks.introspect.
+    # number and limits into sweepx.tasks.introspect.
     cfl = float(vmax_m_s) * float(dt_s) / float(dh_m)
     if cfl > 1.0:
         raise ValueError(
@@ -223,7 +223,7 @@ def test_cfl_check_messages_unchanged(capsys, args, kwargs):
 # ----- resolve_paths ------------------------------------------------------------
 
 def _bundled_templates() -> dict[str, dict]:
-    root = ir.files("sweep_tasks").joinpath("templates")
+    root = ir.files("sweepx.tasks").joinpath("templates")
     return {p.name: yaml.safe_load(p.read_text()) for p in root.iterdir()
             if p.name.endswith(".yaml")}
 

@@ -1,4 +1,4 @@
-"""Sanity tests for :class:`sweep_loss.L2Loss`.
+"""Sanity tests for :class:`sweepx.loss.L2Loss`.
 
 These tests pin down the *formula* (1/2 sum (syn - obs)^2) and the analytic
 properties everyone relies on:
@@ -15,7 +15,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from sweep_loss import L2Loss, l2_loss
+from sweepx.loss import L2Loss, l2_loss
 
 
 def test_zero_when_equal(small_gather):

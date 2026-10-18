@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from sweep_loss import (
+from sweepx.loss import (
     FrequencyAmplitudeLoss,
     FrequencyDomainL2Loss,
     FrequencyPhaseLoss,

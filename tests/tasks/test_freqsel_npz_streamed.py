@@ -10,7 +10,7 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import FrequencyComb, extract_shard_gathers, write_npz_streamed
+from sweepx.tasks.freqsel import FrequencyComb, extract_shard_gathers, write_npz_streamed
 
 
 def _members(path):

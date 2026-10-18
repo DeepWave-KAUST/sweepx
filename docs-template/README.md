@@ -10,7 +10,7 @@ and is applied at build time. Packages carry **content only**.
 1. Copy `docs/` and `mkdocs.yml` from here into your package repo.
 2. Replace the placeholders everywhere:
    - `PACKAGE_NAME` → the pip name (e.g. `sweep-tasks`)
-   - `IMPORT_NAME`  → the python import (e.g. `sweep_tasks`)
+   - `IMPORT_NAME`  → the python import (e.g. `sweepx.tasks`)
    - fill in the prose, code, and examples.
 3. Point the API page(s) at your package: `::: your_import_name`.
 4. In the **sweepx** repo, add one line to `nav:` in `mkdocs.yml`:

@@ -35,7 +35,7 @@ from _common import (  # noqa: E402
     write_summary,
 )
 
-from sweep_loss import (  # noqa: E402
+from sweepx.loss import (  # noqa: E402
     CauchyLoss,
     GemanMcClureLoss,
     HuberLoss,

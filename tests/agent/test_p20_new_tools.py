@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 @pytest.mark.parametrize("kind", ["two_layer", "gradient", "smooth", "layered", "anomaly", "fault"])
@@ -37,7 +37,7 @@ def test_smooth_is_a_gradient_alias(tmp_path):
 
 
 def test_plot_velocity_model_2d_and_3d(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     m2 = tmp_path / "m2.npy"
     np.save(m2, np.linspace(1800, 3000, 60 * 80).reshape(60, 80).astype(np.float32))
     r = registry.get("plot_velocity_model").invoke({"model_path": str(m2), "dh": 10.0, "out_path": str(tmp_path / "m2.png")})
@@ -79,7 +79,7 @@ def test_plot_wavelet(tmp_path):
 
 
 def test_animate_fwi_evolution(tmp_path):
-    pytest.importorskip("sweep_tasks.viz")
+    pytest.importorskip("sweepx.tasks.viz")
     # Fabricate an FWI-style task dir with per-epoch models that sharpen.
     epochs = tmp_path / "fwi" / "output" / "epochs"
     epochs.mkdir(parents=True)

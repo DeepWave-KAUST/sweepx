@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
-from sweep_tasks._helpers import metadata as M
+from sweepx.tasks import TaskRunner, load_task
+from sweepx.tasks._helpers import metadata as M
 
 
 def test_labels_and_the_environment_of_interest():

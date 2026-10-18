@@ -36,7 +36,7 @@ export PYTHONUNBUFFERED=1
 YAML=${SWEEP_REPOS_ROOT}/sweep-tasks/examples/tasks/viking_rtm_finegrid.yaml
 
 cd ${SWEEP_REPOS_ROOT}/sweep-tasks
-torchrun --standalone --nproc_per_node=1 -m sweep_tasks run "$YAML"
+torchrun --standalone --nproc_per_node=1 -m sweepx.tasks run "$YAML"
 
 echo "============================================================"
 echo "Finished: $(date -Iseconds)"

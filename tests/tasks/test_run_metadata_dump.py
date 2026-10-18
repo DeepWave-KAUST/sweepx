@@ -12,7 +12,7 @@ import yaml
 
 
 def test_save_gradient_ortho_slices_png_writes(tmp_path):
-    from sweep_tasks.qc import save_gradient_ortho_slices_png
+    from sweepx.tasks.qc import save_gradient_ortho_slices_png
 
     grad = (
         np.random.default_rng(0).standard_normal((20, 30, 40)).astype(np.float32)
@@ -26,7 +26,7 @@ def test_save_gradient_ortho_slices_png_writes(tmp_path):
 
 
 def test_save_gradient_ortho_slices_png_rejects_2d(tmp_path):
-    from sweep_tasks.qc import save_gradient_ortho_slices_png
+    from sweepx.tasks.qc import save_gradient_ortho_slices_png
 
     with pytest.raises(ValueError, match="3-D grad"):
         save_gradient_ortho_slices_png(
@@ -74,8 +74,8 @@ def _write_tiny_models(tmp_path: Path):
 
 def test_dump_run_metadata_writes_yaml_and_json(tmp_path):
     """The dump produces a YAML mirror of the spec + a runtime json."""
-    from sweep_tasks import load_task
-    from sweep_tasks.runner import _dump_run_metadata
+    from sweepx.tasks import load_task
+    from sweepx.tasks.runner import _dump_run_metadata
 
     true_path, init_path = _write_tiny_models(tmp_path)
     spec_dict = _make_spec_dict(tmp_path, init_path, true_path)
@@ -111,8 +111,8 @@ def test_dump_run_metadata_resolved_yaml_expands_defaults(tmp_path):
     """The dumped YAML must contain pydantic defaults that the user
     didn't write — this is the whole point of dumping the resolved
     spec rather than echoing the raw input."""
-    from sweep_tasks import load_task
-    from sweep_tasks.runner import _dump_run_metadata
+    from sweepx.tasks import load_task
+    from sweepx.tasks.runner import _dump_run_metadata
 
     true_path, init_path = _write_tiny_models(tmp_path)
     spec_dict = _make_spec_dict(tmp_path, init_path, true_path, task_id="dump2")
@@ -132,8 +132,8 @@ def test_dump_run_metadata_captures_dd_launch(tmp_path, monkeypatch):
     """DD / SLURM / torchrun launch env is captured into run_meta.json and
     summarised in the config_resolved.yaml comment header — the info needed to
     reproduce a multi-GPU run, which the pydantic spec itself never carries."""
-    from sweep_tasks import load_task
-    from sweep_tasks.runner import _dump_run_metadata
+    from sweepx.tasks import load_task
+    from sweepx.tasks.runner import _dump_run_metadata
 
     # Simulate a 4x3 = 12-GPU DD launch under SLURM (3 nodes x 4 v100).
     monkeypatch.setenv("SWEEP_DD_ENABLE", "1")
@@ -181,8 +181,8 @@ def test_dump_run_metadata_captures_dd_launch(tmp_path, monkeypatch):
 def test_dump_run_metadata_single_process_header(tmp_path, monkeypatch):
     """With no DD / torchrun env the header says single-process, the DD block
     is disabled (mesh=1), and the file still round-trips."""
-    from sweep_tasks import load_task
-    from sweep_tasks.runner import _dump_run_metadata
+    from sweepx.tasks import load_task
+    from sweepx.tasks.runner import _dump_run_metadata
 
     for k in ("SWEEP_DD_ENABLE", "SWEEP_DD_PY", "SWEEP_DD_PX",
               "SWEEP_DD_RENDER_CHUNK", "WORLD_SIZE", "LOCAL_RANK", "RANK"):

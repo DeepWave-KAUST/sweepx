@@ -31,12 +31,12 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import (
+from sweepx.opt._utils import (
     flat_params,
     iter_params,
     write_flat_to_params,
 )
-from sweep_opt.linalg.cg import steihaug_cg
+from sweepx.opt.linalg.cg import steihaug_cg
 
 
 class TrustRegion(Optimizer):

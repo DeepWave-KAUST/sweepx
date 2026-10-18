@@ -384,7 +384,7 @@ def build_seismic_plan(
     Parameters
     ----------
     index
-        A :class:`sweep_io.segy_index.SEGYIndex` — the full per-trace
+        A :class:`sweepx.io.segy_index.SEGYIndex` — the full per-trace
         catalog. Not mutated.
     grouping
         ``"csg"`` (default) → one group per unique ``shot_id`` (FFID).
@@ -751,7 +751,7 @@ class PlanReader:
         1. ``cache_all=True`` at construction → fancy-index slice on the
            in-RAM ``(n_rows, nt)`` tensor (single numpy op, instant).
         2. ``trace_cache_bytes`` set (per-trace LRU + ``coalesce_gap``)
-           → :func:`sweep_io.crg_dataset.read_traces_cached`. This is the
+           → :func:`sweepx.io.crg_dataset.read_traces_cached`. This is the
            legacy OBN supershot IO path: hot traces (re-sampled across
            iters) come from RAM, cold traces are coalesced into bigger
            ``pread`` calls. Cuts wait_io about
@@ -871,7 +871,7 @@ class SharedShotBatch:
 def _shot_xy_keys(sx: np.ndarray, sy: np.ndarray) -> np.ndarray:
     """Pack mm-quantised ``(sx, sy)`` into one int64 each.
 
-    Identical to ``sweep_io.crg_plan._shot_xy_keys`` (kept here so the
+    Identical to ``sweepx.io.crg_plan._shot_xy_keys`` (kept here so the
     unified plan path has no dependency on the legacy CRG module).
     """
     sxi = np.rint(np.asarray(sx, dtype=np.float64) * 1000.0).astype(np.int64)
@@ -928,7 +928,7 @@ def sample_shared_shots_from_plan(
     the invariant needed for source-encoded supershot FWI.
 
     This is the unified-plan port of
-    :func:`sweep_io.crg_plan.sample_crg_shared_shots`; behaviour is
+    :func:`sweepx.io.crg_plan.sample_crg_shared_shots`; behaviour is
     deliberately byte-equivalent so existing runner code can swap one for
     the other with no FP drift (assuming the same RNG state).
 

@@ -104,7 +104,7 @@ def ricker_pair(
 def adjoint(loss_fn, syn: torch.Tensor, obs: torch.Tensor) -> np.ndarray:
     """Return the adjoint source d loss / d syn for a (1, nt, 1, 1) pair.
 
-    Works for any sweep_loss BaseFWILoss subclass (reduction defaults to mean
+    Works for any sweepx.loss BaseFWILoss subclass (reduction defaults to mean
     inside the class).  ``syn`` must have ``requires_grad=True``.
     """
     if syn.grad is not None:

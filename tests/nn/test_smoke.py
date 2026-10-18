@@ -3,15 +3,15 @@
 import pytest
 import torch
 
-import sweep_nn
-from sweep_nn.dip import DIPReparam
-from sweep_nn.priors import LearnedPrior, perceptual_distance
-from sweep_nn.reparam import Reparameterizer
-from sweep_nn.siren import SIREN
+import sweepx.nn
+from sweepx.nn.dip import DIPReparam
+from sweepx.nn.priors import LearnedPrior, perceptual_distance
+from sweepx.nn.reparam import Reparameterizer
+from sweepx.nn.siren import SIREN
 
 
 def test_version():
-    assert isinstance(sweep_nn.__version__, str)
+    assert isinstance(sweepx.nn.__version__, str)
 
 
 def test_siren_output_shape_and_range():

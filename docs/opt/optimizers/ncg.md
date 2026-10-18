@@ -1,6 +1,6 @@
 # Nonlinear Conjugate Gradient (PR+)
 
-`sweep_opt.optim.NCG` is a Nonlinear Conjugate Gradient optimizer using the
+`sweepx.opt.optim.NCG` is a Nonlinear Conjugate Gradient optimizer using the
 **Polak-Ribiere+** update with strong-Wolfe line search. PR+ is the
 practical workhorse choice for nonlinear CG: the `max(0, beta_PR)`
 projection automatically restarts the iteration when the standard PR formula
@@ -25,7 +25,7 @@ CG-type methods.
 ## API
 
 ```python
-sweep_opt.optim.NCG(
+sweepx.opt.optim.NCG(
     params,                          # iterable of torch.Tensor
     *,
     bounds=None,                     # (lo, hi) box; clamp after each step
@@ -48,13 +48,13 @@ Diagnostic attributes:
 ## Drop-in usage
 
 ```python
-import sweep_opt
+import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
-opt = sweep_opt.optim.NCG(
+opt = sweepx.opt.optim.NCG(
     [vp],
     bounds=(1500.0, 5500.0),
-    preconditioner=sweep_opt.precond.PseudoHessianPrecond(eps=1e-3),
+    preconditioner=sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3),
 )
 
 def closure():

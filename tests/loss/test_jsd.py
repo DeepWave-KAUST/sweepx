@@ -7,7 +7,7 @@ import math
 import numpy as np
 import torch
 
-from sweep_loss import JensenShannonLoss, L2Loss, jensen_shannon_loss
+from sweepx.loss import JensenShannonLoss, L2Loss, jensen_shannon_loss
 
 
 def _ricker(t, t0, fc=15.0):

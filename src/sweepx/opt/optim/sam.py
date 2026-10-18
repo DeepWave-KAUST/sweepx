@@ -22,7 +22,7 @@ from typing import Callable
 import torch
 from torch.optim.optimizer import Optimizer
 
-from sweep_opt._utils import flat_grads, iter_params
+from sweepx.opt._utils import flat_grads, iter_params
 
 
 class SAM(Optimizer):

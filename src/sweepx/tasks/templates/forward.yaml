@@ -65,7 +65,7 @@ geometry:
 #   path: /p/line.segy
 #   byte_map: {sx: 73, sy: 77, gx: 81, gy: 85}
 # geometry: {kind: from_segy_index, index_path: /p/index.npz, shot_ids: null}
-# geometry:                         # sweep_io SeismicPlan (field data)
+# geometry:                         # sweepx.io SeismicPlan (field data)
 #   kind: from_plan
 #   plan_path: /p/plan.npz
 #   dedupe: true

@@ -2,49 +2,49 @@
 import os
 from pathlib import Path
 import numpy as np
-from sweep_tasks.schemas import FWISpec
-from sweep_tasks._helpers.bounds import (
+from sweepx.tasks.schemas import FWISpec
+from sweepx.tasks._helpers.bounds import (
     _apply_bounds,
     _effective_bound,
 )
-from sweep_tasks._helpers.water import (
+from sweepx.tasks._helpers.water import (
     WaterRegion,
     stamp_water_,
     zero_water_grad_,
 )
-from sweep_tasks.runtime.checkpoint import (
+from sweepx.tasks.runtime.checkpoint import (
     load_run_checkpoint as _load_checkpoint,
     save_run_checkpoint as _save_checkpoint,
 )
-from sweep_tasks._helpers.data_loading import (
+from sweepx.tasks._helpers.data_loading import (
     _load_segy_index_payload,
     _load_segy_single_file_payload,
 )
-from sweep_tasks._helpers.dd import (
+from sweepx.tasks._helpers.dd import (
     _compute_local_window,
     _rebase_geometry_to_window,
 )
-from sweep_tasks._helpers.geometry import (
+from sweepx.tasks._helpers.geometry import (
     _build_geometry_2d,
     _segy_geometry_to_grid_indices,
 )
-from sweep_tasks._helpers.illumination import (
+from sweepx.tasks._helpers.illumination import (
     _accumulate_illumination,
     _apply_illumination_precond,
 )
-from sweep_tasks._helpers.loss import (
+from sweepx.tasks._helpers.loss import (
     _loss_sum,
     _mask_chunk,
     set_loss_dt,
 )
-from sweep_tasks._helpers.metadata import _dump_run_metadata
-from sweep_tasks._helpers.model import (
+from sweepx.tasks._helpers.metadata import _dump_run_metadata
+from sweepx.tasks._helpers.model import (
     _model_array,
     _get_equation_class,
     _load_model_tensor,
     _model_names_for_equation,
 )
-from sweep_tasks._helpers.optimizer import (
+from sweepx.tasks._helpers.optimizer import (
     _bind_stage_scheduler,
     _build_optimizer,
     _build_reparam_optimizer,
@@ -66,41 +66,41 @@ def _MASK_WINDOW_TRACE_COSINE(spec):
             and getattr(getattr(spec, "loss", None), "kind", None) == "trace_cosine")
 
 
-from sweep_tasks._helpers.plan_apply import (
+from sweepx.tasks._helpers.plan_apply import (
     _apply_data_plan_to_fwi,
     _apply_model_plan_to_fwi,
     _build_inv_tensors,
     _model_plan_crop_box,
     _normalize_fwi_init_models,
 )
-from sweep_tasks._helpers.plotting import (
+from sweepx.tasks._helpers.plotting import (
     _plot_loss_curve,
     _save_illumination,
 )
-from sweep_tasks._helpers.reparam import (
+from sweepx.tasks._helpers.reparam import (
     _advance_hash_schedule,
     _build_reparam_net,
     _has_hash_schedule,
 )
-from sweep_tasks._helpers.solver_build import (
+from sweepx.tasks._helpers.solver_build import (
     _build_solver,
     _cfl_check,
     _resolve_modeling_inputs,
 )
-from sweep_tasks._helpers.stages import (
+from sweepx.tasks._helpers.stages import (
     _bandpass_syn_torch,
     _normalise_stage_list,
     _prepare_stage,
     _restore_stage_state,
     _stage_checkpoint_fields,
 )
-from sweep_tasks._helpers.stop import _GracefulStopper
-from sweep_tasks._helpers.util import _apply_seed
-from sweep_tasks._helpers.wavelet_build import (
+from sweepx.tasks._helpers.stop import _GracefulStopper
+from sweepx.tasks._helpers.util import _apply_seed
+from sweepx.tasks._helpers.wavelet_build import (
     _build_wavelet,
     _get_wavelet_source_delay_s,
 )
-from sweep_tasks.progress import band_desc, optimizer_lr, progress_for
+from sweepx.tasks.progress import band_desc, optimizer_lr, progress_for
 
 
 def _build_grad_smoother(spec, dev):
@@ -221,7 +221,7 @@ class FWIRunnerMixin:
 
         import torch
 
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         dist_info = getattr(self, "_dist", None)
         if dist_info is None:
@@ -330,7 +330,7 @@ class FWIRunnerMixin:
         model_plan_cropped: dict | None = None
         model_plan_keep: "np.ndarray | None" = None
         if _obs_plan_mat:
-            from sweep_tasks.plan_materialize import materialize_plan_dataset
+            from sweepx.tasks.plan_materialize import materialize_plan_dataset
             _mat = materialize_plan_dataset(
                 spec, init_models,
                 effective_dt=effective_dt, effective_nt=effective_nt,
@@ -551,7 +551,7 @@ class FWIRunnerMixin:
         smooth_weight = 0.0
         _smooth_spec = getattr(spec, "smooth_regularization", None)
         if _smooth_spec is not None and float(_smooth_spec.weight) > 0.0:
-            from sweep_nn import TVPrior
+            from sweepx.nn import TVPrior
             tv_prior = TVPrior(
                 order=_smooth_spec.order,
                 x_weight=float(_smooth_spec.x_weight),
@@ -580,7 +580,7 @@ class FWIRunnerMixin:
         _diff_spec = getattr(spec, "diffusion_prior", None)
         if _diff_spec is not None and getattr(_diff_spec, "enabled", True) \
                 and float(_diff_spec.weight) > 0.0:
-            from sweep_nn.diffusion import DiffusionVelocityPrior
+            from sweepx.nn.diffusion import DiffusionVelocityPrior
             diff_prior = DiffusionVelocityPrior(
                 ckpt_path=str(_diff_spec.ckpt_path), device=str(dev),
                 mode=_diff_spec.mode, strength=float(_diff_spec.strength),
@@ -674,7 +674,7 @@ class FWIRunnerMixin:
         # Canonical layout for both backends: (nshots, nt, nrec[, nfield]).
         # 4-D shapes carry the trailing channel; 3-D obs lacks it (rare,
         # e.g. user-supplied npy without channel axis).
-        from sweep_io.geometry import PhysicalGeometry
+        from sweepx.io.geometry import PhysicalGeometry
         pristine_time_axis = -3 if obs.ndim >= 4 else -2
         pristine_recv_axis = -2 if obs.ndim >= 4 else -1
         pristine_obs_np = (obs.detach().cpu().numpy() if isinstance(obs, torch.Tensor)
@@ -1081,7 +1081,7 @@ class FWIRunnerMixin:
             # QC final products (loss curve with stage shading etc.)
             if spec.qc is not None:
                 try:
-                    from sweep_tasks.qc import save_final_qc
+                    from sweepx.tasks.qc import save_final_qc
                     final_qc = save_final_qc(
                         qc_spec=spec.qc, qc_dir=qc_dir, losses=losses,
                         stage_epoch_boundaries=stage_epoch_boundaries,
@@ -1215,7 +1215,7 @@ class FWIRunnerMixin:
         # npy_path / segy).
         _model_plan = getattr(spec, "model_plan", None)
         if _model_plan is not None:
-            from sweep_io.plan import ModelPlan, apply_model_plan
+            from sweepx.io.plan import ModelPlan, apply_model_plan
             mp = ModelPlan(
                 x_window_m=_model_plan.x_window_m,
                 y_window_m=_model_plan.y_window_m,
@@ -1276,7 +1276,7 @@ class FWIRunnerMixin:
         """
 
         try:
-            from sweep_tasks import qc as qc_mod
+            from sweepx.tasks import qc as qc_mod
         except Exception as err:  # noqa: BLE001
             print(f"[qc] import failed at epoch {epoch}: {err}")
             return
@@ -1538,7 +1538,7 @@ class FWIRunnerMixin:
 
         import torch
 
-        from sweep_tasks.runtime import distributed as _dist
+        from sweepx.tasks.runtime import distributed as _dist
 
         if dist_info is None:
             dist_info = getattr(self, "_dist", None) or _dist.init_distributed_if_needed()

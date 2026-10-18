@@ -2,9 +2,9 @@
 wavefield snapshots, velocity-model panels, convergence curves, metrics.
 
 Absorbed verbatim from the standalone ``sweep-viz`` package (now retired).
-Import paths moved ``sweep_viz.<mod>`` -> ``sweep_tasks.viz.<mod>``.
+Import paths moved ``sweep_viz.<mod>`` -> ``sweepx.tasks.viz.<mod>``.
 
-Importing ``sweep_tasks.viz.colormaps`` registers the bundled diverging LUTs
+Importing ``sweepx.tasks.viz.colormaps`` registers the bundled diverging LUTs
 (e.g. ``sweep_image``) as matplotlib colormaps as a side effect.
 """
 

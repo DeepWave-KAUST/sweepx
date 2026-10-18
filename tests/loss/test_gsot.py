@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from sweep_loss import GSOTLoss, L2Loss, gsot_loss
+from sweepx.loss import GSOTLoss, L2Loss, gsot_loss
 
 
 def _ricker(t, t0, fc=15.0):

@@ -8,7 +8,7 @@ optional and imported only by the code that uses them. There is no dependency on
 wave solver.
 
 Installed with `pip install sweep-io` (also bundled by `pip install sweepx`)
-→ `import sweep_io`.
+→ `import sweepx.io`.
 
 <div class="grid cards" markdown>
 
@@ -51,14 +51,14 @@ from its CLI (`sweep-tasks build-index`, `sweep-tasks build-plan`) and its YAML 
 
 | Module | What it gives you | Extra deps |
 |---|---|---|
-| `sweep_io.segy` | `SEGYReader`, `MultiFileSEGYReader`: byte-offset trace reads with sorted, coalesced `pread`/`mmap`; IBM ↔ IEEE codecs; `read_segy` / `write_segy` for whole files | none / `segyio` |
-| `sweep_io.segy_index` | `build_segy_index` → `SEGYIndex`, a per-trace header catalog over many files; a lazy shot-gather dataset | none |
-| `sweep_io.seismic_plan` | `build_seismic_plan` → `SeismicPlan` (CSG or CRG groups), `PlanReader`, and the shared-shot and per-receiver samplers used for source-encoded 3-D FWI | none |
-| `sweep_io.plan` | `DataPlan` / `ModelPlan`: pick shots, receivers, offsets, time windows and the model window before FWI sees the data | none |
-| `sweep_io.geometry` | `Geometry` (grid indices) and `PhysicalGeometry` (metres) acquisition dataclasses; `RotatedFrame`, the UTM ↔ model-frame rotation | none |
-| `sweep_io.models` | Load and save velocity models: `.npy`, `.npz`, raw binary, `.h5` | none / `h5py` |
-| `sweep_io.prefetch` | `Prefetcher`, `ThreadPoolPrefetcher`, `TimingPrefetcher`: read ahead in background threads | none |
-| `sweep_io.cuda_prefetch` | `CUDAPrefetcher`: pinned memory and a side-stream host-to-device copy | `torch` |
-| `sweep_io.datasets` | `ShotGatherDataset`, a `torch` Dataset with prefetched iteration | `torch` |
-| `sweep_io.crg_build`, `crg_plan`, `crg_dataset` | Build, load and iterate the CRG plan cache (`crg_fwi_plan_v1`) | none / `mpi4py`, `torch` |
-| `sweep_io.wavelet` | `load_wavelet_npz`: a source wavelet from an `.npz` | none |
+| `sweepx.io.segy` | `SEGYReader`, `MultiFileSEGYReader`: byte-offset trace reads with sorted, coalesced `pread`/`mmap`; IBM ↔ IEEE codecs; `read_segy` / `write_segy` for whole files | none / `segyio` |
+| `sweepx.io.segy_index` | `build_segy_index` → `SEGYIndex`, a per-trace header catalog over many files; a lazy shot-gather dataset | none |
+| `sweepx.io.seismic_plan` | `build_seismic_plan` → `SeismicPlan` (CSG or CRG groups), `PlanReader`, and the shared-shot and per-receiver samplers used for source-encoded 3-D FWI | none |
+| `sweepx.io.plan` | `DataPlan` / `ModelPlan`: pick shots, receivers, offsets, time windows and the model window before FWI sees the data | none |
+| `sweepx.io.geometry` | `Geometry` (grid indices) and `PhysicalGeometry` (metres) acquisition dataclasses; `RotatedFrame`, the UTM ↔ model-frame rotation | none |
+| `sweepx.io.models` | Load and save velocity models: `.npy`, `.npz`, raw binary, `.h5` | none / `h5py` |
+| `sweepx.io.prefetch` | `Prefetcher`, `ThreadPoolPrefetcher`, `TimingPrefetcher`: read ahead in background threads | none |
+| `sweepx.io.cuda_prefetch` | `CUDAPrefetcher`: pinned memory and a side-stream host-to-device copy | `torch` |
+| `sweepx.io.datasets` | `ShotGatherDataset`, a `torch` Dataset with prefetched iteration | `torch` |
+| `sweepx.io.crg_build`, `crg_plan`, `crg_dataset` | Build, load and iterate the CRG plan cache (`crg_fwi_plan_v1`) | none / `mpi4py`, `torch` |
+| `sweepx.io.wavelet` | `load_wavelet_npz`: a source wavelet from an `.npz` | none |

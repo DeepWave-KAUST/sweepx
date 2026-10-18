@@ -11,7 +11,7 @@ Two flavours:
 
 Inputs / outputs are flat 1-D tensors. Optimizers that hold tensor
 parameters should flatten / unflatten via the helpers in
-:mod:`sweep_opt._utils`.
+:mod:`sweepx.opt._utils`.
 
 References:
     Hestenes, M. R., and Stiefel, E. (1952). "Methods of conjugate gradients

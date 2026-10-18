@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 
 pytest.importorskip("sweep")
-pytest.importorskip("sweep_tasks")
+pytest.importorskip("sweepx.tasks")
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _tiny_forward_yaml(tmp_path) -> str:

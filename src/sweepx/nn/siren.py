@@ -61,8 +61,8 @@ class SirenMLP(nn.Module):
 
     Unlike :class:`SIREN` (which caches a coord grid and ties to an output
     shape), ``SirenMLP`` is a pure functional MLP. It is the building block
-    used by :class:`~sweep_nn.velocity_inr.VelocityINR` (where the input
-    comes from a hash encoder) and :class:`~sweep_nn.wavelet.SirenWavelet`.
+    used by :class:`~sweepx.nn.velocity_inr.VelocityINR` (where the input
+    comes from a hash encoder) and :class:`~sweepx.nn.wavelet.SirenWavelet`.
 
     First layer uses ``first_omega0``; hidden/output layers use
     ``hidden_omega0``. The final layer is a plain ``nn.Linear`` (no sin),

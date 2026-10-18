@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from sweep_agent.webui import _compose_prompt, _figures_in_result, run_agent_turn
+from sweepx.agent.webui import _compose_prompt, _figures_in_result, run_agent_turn
 
 
 def test_figures_in_result_named_and_generic(tmp_path):

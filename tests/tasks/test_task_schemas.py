@@ -1,4 +1,4 @@
-"""Schema round-trip and validation tests for sweep_tasks."""
+"""Schema round-trip and validation tests for sweepx.tasks."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from sweep_tasks import (
+from sweepx.tasks import (
     ForwardSpec,
     FWISpec,
     IntrospectSpec,
@@ -469,7 +469,7 @@ def test_lsrtm_reflectivity_bounds_round_trip(tmp_path):
 
 
 def _registry_task_types():
-    from sweep_tasks.registry import TASK_TYPES
+    from sweepx.tasks.registry import TASK_TYPES
     return list(TASK_TYPES)
 
 
@@ -480,8 +480,8 @@ def test_every_task_type_has_an_init_template():
     type that `run` happily executes — the sort of gap that only shows up when
     a user tries it.
     """
-    from sweep_tasks.registry import TASK_TYPES
-    from sweep_tasks.yaml_io import _FILE_TEMPLATES
+    from sweepx.tasks.registry import TASK_TYPES
+    from sweepx.tasks.yaml_io import _FILE_TEMPLATES
 
     missing = sorted(set(TASK_TYPES) - set(_FILE_TEMPLATES))
     assert not missing, f"task types with no bundled init template: {missing}"
@@ -496,7 +496,7 @@ def test_init_template_validates(task_type, tmp_path, monkeypatch):
     """
     import sys
 
-    from sweep_tasks.cli import main as _cli_main
+    from sweepx.tasks.cli import main as _cli_main
 
     for var in ("VIKING_HOME", "PROJECT_DATA_ROOT", "SWEEP_RUNS_ROOT",
                 "SWEEP_REPOS_ROOT", "MARMOUSI_HOME"):

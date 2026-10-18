@@ -1,4 +1,4 @@
-"""Tests for :mod:`sweep_io.crg_build` — SEG-Y → CRGPlan pipeline.
+"""Tests for :mod:`sweepx.io.crg_build` — SEG-Y → CRGPlan pipeline.
 
 Strategy: build a tiny synthetic survey on disk (4 SEG-Y files, 8 traces
 each, simulating 4 OBN nodes each recorded by all 4 source-line files
@@ -15,19 +15,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_io.crg_build import (
+from sweepx.io.crg_build import (
     build_crg_plan_from_index,
     build_crg_plan_from_segy,
     save_crg_plan,
 )
-from sweep_io.crg_plan import load_crg_shot_plan_cache
-from sweep_io.segy import (
+from sweepx.io.crg_plan import load_crg_shot_plan_cache
+from sweepx.io.segy import (
     FORMAT_IEEE_FLOAT32,
     SEGY_BIN_HEADER_SIZE,
     SEGY_TEXT_HEADER_SIZE,
     SEGY_TRACE_HEADER_SIZE,
 )
-from sweep_io.segy_index import SEGYIndex, build_segy_index
+from sweepx.io.segy_index import SEGYIndex, build_segy_index
 
 
 SAMPLES = 32
@@ -220,7 +220,7 @@ def test_build_crg_plan_from_segy_end_to_end(tmp_path):
 
 def test_partition_files_contiguous_uneven():
     """Files split contiguously with remainder spread over the first ranks."""
-    from sweep_io.crg_build import _partition_files_contiguous
+    from sweepx.io.crg_build import _partition_files_contiguous
 
     # n=10 across size=4 → splits of (3, 3, 2, 2)
     spans = [_partition_files_contiguous(10, r, 4) for r in range(4)]
@@ -234,7 +234,7 @@ def test_partition_files_contiguous_uneven():
 
 
 def test_partition_files_contiguous_evenly_divisible():
-    from sweep_io.crg_build import _partition_files_contiguous
+    from sweepx.io.crg_build import _partition_files_contiguous
 
     spans = [_partition_files_contiguous(16, r, 4) for r in range(4)]
     assert spans == [(0, 4), (4, 8), (8, 12), (12, 16)]
@@ -246,7 +246,7 @@ def test_merge_segy_indices_remaps_file_ids(tmp_path):
     construction, so we count totals per file_id rather than positional
     expectations.
     """
-    from sweep_io.crg_build import _merge_segy_indices
+    from sweepx.io.crg_build import _merge_segy_indices
 
     files, _ = _build_tiny_survey(tmp_path)
     idx_a = build_segy_index([files[0]], num_workers=1)
@@ -265,7 +265,7 @@ def test_merge_segy_indices_remaps_file_ids(tmp_path):
 
 def test_merge_segy_indices_matches_single_process(tmp_path):
     """Merged-from-shards index must equal a single-process scan."""
-    from sweep_io.crg_build import (
+    from sweepx.io.crg_build import (
         _merge_segy_indices,
         build_crg_plan_from_index,
     )
@@ -293,7 +293,7 @@ def test_merge_segy_indices_matches_single_process(tmp_path):
 def test_save_load_plan_then_read_traces_with_reader(tmp_path):
     """Round-trip the plan through disk, then verify the byte offsets it
     holds are actually valid for the MultiFileSEGYReader."""
-    from sweep_io.segy import MultiFileSEGYReader
+    from sweepx.io.segy import MultiFileSEGYReader
 
     files, _ = _build_tiny_survey(tmp_path)
     plan = build_crg_plan_from_segy(files, num_workers=1, receiver_quantize_m=1.0)

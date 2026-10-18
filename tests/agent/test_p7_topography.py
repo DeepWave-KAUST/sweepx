@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _hill_topo(path, nx, base=12, amp=6, width=18):
@@ -17,7 +17,7 @@ def _hill_topo(path, nx, base=12, amp=6, width=18):
 
 def test_topography_wired_into_spec(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((80, 120), 2500.0, dtype=np.float32))
     topo = _hill_topo(tmp_path / "topo.npy", 120)
@@ -33,7 +33,7 @@ def test_topography_wired_into_spec(tmp_path):
 @pytest.mark.timeout(200)
 def test_topography_forward_endtoend(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     nz, nx = 80, 120
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((nz, nx), 2500.0, dtype=np.float32))

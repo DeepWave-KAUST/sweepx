@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from sweep_tasks.preproc.resample import (  # noqa: E402
+from sweepx.tasks.preproc.resample import (  # noqa: E402
     resample_time,
     resample_time_torch,
 )

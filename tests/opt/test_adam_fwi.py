@@ -1,8 +1,8 @@
-"""Tests for sweep_opt.optim.AdamFWI."""
+"""Tests for sweepx.opt.optim.AdamFWI."""
 import pytest
 import torch
 
-from sweep_opt.optim import AdamFWI
+from sweepx.opt.optim import AdamFWI
 
 
 def test_adam_matches_torch_adam_when_no_extras():

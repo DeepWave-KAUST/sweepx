@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sweep_agent.tools import registry
+from sweepx.agent.tools import registry
 
 
 def _vp(path, value=1800.0, shape=(32, 40)):
@@ -17,7 +17,7 @@ def _vp(path, value=1800.0, shape=(32, 40)):
 
 def test_build_fwi_synthetic_obs(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy", 1800.0)
     true = _vp(tmp_path / "true.npy", 2000.0)
     res = registry.get("build_fwi_spec").invoke({
@@ -38,7 +38,7 @@ def test_build_fwi_synthetic_obs(tmp_path):
 
 def test_build_fwi_requires_one_obs(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy")
     # no obs source
     res = registry.get("build_fwi_spec").invoke({
@@ -51,7 +51,7 @@ def test_build_fwi_requires_one_obs(tmp_path):
 
 def test_build_fwi_rejects_two_obs(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy")
     true = _vp(tmp_path / "true.npy", 2000.0)
     res = registry.get("build_fwi_spec").invoke({
@@ -63,7 +63,7 @@ def test_build_fwi_rejects_two_obs(tmp_path):
 
 def test_build_fwi_lbfgs_and_bounds(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy")
     true = _vp(tmp_path / "true.npy", 2000.0)
     res = registry.get("build_fwi_spec").invoke({
@@ -78,7 +78,7 @@ def test_build_fwi_lbfgs_and_bounds(tmp_path):
 
 def test_build_fwi_bad_equation(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy")
     true = _vp(tmp_path / "true.npy", 2000.0)
     res = registry.get("build_fwi_spec").invoke({
@@ -93,7 +93,7 @@ def test_build_fwi_bad_equation(tmp_path):
 @pytest.mark.timeout(300)
 def test_fwi_endtoend_cpu(tmp_path):
     pytest.importorskip("sweep")
-    pytest.importorskip("sweep_tasks")
+    pytest.importorskip("sweepx.tasks")
     init = _vp(tmp_path / "init.npy", 1800.0)
     true = _vp(tmp_path / "true.npy", 2000.0)
     out = tmp_path / "runs"

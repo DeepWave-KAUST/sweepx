@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import yaml
 
-from sweep_tasks import load_task, TaskRunner
+from sweepx.tasks import load_task, TaskRunner
 
 
 def _write(spec_dict, path: Path) -> Path:
@@ -437,7 +437,7 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
     # ``_save_checkpoint`` now lives in the ``tasks.fwi`` mixin module (post
     # runner.py split); the FWI loop resolves it in that namespace, so the
     # monkeypatch must target there, not the re-exported ``runner`` binding.
-    from sweep_tasks.tasks import fwi as _fwi_mod
+    from sweepx.tasks.tasks import fwi as _fwi_mod
 
     real_save = _fwi_mod._save_checkpoint
     call_count = {"n": 0}
@@ -602,11 +602,11 @@ def _write_tiny_segy(path, *, nshots=2, nrec=4, nt=64, dh_m=10.0):
     import struct
     import numpy as np
 
-    from sweep_io.segy import (
+    from sweepx.io.segy import (
         SEGY_BIN_HEADER_SIZE, SEGY_TEXT_HEADER_SIZE, SEGY_TRACE_HEADER_SIZE,
         FORMAT_IEEE_FLOAT32, write_segy_minimal,
     )
-    from sweep_io.segy_index import SEGY_REV1_BYTES as BM
+    from sweepx.io.segy_index import SEGY_REV1_BYTES as BM
 
     n_total = nshots * nrec
     rng = np.random.default_rng(0)
@@ -674,7 +674,7 @@ def test_fwi_obs_segy_and_from_segy_headers_runs(tmp_path):
 def test_fwi_obs_segy_index_runs(tmp_path):
     """Option B: pre-built SEGYIndex + obs.kind=segy_index + geometry.kind=from_segy_index."""
     import numpy as np
-    from sweep_io.segy_index import build_segy_index
+    from sweepx.io.segy_index import build_segy_index
 
     segy = tmp_path / "tinyB.segy"
     _write_tiny_segy(segy, nshots=3, nrec=6, nt=64, dh_m=10.0)
@@ -764,7 +764,7 @@ def test_fwi_obs_segy_index_lazy_prefetched_load(tmp_path):
     materialisation. End-to-end runner output is identical to lazy=False.
     """
     import numpy as np
-    from sweep_io.segy_index import build_segy_index
+    from sweepx.io.segy_index import build_segy_index
 
     segy = tmp_path / "tinyC.segy"
     _write_tiny_segy(segy, nshots=3, nrec=4, nt=32, dh_m=10.0)
@@ -813,8 +813,8 @@ def test_stage_wavelet_bandpass_does_not_leak_into_next_stage(tmp_path, monkeypa
     the wider band — leaving syn and obs on different bands. The wavelet is
     now rebuilt from spec at every stage entry.
     """
-    from sweep_tasks._helpers.wavelet_build import _build_wavelet
-    from sweep_tasks.tasks.fwi import FWIRunnerMixin
+    from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+    from sweepx.tasks.tasks.fwi import FWIRunnerMixin
 
     spec_dict = _fwi_smoke_spec(
         tmp_path,

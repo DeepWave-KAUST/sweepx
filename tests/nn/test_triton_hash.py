@@ -8,9 +8,9 @@ loose rel-l2, not bit-equality.
 import pytest
 import torch
 
-from sweep_nn.hash_encoding import MultiResHashGrid
-from sweep_nn.coarse_to_fine import CoarseToFineHashGrid
-from sweep_nn.triton_hash_encoding import have_triton
+from sweepx.nn.hash_encoding import MultiResHashGrid
+from sweepx.nn.coarse_to_fine import CoarseToFineHashGrid
+from sweepx.nn.triton_hash_encoding import have_triton
 
 pytestmark = pytest.mark.skipif(
     not (have_triton() and torch.cuda.is_available()),
@@ -87,7 +87,7 @@ def test_coarse_to_fine_parity_across_progress():
 
 
 def test_velocity_inr_triton_backend_runs():
-    from sweep_nn.velocity_inr import VelocityINR
+    from sweepx.nn.velocity_inr import VelocityINR
 
     base = torch.linspace(1500, 4500, 16, device=DEV)[:, None, None].expand(16, 16, 16).contiguous()
     inr = VelocityINR(base_velocity=base, hidden_features=64, hidden_layers=2,
@@ -101,7 +101,7 @@ def test_velocity_inr_triton_backend_runs():
 
 
 def test_growing_plus_triton_rejected():
-    from sweep_nn.velocity_inr import VelocityINR
+    from sweepx.nn.velocity_inr import VelocityINR
 
     base = torch.zeros(8, 8, 8, device=DEV)
     with pytest.raises(ValueError, match="not supported with hash_growing"):

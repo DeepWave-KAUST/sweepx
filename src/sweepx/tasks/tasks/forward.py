@@ -9,25 +9,25 @@ import numpy as np
 import sweep
 import sweep.equations as eq_mod
 
-from sweep_tasks.schemas import ForwardSpec, IntrospectSpec, WavefieldSpec
-from sweep_tasks._helpers.geometry import _build_geometry_2d
-from sweep_tasks._helpers.model import (
+from sweepx.tasks.schemas import ForwardSpec, IntrospectSpec, WavefieldSpec
+from sweepx.tasks._helpers.geometry import _build_geometry_2d
+from sweepx.tasks._helpers.model import (
     _get_equation_class,
     _infer_shape,
     _model_array,
     _model_names_for_equation,
     _wavefield_names_for_equation,
 )
-from sweep_tasks._helpers.plotting import _plot_wavefield_snapshots
-from sweep_tasks._helpers.solver_build import _build_solver, _solver_models_in_order
-from sweep_tasks._helpers.util import (
+from sweepx.tasks._helpers.plotting import _plot_wavefield_snapshots
+from sweepx.tasks._helpers.solver_build import _build_solver, _solver_models_in_order
+from sweepx.tasks._helpers.util import (
     _apply_seed,
     _nonfinite_summary,
     _raise_if_nonfinite,
     _resolve_device,
 )
-from sweep_tasks._helpers.wavelet_build import _build_wavelet
-from sweep_tasks.progress import progress_for
+from sweepx.tasks._helpers.wavelet_build import _build_wavelet
+from sweepx.tasks.progress import progress_for
 
 
 class ForwardRunnerMixin:

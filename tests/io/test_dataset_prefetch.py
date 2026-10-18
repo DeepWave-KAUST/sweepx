@@ -7,11 +7,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from sweep_io.datasets import (  # noqa: E402
+from sweepx.io.datasets import (  # noqa: E402
     PrefetchingShotDataset,
     ShotGatherDataset,
 )
-from sweep_io.geometry import Geometry  # noqa: E402
+from sweepx.io.geometry import Geometry  # noqa: E402
 
 
 def _make_dataset(nshots: int = 6, nrec: int = 8, nt: int = 32):

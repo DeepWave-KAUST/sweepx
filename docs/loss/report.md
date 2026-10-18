@@ -1,8 +1,8 @@
-# `sweep_loss` — formula report & bibliography
+# `sweepx.loss` — formula report & bibliography
 
 This document gathers, in one place, the **mathematical definition and
 DOI-linked source paper** of every misfit (loss) implemented in the
-`sweep_loss` package.  It is also the canonical landing page for the
+`sweepx.loss` package.  It is also the canonical landing page for the
 mkdocs site (`docs/report.md`).
 
 Tensor layout throughout:
@@ -601,7 +601,7 @@ arguments — but the consensus is to treat them as separate inversion
 
 ---
 
-## Plugging `sweep_loss` into the `sweep` propagator
+## Plugging `sweepx.loss` into the `sweep` propagator
 
 The misfit API matches the one already used in
 `geophyai/examples/FWI/2d/acoustic/torch/_fwi_marmousi_common.py`,
@@ -612,10 +612,10 @@ loss_sum = (syn - obs_batch).pow(2).sum()
 (loss_sum / normalization_elements).backward()
 ```
 
-Replacing it with any `sweep_loss` misfit is a two-line change:
+Replacing it with any `sweepx.loss` misfit is a two-line change:
 
 ```python
-from sweep_loss import HuberLoss          # or any other misfit in this report
+from sweepx.loss import HuberLoss          # or any other misfit in this report
 loss_fn = HuberLoss(delta=0.5, reduction="sum")
 
 # inside the training loop:

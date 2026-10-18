@@ -1,7 +1,7 @@
-"""Tests for sweep_opt.optim.SteepestDescent."""
+"""Tests for sweepx.opt.optim.SteepestDescent."""
 import torch
 
-from sweep_opt.optim import SteepestDescent
+from sweepx.opt.optim import SteepestDescent
 
 
 def test_sd_converges_on_well_conditioned_quadratic(quadratic_2d):

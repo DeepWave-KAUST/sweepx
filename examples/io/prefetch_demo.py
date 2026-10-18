@@ -19,8 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sweep_io.prefetch import Prefetcher, TimingPrefetcher
-from sweep_io.segy import MultiFileSEGYReader, write_segy_minimal
+from sweepx.io.prefetch import Prefetcher, TimingPrefetcher
+from sweepx.io.segy import MultiFileSEGYReader, write_segy_minimal
 
 
 def main() -> None:
@@ -45,7 +45,7 @@ def main() -> None:
         # Build a trivial (file_id, byte_offset) index.
         # Each "shot" = a contiguous run of n_receivers traces in one file.
         # Real workflows store this as a numpy structured array on disk.
-        from sweep_io.segy import (
+        from sweepx.io.segy import (
             SEGY_BIN_HEADER_SIZE,
             SEGY_TEXT_HEADER_SIZE,
             SEGY_TRACE_HEADER_SIZE,

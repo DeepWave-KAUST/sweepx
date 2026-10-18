@@ -14,12 +14,12 @@ coarsest band's peak nearly tripled, in a config nobody had edited.
 import yaml
 from pydantic import BaseModel
 
-from sweep_tasks._helpers.metadata import (_dump_run_metadata,
+from sweepx.tasks._helpers.metadata import (_dump_run_metadata,
                                            _prune_setwise_overrides)
-from sweep_tasks.schemas import (BackendSpec, BoundaryOptionsModel,
+from sweepx.tasks.schemas import (BackendSpec, BoundaryOptionsModel,
                                  CUDAOptionsModel, MemoryOptionsModel,
                                  StageSpec)
-from sweep_tasks.tasks.fwi_freqsel import backend_with_stage_boundary
+from sweepx.tasks.tasks.fwi_freqsel import backend_with_stage_boundary
 
 
 class _Spec(BaseModel):

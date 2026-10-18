@@ -1,4 +1,4 @@
-# `sweep_loss` 公式级验证报告（19 张图覆盖全部 25 个 loss）
+# `sweepx.loss` 公式级验证报告（19 张图覆盖全部 25 个 loss）
 
 > 测试日期：2026-05-28
 > 测试代码：`examples/validation/`
@@ -83,7 +83,7 @@ eq. 9 的 J_nL2 ≡ J_NCC + const 等价性。
 
 覆盖：`CrossCorrelationTraveltimeLoss`。
 
-**实验**：(a) Ricker 对 (syn, obs)；(b) 用 `sweep_loss.traveltime._cross_correlation`
+**实验**：(a) Ricker 对 (syn, obs)；(b) 用 `sweepx.loss.traveltime._cross_correlation`
 （FFT 实现）计算 c(τ)，确认峰值位置；(c) loss vs. 时移 τ 扫描，叠加
 理论 ½τ² 抛物线（Luo-Schuster 1991）；(d) autograd 伴随源 vs. 解析
 ∂syn/∂t 参考曲线（Marquering-Dahlen-Nolet 1999）。
@@ -107,7 +107,7 @@ eq. 9 的 J_nL2 ≡ J_NCC + const 等价性。
 
 ### D.1 EnvelopeLoss（4 种变种：p=2 / p=1 / log / squared）
 
-**实验**：每个变种一行：(列 1) 在原始迹上叠画 sweep_loss._utils.envelope 计算的
+**实验**：每个变种一行：(列 1) 在原始迹上叠画 sweepx.loss._utils.envelope 计算的
 `E_s(t)`, `E_o(t)`；(列 2) autograd 算出的 ∂J/∂syn；(列 3) 在 ±5 半波长范围
 扫时移得到的吸引域。
 
@@ -162,7 +162,7 @@ fig. 1）；(b) per-sample 距离 $|\tilde s - \tilde d|^2/2$；(c) 伴随源
 
 覆盖：`TimeFrequencyPhaseLoss`。
 
-**实验**：用 `sweep_loss.tf_phase._gabor_stft` 计算 (a) |G_o(t, ω)| 时频幅度；
+**实验**：用 `sweepx.loss.tf_phase._gabor_stft` 计算 (a) |G_o(t, ω)| 时频幅度；
 (b) 能量加权 wrapped TF 相位残差 w(t,ω)·Δφ；(c) autograd 伴随源；
 (d) α ∈ {0, 0.5, 1} 三种混合的吸引域。
 
@@ -407,4 +407,4 @@ literature"的排序一致（D, F, G.1, H 家族宽；A, B, C, E, G.2, J 窄）�
 
 **与 `tests/usability/REPORT.md` 的关系**：该报告是从"FWI 训练收敛性"角度
 （端到端 sweep solver + 11 炮 + 200 epoch）验证；本报告是从"公式与中间量"
-角度的*互补*验证。两份报告共同覆盖 sweep_loss 的所有 25 个类。
+角度的*互补*验证。两份报告共同覆盖 sweepx.loss 的所有 25 个类。

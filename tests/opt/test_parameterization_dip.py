@@ -1,9 +1,9 @@
-"""Tests for sweep_opt.parameterization.DIPParameterization and SmallUNet2D."""
+"""Tests for sweepx.opt.parameterization.DIPParameterization and SmallUNet2D."""
 import pytest
 import torch
 import torch.nn as nn
 
-from sweep_opt.parameterization import DIPParameterization, SmallUNet2D
+from sweepx.opt.parameterization import DIPParameterization, SmallUNet2D
 
 
 def test_identity_generator_round_trip_via_random_latent():

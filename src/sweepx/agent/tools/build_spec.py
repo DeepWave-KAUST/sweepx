@@ -3,7 +3,7 @@
 Where ``build_forward_spec`` is a flat shortcut for the common acoustic-forward
 case, ``build_spec`` accepts a full spec dict for any task_type (forward /
 wavefield / fwi / lsrtm / rtm / introspect) and validates it against the real
-``sweep_tasks`` Pydantic schema. Paired with ``describe_task_schema`` (to learn
+``sweepx.tasks`` Pydantic schema. Paired with ``describe_task_schema`` (to learn
 the fields) it covers the entire parameter surface — every loss, optimizer,
 scheduler, geometry, boundary/checkpoint option, multiscale stage, NN reparam,
 data/model plan, etc.
@@ -17,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sweep_agent.tools import register
+from sweepx.agent.tools import register
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -50,7 +50,7 @@ class BuildSpecParams(BaseModel):
     name="build_spec",
     description=(
         "Build and validate a COMPLETE sweep task spec of any type from a dict. This is the "
-        "general-purpose builder covering every sweep_tasks parameter (all losses, optimizers, "
+        "general-purpose builder covering every sweepx.tasks parameter (all losses, optimizers, "
         "schedulers, geometries, boundary/checkpoint memory options, multiscale stages, NN reparam, "
         "data/model plans, ...). ALWAYS call describe_task_schema(task_type[, section]) first to "
         "learn the field names and nested 'kind' variants — never guess. Returns the validated spec "
@@ -61,9 +61,9 @@ class BuildSpecParams(BaseModel):
 )
 def build_spec(args: BuildSpecParams) -> dict[str, Any]:
     try:
-        from sweep_tasks.yaml_io import dump_task, load_task_from_dict
+        from sweepx.tasks.yaml_io import dump_task, load_task_from_dict
     except ImportError as exc:
-        return {"error": f"sweep_tasks is not importable: {exc}"}
+        return {"error": f"sweepx.tasks is not importable: {exc}"}
 
     raw: dict[str, Any] = dict(args.spec)
     raw["task_type"] = args.task_type

@@ -1,9 +1,9 @@
-"""Tests for sweep_opt.optim.LBFGS."""
+"""Tests for sweepx.opt.optim.LBFGS."""
 import pytest
 import torch
 
-from sweep_opt.optim import LBFGS, NCG
-from sweep_opt.precond import PseudoHessianPrecond
+from sweepx.opt.optim import LBFGS, NCG
+from sweepx.opt.precond import PseudoHessianPrecond
 
 
 def _run(opt, closure, n_iters):

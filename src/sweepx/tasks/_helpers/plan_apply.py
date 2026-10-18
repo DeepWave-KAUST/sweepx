@@ -2,7 +2,7 @@
 import numpy as np
 import torch
 
-from sweep_tasks._helpers.model import _load_model_tensor, _model_names_for_equation
+from sweepx.tasks._helpers.model import _load_model_tensor, _model_names_for_equation
 
 def _apply_model_plan_to_fwi(
     spec, init_models_loaded: list[tuple[str, "np.ndarray"]],
@@ -22,8 +22,8 @@ def _apply_model_plan_to_fwi(
                 sources_idx, receivers_idx, None)
 
     plan = spec.model_plan
-    from sweep_io.plan import ModelPlan, apply_model_plan
-    from sweep_io.geometry import PhysicalGeometry
+    from sweepx.io.plan import ModelPlan, apply_model_plan
+    from sweepx.io.geometry import PhysicalGeometry
 
     # Lift current grid-index geometry into meters using `dh`.
     pg = PhysicalGeometry(
@@ -73,13 +73,13 @@ def _apply_model_plan_to_fwi(
 def _model_plan_crop_box(spec, native_shape, dh: float):
     """The cell window ``(starts, stops)`` ``_apply_model_plan_to_fwi`` cuts.
 
-    Read off ``sweep_io.plan.apply_model_plan`` itself -- it crops a
+    Read off ``sweepx.io.plan.apply_model_plan`` itself -- it crops a
     broadcast index ramp per axis exactly like it crops every model -- so the
     window cannot drift from the models'. ``None`` without a model_plan.
     """
     if spec.model_plan is None:
         return None
-    from sweep_io.plan import ModelPlan, apply_model_plan
+    from sweepx.io.plan import ModelPlan, apply_model_plan
 
     plan = spec.model_plan
     dp = ModelPlan(
@@ -110,7 +110,7 @@ def _apply_data_plan_to_fwi(
     """Apply ``spec.data_plan``.
 
     Subsets shots / receivers / time *after* obs has been generated. Lifts
-    the grid-index geometry into ``sweep_io.PhysicalGeometry`` so the
+    the grid-index geometry into ``sweepx.io.PhysicalGeometry`` so the
     offset filter works in real meters, then drops back to grid indices.
 
     Receiver-axis subsetting requires a uniform mask across shots (typical
@@ -121,8 +121,8 @@ def _apply_data_plan_to_fwi(
         return sources_idx, receivers_idx, obs
 
     import torch
-    from sweep_io.geometry import PhysicalGeometry
-    from sweep_io.plan import DataPlan, apply_data_plan
+    from sweepx.io.geometry import PhysicalGeometry
+    from sweepx.io.plan import DataPlan, apply_data_plan
 
     dh_f = float(dh)
     sources_xyz = sources_idx.astype("float64") * dh_f
@@ -230,7 +230,7 @@ def resolve_rotation_frame(rotation_metadata):
     """``RotatedFrame`` for a plan geometry, identity when none is configured.
 
     ``FromPlanGeometry.rotation_metadata`` is optional, but
-    :func:`sweep_io.geometry.load_rotation_metadata` requires a real path — so
+    :func:`sweepx.io.geometry.load_rotation_metadata` requires a real path — so
     every plan-fed path used to die on ``Path(None)`` for the common 2-D case
     where the plan's coordinates are ALREADY the model frame (a line laid out
     along x in metres, which is what ``build-plan`` writes for a 2-D survey).
@@ -238,7 +238,7 @@ def resolve_rotation_frame(rotation_metadata):
     """
     import numpy as np
 
-    from sweep_io.geometry import RotatedFrame, load_rotation_metadata
+    from sweepx.io.geometry import RotatedFrame, load_rotation_metadata
 
     if rotation_metadata is None:
         return RotatedFrame(origin_xy_utm=np.zeros(2, dtype="float64"),

@@ -1,6 +1,6 @@
 # L-BFGS-B
 
-`sweep_opt.optim.LBFGSB` is the **bound-constrained** limited-memory BFGS
+`sweepx.opt.optim.LBFGSB` is the **bound-constrained** limited-memory BFGS
 algorithm of Byrd, Lu, and Nocedal (1995). Unlike the projected-gradient
 variant in :doc:`L-BFGS-FWI <lbfgs>`, it identifies an *active set* at
 each iteration and updates the BFGS history only on the *free* subspace
@@ -27,7 +27,7 @@ search is projected onto the box at every trial.
 ## API
 
 ```python
-sweep_opt.optim.LBFGSB(
+sweepx.opt.optim.LBFGSB(
     params,
     *,
     bounds=(lo, hi),                # required

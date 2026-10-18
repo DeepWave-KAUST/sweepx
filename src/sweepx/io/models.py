@@ -3,7 +3,7 @@
 Format is selected by file extension. The dispatch table `_FORMATS` is
 public — register your own format with::
 
-    sweep_io.models.register_format(".myext", load_fn, save_fn)
+    sweepx.io.models.register_format(".myext", load_fn, save_fn)
 """
 
 from __future__ import annotations

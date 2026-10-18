@@ -11,7 +11,7 @@ import json
 import numpy as np
 import pytest
 
-from sweep_tasks.freqsel import (FrequencyComb, FreqSelTargets,
+from sweepx.tasks.freqsel import (FrequencyComb, FreqSelTargets,
                                  extract_shard_gathers)
 
 

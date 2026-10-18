@@ -177,12 +177,12 @@ def _dump_diving_window_qc(obs4, syn4, mask4, off_m, dt, epoch, node_id, qc_dir,
 
 
 def _plot_loss_curve(losses, path: Path, title: str) -> Path:
-    """Loss curve via `sweep_tasks.viz.convergence.plot_loss`."""
+    """Loss curve via `sweepx.tasks.viz.convergence.plot_loss`."""
     import matplotlib
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
-    from sweep_tasks.viz.convergence import plot_loss
+    from sweepx.tasks.viz.convergence import plot_loss
 
     fig, ax = plt.subplots(1, 1, figsize=(5, 3))
     plot_loss(list(losses), ax=ax, logy=True, title=title)
@@ -328,10 +328,10 @@ def _save_rtm_qc_pngs(
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
     # Side-effect import: registers ``sweep_image`` / ``sweep_vp`` so the
-    # RTM panels below resolve. Tolerate sweep_tasks.viz being missing — caller
+    # RTM panels below resolve. Tolerate sweepx.tasks.viz being missing — caller
     # gets a clear matplotlib error in that case.
     try:
-        from sweep_tasks.viz.colormaps import IMAGE_CMAP as _RTM_CMAP
+        from sweepx.tasks.viz.colormaps import IMAGE_CMAP as _RTM_CMAP
     except Exception:  # noqa: BLE001
         _RTM_CMAP = "seismic"
 

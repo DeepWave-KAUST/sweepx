@@ -1,8 +1,8 @@
-# `sweep_loss` 可用性测试报告
+# `sweepx.loss` 可用性测试报告
 
 > 测试日期：2026-05-20
 > 测试代码：`tests/usability/`
-> 测试目标：验证 `sweep_loss` 各 loss 函数的实现是否符合原文公式；用 sweep solver
+> 测试目标：验证 `sweepx.loss` 各 loss 函数的实现是否符合原文公式；用 sweep solver
 > （`impl='c'` + boundary saving）跑端到端 FWI 测试每种 loss 的适用范围；如发现 loss
 > 实现错误就修复；如发现 sweep solver 问题则记录但不修改 sweep 代码。
 
@@ -19,7 +19,7 @@
 | Python | 3.12 |
 | PyTorch | 2.9.1+cu128 |
 | sweep | `mambaforge/lib/python3.12/site-packages/sweep`（_C.so 多架构：sm_70/80/86/89） |
-| sweep_loss | `src/sweep_loss`（可编辑安装） |
+| sweepx.loss | `src/sweepx/loss`（可编辑安装） |
 | sweep 调用 | `PropTorch(..., impl='c', cuda_options=CUDAOptions(memory=MemoryOptions(strategy='boundary', boundary=BoundaryOptions(storage='gpu'))))` |
 
 
@@ -39,7 +39,7 @@
 ## 1. 测试模型与参数
 
 ### 1.1 单元测试用合成 gather（阶段 1、2、4）
-* 2-D 张量布局 `(nshots, nt, nreceivers, nchannel)`，与 `sweep_loss` 约定一致。
+* 2-D 张量布局 `(nshots, nt, nreceivers, nchannel)`，与 `sweepx.loss` 约定一致。
 * 单元测试：`ns=2, nt=512, nrec=8, nchan=1, dt=1e-3 s, fc=12 Hz`。
 * `SoftDTW` 与 `GSOT` 因复杂度极高（前者 O(nt²) Python loops、后者 O(nt³) Hungarian），单独使用 `nt=96/128, fc=6 Hz`，物理时长保持可比。
 
@@ -51,7 +51,7 @@
 
 ## 2. 各 loss 的公式与所属家族
 
-> 公式与论文原文严格对应，括号是原文 DOI；公式与 sweep_loss 源码一一对照过。
+> 公式与论文原文严格对应，括号是原文 DOI；公式与 sweepx.loss 源码一一对照过。
 
 ### 家族 A：Lp / 鲁棒 M-estimator（残差 `r = d_s − d_o`）
 
@@ -310,7 +310,7 @@
 
 ### 5.5 讨论
 
-* **`impl='c'` + boundary saving** 与 `sweep_loss` 直接对接成功——任何 `torch.nn.Module` loss 都可以直接接到 `solver(wave, sources, receivers, models=[vp])` 的输出上替换 `loss = (syn - obs).pow(2).sum()`，不需要任何 wrapper（前提是 sweep 已升级到带 `_cuda_record_to_canonical` 的版本）。
+* **`impl='c'` + boundary saving** 与 `sweepx.loss` 直接对接成功——任何 `torch.nn.Module` loss 都可以直接接到 `solver(wave, sources, receivers, models=[vp])` 的输出上替换 `loss = (syn - obs).pow(2).sum()`，不需要任何 wrapper（前提是 sweep 已升级到带 `_cuda_record_to_canonical` 的版本）。
 * **FreqL2 的"loss 下降 + RMSE 上升"是经典 cycle-skip**——loss 在频率域被锁在窄盆地里，model 反而漂离真值。Envelope 没这个问题，因为包络对相位时移不敏感（§4 的扫描已经预示了这一结果）。
 * **AWI/NIM/ExpPhase 振幅反演慢**——它们的梯度方向是对的，但 Adam 的步幅与梯度量级匹配后每步只能更新 vp ~0.01 m/s 量级，200 epoch 还不够。它们更适合 SGD-with-line-search 或 L-BFGS。
 * **NCC sign-flip 问题没再出现**——之前一次 unified lr=2/120 ep 跑出 NCC 反演成负异常（amplitude-invariant + 局部极小），改成 200 ep + illumination 预条件后稳定到正异常 +39 m/s。
@@ -347,7 +347,7 @@ $$D_\gamma(x, y) = \mathrm{sDTW}_\gamma(x, y) - \tfrac{1}{2}\bigl[\mathrm{sDTW}_
 
 该量非负、`D_γ(x, x) = 0`，是合格的 FWI 损失。
 
-**改动**：`src/sweep_loss/soft_dtw.py`：
+**改动**：`src/sweepx/loss/soft_dtw.py`：
 * `SoftDTWLoss.__init__` 新增 `divergence: bool = True`。
 * `divergence=True`（**新默认**）：返回上述 divergence，多算两个 self-DP（forward 用 `D_ss=(s_i−s_j)²` 与 `D_oo=(o_i−o_j)²`）。
 * `divergence=False`（旧行为）：原始 soft-DTW，可能 < 0，保留以做学术对照。
@@ -363,7 +363,7 @@ $$D_\gamma(x, y) = \mathrm{sDTW}_\gamma(x, y) - \tfrac{1}{2}\bigl[\mathrm{sDTW}_
 **问题**：`LaplaceL2Loss._pointwise` 返回 `½ Σ_t (e^{−st}(d_s − d_o))²`，是"时间域阻尼 L2"。
 而 Shin & Cha (2008, eq. 4–11) 严格用的是：(1) 复频率下的 Helmholtz 方程；(2) `log D(s) = log|D(s)| + i arg D(s)` 的**对数** Laplace 域 misfit。
 
-本 sweep_loss 实现把时间序列乘以 `exp(−st)` 后做 L2，是 Shin-Cha-Lee (2009) "Laplace-Fourier in time domain" 的一种实践简化，**与原 Laplace FWI 公式 _不等价_**（前者是 Σ_t |e^{−st}d|²，后者是 |Σ_t e^{−st}d|²，求和顺序差一个平方）。
+本 sweepx.loss 实现把时间序列乘以 `exp(−st)` 后做 L2，是 Shin-Cha-Lee (2009) "Laplace-Fourier in time domain" 的一种实践简化，**与原 Laplace FWI 公式 _不等价_**（前者是 Σ_t |e^{−st}d|²，后者是 |Σ_t e^{−st}d|²，求和顺序差一个平方）。
 
 **结论**：实现与 docstring 写的"Laplace-domain L2"相符，但与论文标题里的 Laplace-domain FWI **不严格一致**。  
 **对策**：保持当前实现（与代码注释一致），但 docstring 应明确"这是 time-domain damped L2，不是 Shin-Cha 2008 的 frequency-domain log Laplace"。**未改动代码**——这不算 BUG，只是文档措辞需要更精确，且这一变种本身在工业界有人用。
@@ -380,15 +380,15 @@ $$D_\gamma(x, y) = \mathrm{sDTW}_\gamma(x, y) - \tfrac{1}{2}\bigl[\mathrm{sDTW}_
 1. **CUDA 架构兼容性**：`ifwitorch` 环境里安装的 sweep `_C.so` 只有 sm_70；本工作站 GPU 是 sm_89 (RTX 6000 Ada)，初次调用 `impl='c'` 立刻报 `cudaErrorNoKernelImageForDevice`。
    - **解决**：使用 ibex 上 `mambaforge` (base) 环境的多架构 `_C.so`（sm_70/80/86/89），通过 SLURM 提交到 v100 节点（sm_70）。
    - 这是 sweep 打包/发布的问题，不是 sweep code bug。**报告里只做记录**。
-2. **`impl='c'` + `boundary saving` 行为正常**：单源、单接收 stub forward + backward 跑通，梯度有限非零；输出张量形状已经是 canonical `(ns, nt, nr, nc)`（旧 sweep 版本会输出 `(ns, nr, nt)`，sweep_loss 的 `to_canonical` 会按"3D = (ns, nt, nr)"解释为错的轴）；推荐用户**必须** 用 sweep 主分支（包含 `_cuda_record_to_canonical`）。
+2. **`impl='c'` + `boundary saving` 行为正常**：单源、单接收 stub forward + backward 跑通，梯度有限非零；输出张量形状已经是 canonical `(ns, nt, nr, nc)`（旧 sweep 版本会输出 `(ns, nr, nt)`，sweepx.loss 的 `to_canonical` 会按"3D = (ns, nt, nr)"解释为错的轴）；推荐用户**必须** 用 sweep 主分支（包含 `_cuda_record_to_canonical`）。
 
 ---
 
 ## 7. 总结
 
-* `sweep_loss` 共实现 34 个 loss 类（≈38 种 misfit 形式），覆盖 Family A–J 全部。绝大多数公式与原文 doi 链接一致。
+* `sweepx.loss` 共实现 34 个 loss 类（≈38 种 misfit 形式），覆盖 Family A–J 全部。绝大多数公式与原文 doi 链接一致。
 * **34 个里 33 个 sanity 通过**；1 个（SoftDTW）默认行为不适合 FWI，**已修复**：
-  `src/sweep_loss/soft_dtw.py` 加入 `divergence: bool = True` 参数（默认开），返回
+  `src/sweepx/loss/soft_dtw.py` 加入 `divergence: bool = True` 参数（默认开），返回
   Blondel-Mensch-Vert (2020) 的 soft-DTW divergence，非负且零残差为 0；`divergence=False`
   保留旧行为做学术对比。验证脚本 `04_verify_softdtw_fix.py` 显示：
   `syn==obs`：divergence=**0.0**，raw=−1.69。
@@ -398,13 +398,13 @@ $$D_\gamma(x, y) = \mathrm{sDTW}_\gamma(x, y) - \tfrac{1}{2}\bigl[\mathrm{sDTW}_
   **建议**（未改默认值以保兼容）：在 README / examples 中明示地震 FWI 应该用 `'abs'` 或 `'square'`，与 NIMLoss 默认一致。
 * **AWI / OTMF / Deconvolution 在 `syn=obs` 时残留 O(ε)**：实现正确，是 Wiener 滤波器 Tikhonov 正则的副作用，不是 BUG。建议在 docstring 加一句说明。
 * **`LaplaceL2Loss` 是 time-domain damped L2，不是 Shin-Cha 2008 的频率域 log Laplace**：实现与 docstring 自洽，但与原文不严格等价；建议在 docstring 明确这一点。
-* **sweep solver**：`impl='c'` + boundary saving（`MemoryOptions(strategy='boundary', boundary=BoundaryOptions(storage='gpu'))`）+ ibex base 环境（sm_70/80/86/89 多架构）在 ibex GPU 节点跑通；和 `sweep_loss` 直接对接，输出张量已经是 canonical `(ns, nt, nr, nc)` 布局，无需手动 permute。
+* **sweep solver**：`impl='c'` + boundary saving（`MemoryOptions(strategy='boundary', boundary=BoundaryOptions(storage='gpu'))`）+ ibex base 环境（sm_70/80/86/89 多架构）在 ibex GPU 节点跑通；和 `sweepx.loss` 直接对接，输出张量已经是 canonical `(ns, nt, nr, nc)` 布局，无需手动 permute。
 * **sweep 仓库观察（不改动 sweep 代码）**：旧版 `ifwitorch` 环境的 sweep `_C.so` 只编译了 sm_70，**在 sm_89 GPU 上**（如本地 RTX 6000 Ada）会以 `cudaErrorNoKernelImageForDevice` 失败；用 ibex base env 的多架构 `_C.so`（已包含 sm_89）即可。
 
 ## 8. 复现指令
 
 ```bash
-# 编辑 sweep_loss 代码（如有需要）
+# 编辑 sweepx.loss 代码（如有需要）
 $ cd sweep-loss
 
 # 在 ibex glogin 节点提交（v100 GPU）
@@ -469,12 +469,12 @@ tests/usability/
     └── softdtw_fix.png
 ```
 
-## 10. 改动清单（sweep_loss 仓库）
+## 10. 改动清单（sweepx.loss 仓库）
 
 仅修改了 **1 个文件**：
 
 ```
-src/sweep_loss/soft_dtw.py
+src/sweepx/loss/soft_dtw.py
   SoftDTWLoss.__init__        +  divergence: bool = True
   SoftDTWLoss.forward         +  compute D_ss / D_oo and subtract 0.5*(...)
   soft_dtw_loss(...)          +  divergence parameter

@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 
 
 def _write(spec_dict, path: Path) -> Path:

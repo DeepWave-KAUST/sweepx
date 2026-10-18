@@ -1,8 +1,8 @@
 """Acquisition-geometry construction (line/explicit/from-file/plan). Verbatim from runner.py."""
 import numpy as np
 
-from sweep_tasks.schemas import LineSet
-from sweep_tasks._helpers.data_loading import (
+from sweepx.tasks.schemas import LineSet
+from sweepx.tasks._helpers.data_loading import (
     _load_segy_index_payload,
     _load_segy_single_file_payload,
     _load_seismic_plan_payload,

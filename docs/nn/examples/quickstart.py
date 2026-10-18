@@ -8,7 +8,7 @@ twenty seconds.
 
 import torch
 
-from sweep_nn.siren import SIREN
+from sweepx.nn.siren import SIREN
 
 
 def main() -> None:

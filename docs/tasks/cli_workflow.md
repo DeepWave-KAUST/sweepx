@@ -41,13 +41,13 @@ Behind these CLI commands sit the modular sweep-io primitives:
 
 ```
 SEG-Y bytes
-    │  sweep_io.segy_index.build_segy_index        (parallel scan)
+    │  sweepx.io.segy_index.build_segy_index        (parallel scan)
     ▼
-sweep_io.segy_index.SEGYIndex                       ← STEP 1 output
-    │  sweep_io.seismic_plan.build_seismic_plan    (filter + group)
+sweepx.io.segy_index.SEGYIndex                       ← STEP 1 output
+    │  sweepx.io.seismic_plan.build_seismic_plan    (filter + group)
     ▼
-sweep_io.seismic_plan.SeismicPlan                   ← STEP 2 output
-    │  sweep_io.seismic_plan.PlanReader            (lazy SEG-Y read)
+sweepx.io.seismic_plan.SeismicPlan                   ← STEP 2 output
+    │  sweepx.io.seismic_plan.PlanReader            (lazy SEG-Y read)
     ▼
 np.ndarray  (n_in_group, nt) float32                ← consumed by STEP 3
 ```
@@ -153,7 +153,7 @@ sub-block (`PlanSamplingConfig`) that enables the per-iter
 plan-streaming supershot loop with ±1 source encoding. The runner auto-
 detects this and dispatches to the dedicated plan-streaming training loop;
 no separate `from_crg_plan` / `obs.crg_plan` / `build-crg-plan` symbols
-exist anymore. See `src/sweep_tasks/templates/fwi.yaml` for the canonical
+exist anymore. See `src/sweepx/tasks/templates/fwi.yaml` for the canonical
 shape. That loop refuses, when the YAML loads, the keys it never reads
 (`scheduler`, `resume` / `resume_from`, `train_shot_batchsize`,
 `save_illumination`, `grad_smooth`, `diffusion_prior`, `local_model_window`,
@@ -382,7 +382,7 @@ For real data, skip the CLI and call the library directly with your own arrays,
 which is the same code path:
 
 ```python
-from sweep_tasks.freqsel import FrequencyComb, extract_shard
+from sweepx.tasks.freqsel import FrequencyComb, extract_shard
 import numpy as np
 
 comb = FrequencyComb(dt=0.004, n_p=8000, ks=np.arange(64, 129))   # 1-2 Hz
@@ -614,7 +614,7 @@ When enabled, the runner adds these files per target to `artifacts`:
 | Random sub-sample per group | `... --max-traces-per-group 100 --seed 42` |
 | OBN receiver-gather build | `sweep-tasks build-plan --index idx.npz --grouping crg --receiver-quantize-m 0.5 --out crg_plan.npz` |
 | OBN plan-streaming supershot FWI | YAML: `geometry.kind: from_plan` (with `rotation_metadata`) + an `obs.plan.sampling:` block (its `shared_shots_per_iter` caps the shots per gather and iteration) |
-| Inspect a plan | `python -c "from sweep_io.seismic_plan import SeismicPlan; p=SeismicPlan.load('plan.npz'); print(p.grouping, p.n_groups, p.n_rows, p.build_meta)"` |
+| Inspect a plan | `python -c "from sweepx.io.seismic_plan import SeismicPlan; p=SeismicPlan.load('plan.npz'); print(p.grouping, p.n_groups, p.n_rows, p.build_meta)"` |
 | Run FWI on a plan | `sweep-tasks run fwi.yaml` (with `geometry.kind=from_plan` + `obs.plan.plan_path`) |
 | Extract freqsel coefficients | `sweep-tasks extract-coeff <forward_run_dir> --n-p 24000 --k-lo 24 --k-hi 72 -o coeff.npz` |
 | Wavelet-free encoded FWI | YAML: `source_encoding: {enabled: true, mode: frequency_selection, frequency: {coeff_shards: ...}}` |

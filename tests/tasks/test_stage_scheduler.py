@@ -20,7 +20,7 @@ import torch
 import torch.optim.optimizer as _toptim
 import yaml
 
-from sweep_tasks import TaskRunner, load_task
+from sweepx.tasks import TaskRunner, load_task
 
 
 def _models(tmp_path: Path):
@@ -90,8 +90,8 @@ def _run(spec, path: Path, monkeypatch=None, stop_after=None):
     ``stop_after=k`` sends SIGINT after the k-th checkpoint, which stops the
     run cleanly after that epoch (the graceful-stop path)."""
     if stop_after is not None:
-        from sweep_tasks.tasks import fwi as _fwi_mod
-        from sweep_tasks.tasks import lsrtm as _lsrtm_mod
+        from sweepx.tasks.tasks import fwi as _fwi_mod
+        from sweepx.tasks.tasks import lsrtm as _lsrtm_mod
         mod = _fwi_mod if spec["task_type"] == "fwi" else _lsrtm_mod
         real = mod._save_checkpoint
         calls = {"n": 0}
@@ -202,8 +202,8 @@ def test_lsrtm_schedule_spans_stages_and_resumes(tmp_path, monkeypatch):
 ], ids=["exp", "step", "cosine_restart"])
 def test_fwi_without_stages_steps_like_a_plain_torch_scheduler(tmp_path, sched):
     from pydantic import TypeAdapter
-    from sweep_tasks.runtime.scheduler import build
-    from sweep_tasks.schemas import Scheduler
+    from sweepx.tasks.runtime.scheduler import build
+    from sweepx.tasks.schemas import Scheduler
 
     _, lrs = _run(_fwi(tmp_path, sched, epochs=7), tmp_path / "fwi.yaml")
     opt = torch.optim.Adam([torch.zeros(1, requires_grad=True)], lr=8.0)
@@ -217,8 +217,8 @@ def test_fwi_without_stages_steps_like_a_plain_torch_scheduler(tmp_path, sched):
 
 
 def test_lr_at_is_the_closed_form_of_the_chained_schedulers():
-    from sweep_tasks.runtime.scheduler import build, lr_at
-    from sweep_tasks.schemas import SchedulerCosine, SchedulerExp, SchedulerStep
+    from sweepx.tasks.runtime.scheduler import build, lr_at
+    from sweepx.tasks.schemas import SchedulerCosine, SchedulerExp, SchedulerStep
 
     for spec in (SchedulerStep(step_size=3, gamma=0.8), SchedulerExp(gamma=0.95),
                  SchedulerCosine(eta_min=0.2), SchedulerCosine(eta_min=0.2, t_max=7)):
@@ -232,9 +232,9 @@ def test_lr_at_is_the_closed_form_of_the_chained_schedulers():
 
 
 def test_bind_restores_checkpointed_lr_only_for_the_same_schedule():
-    from sweep_tasks._helpers.optimizer import _bind_stage_scheduler
-    from sweep_tasks.runtime.scheduler import lr_at
-    from sweep_tasks.schemas import SchedulerConstant, SchedulerExp
+    from sweepx.tasks._helpers.optimizer import _bind_stage_scheduler
+    from sweepx.tasks.runtime.scheduler import lr_at
+    from sweepx.tasks.schemas import SchedulerConstant, SchedulerExp
 
     spec = SchedulerExp(gamma=0.9)
     closed = lr_at(spec, 8.0, 6, 10)
