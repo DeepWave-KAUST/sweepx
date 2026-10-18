@@ -1,0 +1,80 @@
+{#-
+  Material's partials/tabs-item.html (mkdocs-material 9.7) plus one addition:
+  a top-level nav section named in `extra.tab_menus` (mkdocs.yml) renders as a
+  tab with a dropdown of its subsections, grouped as listed there. The tab
+  itself links to the section's first page. Every other tab is rendered as in
+  Material; re-check this file against material/templates/partials/
+  tabs-item.html when upgrading mkdocs-material.
+-#}
+{% macro render_content(nav_item, ref) %}
+  {% set ref = ref or nav_item %}
+  {% if nav_item == ref or "navigation.indexes" in features %}
+    {% if nav_item.is_index and nav_item.meta.icon %}
+      {% include ".icons/" ~ nav_item.meta.icon ~ ".svg" %}
+    {% endif %}
+  {% endif %}
+  {{ ref.title }}
+{% endmacro %}
+{% macro first_url(nav_item) -%}
+  {%- if nav_item.children -%}
+    {{- first_url(nav_item.children | first) -}}
+  {%- else -%}
+    {{- nav_item.url | url -}}
+  {%- endif -%}
+{%- endmacro %}
+{% macro render_menu(nav_item, groups) %}
+  {% set class = "md-tabs__item sweep-tabmenu" %}
+  {% if nav_item.active %}
+    {% set class = class ~ " md-tabs__item--active" %}
+  {% endif %}
+  <li class="{{ class }}">
+    <a href="{{ first_url(nav_item) }}" class="md-tabs__link" aria-haspopup="true">
+      {{ nav_item.title }}<span class="sweep-tabmenu__caret" aria-hidden="true"></span>
+    </a>
+    <div class="sweep-tabmenu__panel">
+      {% for group, entries in groups.items() %}
+        <div class="sweep-tabmenu__group">
+          <div class="sweep-tabmenu__label">{{ group }}</div>
+          {% for title, note in entries.items() %}
+            {% for child in nav_item.children if child.title == title %}
+              <a href="{{ first_url(child) }}" class="sweep-tabmenu__link{% if child.active %} sweep-tabmenu__link--active{% endif %}">
+                <span class="sweep-tabmenu__name">{{ child.title }}</span>
+                <span class="sweep-tabmenu__note">{{ note }}</span>
+              </a>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </div>
+  </li>
+{% endmacro %}
+{% macro render(nav_item, ref) %}
+  {% set ref = ref or nav_item %}
+  {% set menus = config.extra.tab_menus or {} %}
+  {% if nav_item == ref and nav_item.title in menus %}
+    {{ render_menu(nav_item, menus[nav_item.title]) }}
+  {% else %}
+    {% set class = "md-tabs__item" %}
+    {% if ref.active %}
+      {% set class = class ~ " md-tabs__item--active" %}
+    {% endif %}
+    {% if nav_item.children %}
+      {% set first = nav_item.children | first %}
+      {% if first.children %}
+        {{ render(first, ref) }}
+      {% else %}
+        <li class="{{ class }}">
+          <a href="{{ first.url | url }}" class="md-tabs__link">
+            {{ render_content(first, ref) }}
+          </a>
+        </li>
+      {% endif %}
+    {% else %}
+      <li class="{{ class }}">
+        <a href="{{ nav_item.url | url }}" class="md-tabs__link">
+          {{ render_content(nav_item) }}
+        </a>
+      </li>
+    {% endif %}
+  {% endif %}
+{% endmacro %}

@@ -26,7 +26,7 @@ hide:
     </p>
     <span class="sweep-features-3__link">Open the agent docs <span aria-hidden="true">→</span></span>
   </a>
-  <a class="sweep-features-3__card" href="https://github.com/DeepWave-KAUST/sweepx">
+  <a class="sweep-features-3__card" href="sweepx/">
     <div class="sweep-features-3__tag">TOOLKIT · import sweepx</div>
     <h3 class="sweep-features-3__title">…and the toolkit</h3>
     <p class="sweep-features-3__desc">
@@ -34,7 +34,7 @@ hide:
       <code>sweepx.loss</code>, <code>sweepx.io</code>, <code>sweepx.nn</code> and
       <code>sweepx.opt</code>, all in the one <code>sweepx</code> package; tomography follows.
     </p>
-    <span class="sweep-features-3__link">Browse the repository <span aria-hidden="true">→</span></span>
+    <span class="sweep-features-3__link">Open the toolkit docs <span aria-hidden="true">→</span></span>
   </a>
 </section>
 

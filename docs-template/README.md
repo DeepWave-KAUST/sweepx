@@ -13,8 +13,11 @@ here — it lives once in this repo (`../mkdocs.yml`, `../overrides/`,
    - `IMPORT_NAME`  → the python import (e.g. `sweepx.tasks`)
    - fill in the prose, code, and examples.
 3. Point the API page(s) at the module: `::: sweepx.<module>`.
-4. Add the module's nav block to `nav:` in `../mkdocs.yml`, every path prefixed with
-   `<module>/` (copy this template's `mkdocs.yml` nav and prefix it).
+4. Add the module's nav block under the `sweepx` section of `nav:` in `../mkdocs.yml`,
+   every path prefixed with `<module>/` (copy this template's `mkdocs.yml` nav and
+   prefix it), and give it a one-line note under a group of `extra.tab_menus.sweepx`
+   so it shows in the sweepx tab's dropdown. Add a card for it to
+   `../docs/sweepx/index.md`.
 
 The docs build installs this repo (`pip install -e .` in `.github/workflows/docs.yml`),
 so mkdocstrings can import the new module with no further setup.
