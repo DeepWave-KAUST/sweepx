@@ -65,6 +65,9 @@ def test_git_meta_has_describe(tmp_path, monkeypatch):
                         *args], check=True, capture_output=True)
 
     git("init", "-q")
+    # As in any real checkout: _git_meta imports the module, which writes
+    # __pycache__/ into the tree unless PYTHONDONTWRITEBYTECODE is set.
+    (root / ".gitignore").write_text("__pycache__/\n")
     git("add", "-A")
     git("commit", "-q", "-m", "one")
     git("tag", "v9.9.9")
