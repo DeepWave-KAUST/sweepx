@@ -43,7 +43,7 @@ ExponentiatedPhaseLoss(eps=1e-8)(syn, obs)
 
 ## Tests
 
-`tests/test_exponentiated_phase.py` checks:
+`tests/loss/test_exponentiated_phase.py` checks:
 
 * zero for identical signals,
 * amplitude invariance with `eps=0`,

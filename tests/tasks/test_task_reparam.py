@@ -1,4 +1,4 @@
-"""End-to-end smoke tests for the sweep-nn reparameterization hook."""
+"""End-to-end smoke tests for the sweepx.nn reparameterization hook."""
 
 from pathlib import Path
 

@@ -29,20 +29,22 @@ user (natural language + files)
             └─ build + execute + viz  ──►  sweepx.tasks.TaskRunner   (production runner)
 ```
 
-Tools import the geophysics stack **lazily** — a missing layer returns a clear
-`{"error": "… not importable"}` instead of crashing, so the agent always starts.
+Tools import the geophysics stack **lazily** — a tool whose dependencies fail to
+import returns a clear `{"error": "… not importable"}` instead of crashing, so the
+agent always starts.
 
-## What works at each layer
+## What the tools cover
 
-| tools | `pip install sweepx` | `+ sweep-tasks` |
-|---|:--:|:--:|
-| `tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | ✅ | ✅ |
-| `plot_*`, `compare_shot_gathers`, `list_equations` | ✅ | ✅ |
-| `run_forward_sweep` — forward modelling (acoustic **+ elastic**) | ✅ | ✅ |
-| `list_benchmark_models` / `get_benchmark_model` — Marmousi / Overthrust | ✅ | ✅ |
-| `build_*_spec`, `run_task`, `run_fwi`, `run_multiscale_fwi`, … | error dict | ✅ |
+`pip install sweepx` brings the solver and the task runner along, so every tool works
+on a plain install:
 
-Full FWI / LSRTM is the [`sweep-tasks`](../tasks/) tier (the production runner).
+| tools | what they do |
+|---|---|
+| `tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | discovery and inspection |
+| `plot_*`, `compare_shot_gathers`, `list_equations` | plots, equation listing |
+| `run_forward_sweep` | forward modelling (acoustic **+ elastic**) |
+| `list_benchmark_models` / `get_benchmark_model` | Marmousi / Overthrust |
+| `build_*_spec`, `run_task`, `run_fwi`, `run_multiscale_fwi`, … | FWI / LSRTM through [`sweepx.tasks`](../tasks/), the production runner |
 
 <div class="grid cards" markdown>
 
@@ -56,13 +58,13 @@ Full FWI / LSRTM is the [`sweep-tasks`](../tasks/) tier (the production runner).
 
     ---
 
-    Tools, install tiers, and LLM backends (Ollama / vLLM / any OpenAI-compatible).
+    Tools and LLM backends (Ollama / vLLM / any OpenAI-compatible).
 
 -   :material-notebook-outline: __[Examples](examples/index.md)__
 
     ---
 
-    Prompts that work on the base install.
+    Prompts to start from.
 
 -   :material-api: __[API reference](api/index.md)__
 

@@ -1,25 +1,23 @@
 # Optimizers
 
-This page lists every optimizer shipped by `sweepx.opt`, grouped by category
-and tagged by the Tier in which it lands.
+This page lists every optimizer shipped by `sweepx.opt`, grouped by category.
 
-| Algorithm | Class | Category | Tier | Closure required? | Bounds | Preconditioner |
-|---|---|---|---|---|---|---|
-| [Steepest Descent](steepest_descent.md) | `SteepestDescent` | First-order | 1 | only with `line_search` | yes | yes |
-| [Nonlinear CG (PR+)](ncg.md) | `NCG` | First-order | 1 | yes | yes | yes |
-| [L-BFGS-FWI](lbfgs.md) | `LBFGS` | Quasi-Newton | 1 | yes | yes (projected) | yes (as `H_0`) |
-| [Truncated Newton (HF)](newton.md) | `TruncatedNewton` | Newton-type | 2 | yes (loss-only) | yes | yes (PCG inner) |
-| [Truncated Gauss-Newton](gauss_newton.md) | `TruncatedGaussNewton` | Newton-type | 2 | yes (residual) | yes | yes (PCG inner) |
-| [Trust-Region (TTR/ASTR)](trust_region.md) | `TrustRegion` | Trust-region | 2 | yes (loss-only) | yes | yes (PCG inner, TTR) |
-| [L-BFGS-B](lbfgsb.md) | `LBFGSB` | Quasi-Newton | 2 | yes | yes (active-set) | yes (as `H_0`) |
-| [Adam-FWI](adam_fwi.md) | `AdamFWI` | Adaptive | 3 | optional | yes | n/a (per-param adaptive) |
-| [Lion](lion.md) | `Lion` | Adaptive (sign-momentum) | 3 | optional | yes | n/a |
-| [SAM](sam.md) | `SAM` | Wrapper (sharpness-aware) | 3 | yes | inherited | inherited |
-| [Shampoo](shampoo.md) | `Shampoo` | Second-order (Kronecker) | 3 | optional | yes | n/a (Kronecker-factored built in) |
-| [SOAP](soap.md) | `SOAP` | Second-order (Shampoo + Adam) | 3 | optional | yes | n/a |
+| Algorithm | Class | Category | Closure required? | Bounds | Preconditioner |
+|---|---|---|---|---|---|
+| [Steepest Descent](steepest_descent.md) | `SteepestDescent` | First-order | only with `line_search` | yes | yes |
+| [Nonlinear CG (PR+)](ncg.md) | `NCG` | First-order | yes | yes | yes |
+| [L-BFGS-FWI](lbfgs.md) | `LBFGS` | Quasi-Newton | yes | yes (projected) | yes (as `H_0`) |
+| [Truncated Newton (HF)](newton.md) | `TruncatedNewton` | Newton-type | yes (loss-only) | yes | yes (PCG inner) |
+| [Truncated Gauss-Newton](gauss_newton.md) | `TruncatedGaussNewton` | Newton-type | yes (residual) | yes | yes (PCG inner) |
+| [Trust-Region (TTR/ASTR)](trust_region.md) | `TrustRegion` | Trust-region | yes (loss-only) | yes | yes (PCG inner, TTR) |
+| [L-BFGS-B](lbfgsb.md) | `LBFGSB` | Quasi-Newton | yes | yes (active-set) | yes (as `H_0`) |
+| [Adam-FWI](adam_fwi.md) | `AdamFWI` | Adaptive | optional | yes | n/a (per-param adaptive) |
+| [Lion](lion.md) | `Lion` | Adaptive (sign-momentum) | optional | yes | n/a |
+| [SAM](sam.md) | `SAM` | Wrapper (sharpness-aware) | yes | inherited | inherited |
+| [Shampoo](shampoo.md) | `Shampoo` | Second-order (Kronecker) | optional | yes | n/a (Kronecker-factored built in) |
+| [SOAP](soap.md) | `SOAP` | Second-order (Shampoo + Adam) | optional | yes | n/a |
 
-The matrix is appended to as new optimizers land. See each algorithm's own
-page for the API, theory, and references.
+See each algorithm's own page for the API, theory, and references.
 
 ## Conventions
 

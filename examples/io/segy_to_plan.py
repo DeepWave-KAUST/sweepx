@@ -6,7 +6,7 @@ the trace headers, scan it into a SEGYIndex, organise it as shot gathers (a
 SeismicPlan), then read the gathers through a PlanReader with a prefetcher.
 
 Run:
-    python examples/segy_to_plan.py
+    python examples/io/segy_to_plan.py
 """
 
 from __future__ import annotations

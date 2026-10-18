@@ -1,6 +1,6 @@
 """Build a :class:`CRGPlan` from raw source-line SEG-Y files.
 
-Pipeline (sweep-tasks self-contained, no dependency on the legacy
+Pipeline (self-contained, no dependency on the legacy
 ``fwi_workflow-dev`` MPI scripts):
 
     raw SEG-Y (N files, headers only)
@@ -21,9 +21,6 @@ Pipeline (sweep-tasks self-contained, no dependency on the legacy
 Output schema matches the legacy ``crg_fwi_plan_v1``, so files produced
 by this builder are drop-in for any consumer of
 :func:`sweepx.io.crg_plan.load_crg_shot_plan_cache`.
-
-The CLI front-end lives in ``sweep-tasks/cli.py`` as the
-``sweep-tasks build-crg-plan`` subcommand.
 """
 
 from __future__ import annotations

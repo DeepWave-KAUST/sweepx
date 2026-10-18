@@ -3,10 +3,10 @@
 A 3-D two-layer velocity model (nz, ny, nx). The model inspects the cube,
 recognises it is 3-D (so the agent/tools use the 3-D acoustic kernel
 automatically), runs the forward simulation, and plots one shot's gather.
-Pure natural language. Needs a vLLM server (examples/start_vllm_qwen7b.sh).
+Pure natural language. Needs a vLLM server (examples/agent/start_vllm_qwen7b.sh).
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_forward_3d_llm.py
+    python examples/agent/demos/demo_forward_3d_llm.py
 
 build_forward_spec auto-upgrades Acoustic -> Acoustic3D for a 3-D model, so the
 user never has to name the 3-D equation.

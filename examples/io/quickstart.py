@@ -1,4 +1,4 @@
-"""Minimal sweep-io demo: round-trip a velocity model and a geometry."""
+"""Minimal sweepx.io demo: round-trip a velocity model and a geometry."""
 
 from pathlib import Path
 

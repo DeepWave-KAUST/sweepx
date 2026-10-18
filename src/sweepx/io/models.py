@@ -45,7 +45,7 @@ def load_velocity(
     -------
     np.ndarray
         Array as stored on disk. The caller is responsible for reshape /
-        transpose — `sweep-io` does not impose `(nz, nx)` vs `(nx, nz)`.
+        transpose — `sweepx.io` does not impose `(nz, nx)` vs `(nx, nz)`.
     """
     path = Path(path)
     ext = path.suffix.lower()

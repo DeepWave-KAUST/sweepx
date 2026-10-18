@@ -74,4 +74,4 @@ all-reduce.)
 ## The schema *is* the LLM contract
 
 Emit a JSON object matching `FWISpec`, hand it to `TaskRunner`, done — which is
-exactly what [`sweep-agent`](../../agent/) does under the hood.
+exactly what [`sweepx.agent`](../../agent/) does under the hood.

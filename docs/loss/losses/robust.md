@@ -52,7 +52,7 @@ GemanMcClureLoss(c=0.5)(syn, obs)
 
 ## Tests
 
-`tests/test_robust.py` checks:
+`tests/loss/test_robust.py` checks:
 
 * point-wise formulas on hand-picked residuals,
 * Cauchy log-growth for $|r|\gg c$,

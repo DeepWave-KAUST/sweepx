@@ -40,7 +40,7 @@ SinkhornLoss(epsilon=(10*dt)**2, n_iter=64, positive="square",
 
 ## Tests
 
-`tests/test_sinkhorn.py` checks:
+`tests/loss/test_sinkhorn.py` checks:
 
 * debiased Sinkhorn → 0 for identical inputs,
 * debiased / biased differ for distinct inputs (sanity),

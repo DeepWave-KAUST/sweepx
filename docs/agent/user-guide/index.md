@@ -1,18 +1,15 @@
 # User guide
 
-## The two tiers
+## What you get
 
-`sweep-agent` degrades gracefully around what's installed:
+`pip install sweepx` brings the `sweep-agent` CLI, the ~30-tool registry, the core
+solver and the production runner (`sweepx.tasks`). Discovery, inspection, plotting,
+**forward modelling (acoustic + elastic)**, **benchmark models** and FWI / LSRTM
+(`build_*_spec`, `run_task`, `run_fwi`, `run_multiscale_fwi`, …) all work.
 
-- **Base install (`pip install sweepx`)** — the CLI, the ~30-tool registry,
-  and the core solver. Discovery, inspection, plotting, **forward modelling
-  (acoustic + elastic)**, and **benchmark models** all work.
-- **`+ sweep-tasks`** — unlocks the production tier: `build_*_spec`, `run_task`,
-  `run_fwi`, `run_multiscale_fwi`, and the rest of FWI / LSRTM.
-
-A tool whose layer is missing returns `{"error": "… is not importable"}` rather
-than crashing — the agent stays up, and tools not offered this turn are rejected
-(no hallucinated calls).
+A tool whose dependencies fail to import returns `{"error": "… is not importable"}`
+rather than crashing — the agent stays up, and tools not offered this turn are
+rejected (no hallucinated calls).
 
 ## LLM backends
 

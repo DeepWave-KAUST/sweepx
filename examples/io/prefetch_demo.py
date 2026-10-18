@@ -7,7 +7,7 @@ shot index, then walks the index twice:
 Reports wall-clock and the time the consumer spent waiting on I/O.
 
 Run:
-    python examples/prefetch_demo.py
+    python examples/io/prefetch_demo.py
 """
 
 from __future__ import annotations

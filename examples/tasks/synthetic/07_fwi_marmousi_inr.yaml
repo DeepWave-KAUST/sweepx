@@ -3,7 +3,7 @@
 # Teaches:  `reparam:` — instead of updating vp cell by cell, a coordinate
 #           network predicts vp(x, z) and the optimiser updates its WEIGHTS.
 #           The network's own smoothness acts as the regulariser.
-# Needs:    nothing (models from `sweep.datasets`); pulls `sweep-nn`.
+# Needs:    nothing (models from `sweep.datasets`); pulls `sweepx.nn`.
 # Produces: output/inverted_vp.npy (the rendered model) + loss.npy.
 #
 # Run:
@@ -132,7 +132,7 @@ reparam:
     features_per_level: 2
     base_resolution: 4
     finest_resolution: 256
-    backend: pytorch         # `triton` is the fused kernel, if sweep-nn has it
+    backend: pytorch         # `triton` is the fused kernel, if sweepx.nn has it
   lr: 1.0e-4
   backward_mode: two_pass_full
   save_net: true             # dump the weights so a later run can warm-start

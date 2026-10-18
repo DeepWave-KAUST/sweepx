@@ -3,8 +3,8 @@
 | Example | What it shows | Needs |
 |---|---|---|
 | [`quickstart.py`](quickstart.py) | The API on a toy problem: a SIREN fitted to a velocity model directly, no wave equation | CPU is enough |
-| [`pseudo_hessian_overthrust.ipynb`](pseudo_hessian_overthrust.ipynb) | Implicit FWI on Overthrust, and the pseudo-Hessian (illumination) preconditioner | CUDA GPU, `sweep-solver` |
-| [`hash_encoding_marmousi.ipynb`](hash_encoding_marmousi.ipynb) | Implicit FWI on Marmousi, and the multiresolution hash encoding | CUDA GPU, `sweep-solver` |
+| [`pseudo_hessian_overthrust.ipynb`](pseudo_hessian_overthrust.ipynb) | Implicit FWI on Overthrust, and the pseudo-Hessian (illumination) preconditioner | CUDA GPU |
+| [`hash_encoding_marmousi.ipynb`](hash_encoding_marmousi.ipynb) | Implicit FWI on Marmousi, and the multiresolution hash encoding | CUDA GPU |
 
 ## The two implicit-FWI notebooks
 
@@ -16,8 +16,8 @@ The velocity is `sweepx.nn.VelocityINR`, `vp = vp_init + vp_std · net(z, x)`; t
 equation is sweep's compiled acoustic solver.
 
 ```bash
-pip install sweepx sweep-solver jupyterlab
-cd docs/examples                     # the notebooks import ifwi_models.py from here
+pip install sweepx jupyterlab         # sweepx brings sweep-solver along
+cd docs/nn/examples                     # the notebooks import ifwi_models.py from here
 jupyter lab
 ```
 

@@ -53,7 +53,7 @@ TraceNormalizedL2Loss()(syn, obs)
 
 ## Tests
 
-`tests/test_correlation.py` checks:
+`tests/loss/test_correlation.py` checks:
 
 * invariance under per-trace positive rescaling,
 * perfect match → 0,

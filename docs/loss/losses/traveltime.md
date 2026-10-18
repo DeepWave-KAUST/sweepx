@@ -68,7 +68,7 @@ loss = CrossCorrelationTraveltimeLoss(
 
 ## Tests
 
-`tests/test_traveltime.py` checks:
+`tests/loss/test_traveltime.py` checks:
 
 * perfect match → 0,
 * recovery of a known integer-sample Ricker shift to within ~0.5 dt,

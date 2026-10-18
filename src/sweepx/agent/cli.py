@@ -112,7 +112,7 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 def _cmd_ui(args: argparse.Namespace) -> int:
-    # Fail fast: the web UI needs gradio (the `[ui]` extra). Check BEFORE touching
+    # Fail fast: the web UI needs gradio (the `[agent-ui]` extra). Check BEFORE touching
     # the LLM, so we never pull a multi-GB Ollama model and then error on a missing
     # gradio. find_spec() checks availability without importing gradio.
     import importlib.util

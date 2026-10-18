@@ -226,7 +226,7 @@ def test_inr_coordinates_stay_in_the_native_frame():
     sbase = _resample_to_grid(base, dh0, st, dh)
     net.update_base_velocity(sbase)
     with torch.no_grad():
-        stretched = net() - sbase                                # sweep-nn i/n frame
+        stretched = net() - sbase                                # sweepx.nn i/n frame
     _set_physical_inr_frame(net, shape=st, dh=dh, frame_shape=native_shape,
                             frame_dh=dh0)
     with torch.no_grad():

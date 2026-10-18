@@ -2,10 +2,9 @@
 
 Self-contained numpy-only copy of the resampler formerly in
 ``sweep_preproc.resample`` — that package was absorbed into
-``sweepx.tasks.preproc`` and retired. Kept here so sweep-io's optional
-``DataPlan.dt_target_s`` feature has no cross-package dependency, and so
-sweep-io never has to import sweep-tasks (which would be a dependency cycle:
-sweep-tasks already imports sweep-io).
+``sweepx.tasks.preproc`` and retired. Kept here so the optional
+``DataPlan.dt_target_s`` feature never makes ``sweepx.io`` import
+``sweepx.tasks``, the layer above it (the import-linter contract forbids it).
 
 The numerical path is identical to the original (same ``(up, down)`` rational
 at microsecond resolution, same ``resample_poly`` call, same dtype handling).

@@ -9,13 +9,13 @@ Two complementary planners:
   optionally drops sources / receivers that fall outside the kept window.
 
 Both classes are plain dataclasses — the matching Pydantic schemas live in
-``sweep-tasks`` and translate to these at task-build time.
+``sweepx.tasks`` and translate to these at task-build time.
 
 Signal-processing knobs (bandpass / mute / wavelet estimation) deliberately
 stay in ``sweepx.tasks.preproc`` so a DataPlan is *only* about selection and
 sampling. Compose them at the caller. The one exception — time-axis resampling
-for ``dt_target_s`` — is inlined as ``sweepx.io._resample`` so sweep-io needs no
-sweep-tasks import (which would be a dependency cycle).
+for ``dt_target_s`` — is inlined as ``sweepx.io._resample`` so ``sweepx.io``
+needs no ``sweepx.tasks`` import (the layer above it).
 """
 
 from __future__ import annotations

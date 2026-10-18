@@ -100,7 +100,7 @@ sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml --nproc-per
 
 | example | data |
 |---|---|
-| [`field/viking/`](field/viking/) | Mobil AVO Viking Graben — public, ~1.4 GB SEG-Y. Full walkthrough in [`docs/datasets/viking/README.md`](../docs/datasets/viking/README.md) |
+| [`field/viking/`](field/viking/) | Mobil AVO Viking Graben — public, ~1.4 GB SEG-Y. Full walkthrough in [`docs/tasks/datasets/viking/README.md`](../../docs/tasks/datasets/viking/README.md) |
 
 These read paths from environment variables (`$VIKING_HOME`,
 `$SWEEP_RUNS_ROOT`) rather than hardcoding anyone's directory layout.

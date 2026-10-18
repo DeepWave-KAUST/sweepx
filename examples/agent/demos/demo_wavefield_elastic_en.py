@@ -5,7 +5,7 @@ model recognises the three elastic parameter files need the Elastic equation,
 centres the source, and animates the P- and S-wave rings. Needs a vLLM server.
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_wavefield_elastic_en.py
+    python examples/agent/demos/demo_wavefield_elastic_en.py
 """
 
 from __future__ import annotations

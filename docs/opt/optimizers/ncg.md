@@ -77,8 +77,7 @@ L-BFGS at small history sizes (2-3 stored vectors) and avoids L-BFGS's
 storage of multiple `(s, y)` pairs.
 
 When you have memory to spare and want better convergence, switch to
-L-BFGS (Tier-1) or Truncated Newton (Tier-2). Both are added in later
-commits.
+L-BFGS or Truncated Newton.
 
 ## References
 

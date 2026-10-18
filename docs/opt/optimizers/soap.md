@@ -3,7 +3,7 @@
 `sweepx.opt.optim.SOAP` (Vyas et al. 2024) runs Adam in the eigenbasis of
 Shampoo's preconditioner. It follows the
 [official implementation](https://github.com/nikhilvyas/SOAP) (commit
-`a1e5535`) step for step; `tests/test_soap_parity.py` checks parameters and
+`a1e5535`) step for step; `tests/opt/test_soap_parity.py` checks parameters and
 optimizer state against that code bit for bit.
 
 Each parameter keeps one Shampoo factor per tensor axis ($L, R$ for a

@@ -277,7 +277,7 @@ def test_fit_matches_fwi_workflow_rotate_csg_index():
         shift_inline_to_zero=True, shift_crossline_to_zero=True,
     )
 
-    # Reproduce with sweep-io: rotation fit on per-shot sources; shift minima
+    # Reproduce with sweepx.io: rotation fit on per-shot sources; shift minima
     # over per-trace sources + receivers (what rotate_csg_index does).
     source_points = shot_xy  # == _source_points(index)
     all_xy = np.vstack([np.column_stack([sx_all, sy_all]),

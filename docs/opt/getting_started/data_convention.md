@@ -4,7 +4,7 @@
 parameters you pass to its optimizers, and never touches your data tensors.
 
 That said, the library is designed to compose cleanly with `sweep` and
-`sweep-loss`, which share a common shot-data layout:
+`sweepx.loss`, which share a common shot-data layout:
 
 ```
 (nshots, nt, nreceivers, nchannel)

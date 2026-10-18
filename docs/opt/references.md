@@ -11,7 +11,7 @@ bottom; they are mirrored here for a single bibliographic snapshot.
 
 ## Per-algorithm references
 
-### Tier-2
+### Newton-type, trust region and L-BFGS-B
 
 - **Truncated Newton survey**: Nash, S. G. (2000). "A survey of
   truncated-Newton methods." _Journal of Computational and Applied
@@ -55,7 +55,7 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   550-560.
   [DOI:10.1145/279232.279236](https://doi.org/10.1145/279232.279236).
 
-### Tier-3
+### Adaptive, second-order and DIP-FWI
 
 - **Adam**: Kingma, D. P., and Ba, J. (2015). "Adam: A method for
   stochastic optimization."
@@ -92,7 +92,7 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   e2024JH000227.
   [DOI:10.1029/2024JH000227](https://doi.org/10.1029/2024JH000227).
 
-### Tier-1
+### Steepest descent, nonlinear CG, L-BFGS and the pseudo-Hessian
 
 - **Steepest Descent** + **strong-Wolfe line search**: Nocedal & Wright (2006),
   _Numerical Optimization_, Algorithms 3.5-3.6. See above for DOI.
@@ -114,8 +114,6 @@ bottom; they are mirrored here for a single bibliographic snapshot.
   "On the limited memory BFGS method for large scale optimization."
   _Mathematical Programming_ 45, 503-528.
   [DOI:10.1007/BF01589116](https://doi.org/10.1007/BF01589116).
-
-(Additional algorithms appear here as later commits land.)
 
 ### Topic indices
 

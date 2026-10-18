@@ -1,4 +1,4 @@
-"""sweep-nn demo: a SIREN fitted directly to a synthetic velocity model.
+"""sweepx.nn demo: a SIREN fitted directly to a synthetic velocity model.
 
 A toy fit with no wave equation: it shows the API and the optimization loop a
 real implicit-FWI run uses (the two notebooks next to this file do the real

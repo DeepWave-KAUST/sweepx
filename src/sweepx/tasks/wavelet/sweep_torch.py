@@ -993,13 +993,13 @@ def save_wavelet_outputs(
             pass
 
     payload = {
-        # Primary key. sweep-io's load_wavelet_npz tries "wavelet" first
+        # Primary key. sweepx.io's load_wavelet_npz tries "wavelet" first
         # then "optimized_siren_wavelet" — we write both so the npz is
         # compatible with code that hard-codes either.
         "wavelet": wavelet.astype(np.float32),
         "optimized_siren_wavelet": wavelet.astype(np.float32),
         "time_s": time_s,
-        # FWI runner / sweep-io needs ``dt_s`` as a scalar (preferred over
+        # FWI runner / sweepx.io needs ``dt_s`` as a scalar (preferred over
         # inferring from ``time_s``).
         "dt_s": np.float64(dt_s),
         # FWI runner reads ``source_delay_s`` via

@@ -3,7 +3,7 @@
 This document gathers, in one place, the **mathematical definition and
 DOI-linked source paper** of every misfit (loss) implemented in the
 `sweepx.loss` package.  It is also the canonical landing page for the
-mkdocs site (`docs/report.md`).
+mkdocs site (`docs/loss/report.md`).
 
 Tensor layout throughout:
 
@@ -624,13 +624,13 @@ loss_value.backward()
 ```
 
 For misfits that need extra parameters (`dt`, `epsilon`, `freq_band`,
-`gamma`, ...), see the per-loss docs under `docs/losses/`.
+`gamma`, ...), see the per-loss docs under `docs/loss/losses/`.
 
 ---
 
 ## How to cite
 
-> Wang, S. (2026). *sweep-loss: a PyTorch library of misfit functions for
+> Wang, S. (2026). *sweepx.loss: a PyTorch library of misfit functions for
 > Full Waveform Inversion.*  https://github.com/DeepWave-KAUST/sweepx
 
 Per-loss citations: see the DOI links above.

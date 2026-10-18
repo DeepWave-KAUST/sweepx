@@ -302,7 +302,7 @@ class PlanStreamingFWIMixin:
         # A source_encoding block switched off has no effect (the schema refuses
         # a min_coverage in it). Only the receiver-first index applies min_cov:
         # the random and per-CRG samplers are handed eligible_groups, which
-        # sweep-io takes over min_coverage (the schema refuses it there too).
+        # sweepx.io takes over min_coverage (the schema refuses it there too).
         min_cov = int(sampling_cfg.min_coverage)
         if encoding_on:
             min_cov = max(min_cov, int(encoding_spec.min_coverage))
@@ -1235,7 +1235,7 @@ class PlanStreamingFWIMixin:
                     source_lines_per_group=int(sampling_cfg.source_lines_per_group),
                     max_traces_per_sourceline=int(sampling_cfg.max_traces_per_sourceline),
                     # eligible_groups (the in-grid nodes) takes precedence over
-                    # min_coverage in sweep-io: this sampler never applies it,
+                    # min_coverage in sweepx.io: this sampler never applies it,
                     # and the schema refuses a min_coverage here.
                     min_coverage=int(min_cov),
                     eligible_groups=_elig_iter,

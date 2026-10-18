@@ -46,7 +46,7 @@ psh   = PseudoHuberLoss(delta=0.5, reduction="mean")(syn, obs)
 
 ## Tests
 
-`tests/test_huber.py` checks:
+`tests/loss/test_huber.py` checks:
 
 * point-wise formula on hand-picked residuals,
 * agreement with `torch.nn.functional.huber_loss`,

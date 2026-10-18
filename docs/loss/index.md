@@ -37,16 +37,13 @@ loss = L2Loss()(syn, obs)
 loss.backward()
 ```
 
-## Implemented so far
+## What is implemented
 
-* L2 — Tarantola (1984)
-* L1 — Crase et al. (1990), Brossier et al. (2010)
-* Huber / Pseudo-Huber — Guitton & Symes (2003), Charbonnier et al. (1997)
-* Hybrid L1/L2 — Bube & Langan (1997)
-* Cauchy / Tukey / Geman–McClure — Crase et al. (1990); Aravkin et al. (2012)
-
-A running list of all targeted misfits and their reference is on the
-[**References**](references.md) page.
+Thirty-three misfits, from least squares and robust norms to envelope, phase,
+matching-filter and optimal-transport misfits. The pages under
+[**Loss functions**](losses/index.md) give each one's formula, its reference with
+a DOI and the tests that check it; the [**References**](references.md) page lists
+every source paper.
 
 ## License
 

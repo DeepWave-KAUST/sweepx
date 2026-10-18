@@ -78,7 +78,7 @@ LaplaceL2Loss(s=2.0, dt=1e-3)(syn, obs)
 
 ## Tests
 
-`tests/test_frequency.py` checks:
+`tests/loss/test_frequency.py` checks:
 
 * `FrequencyDomainL2Loss` matches the explicit `0.5 * sum |rfft(s)-rfft(o)|^2`,
 * band restriction $\Omega \subsetneq$ all-frequencies gives a strictly

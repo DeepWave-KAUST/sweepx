@@ -2,7 +2,7 @@
 
 This is the ``obs.plan`` (``sampling=None``) path: conventional FWI on
 OBN/streamer field data, driven entirely from one YAML, depending only on
-sweep-stack (sweep-io ``PlanReader`` + sweep-preproc resample). It produces a
+``sweepx.io`` (``PlanReader``) and ``sweepx.tasks.preproc`` (resample). It produces a
 rectangular ``(nshots, nrec, nt)`` dataset where each shot is a SINGLE source
 recorded by a FIXED number of its own receivers — the standard
 ``_fwi_train_step`` loop then does per-shot gradient accumulation

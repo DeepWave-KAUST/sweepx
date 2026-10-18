@@ -1,7 +1,7 @@
 # Examples
 
-Prompts that work on the **base install** (`pip install sweepx` + a local
-LLM) — no `sweep-tasks`, nothing to download:
+Prompts that work on a plain install (`pip install sweepx` + a local LLM) —
+nothing to download:
 
 ```text
 load the Marmousi benchmark model and run a forward — show the shot gather
@@ -18,6 +18,5 @@ pip install "sweepx[agent-ui]"
 sweep-agent ui          # → open :7860
 ```
 
-Once `sweep-tasks` is installed, the agent can also build and run FWI / LSRTM
-tasks from plain language (e.g. *"run a 2-D acoustic FWI on Marmousi, 30 epochs,
-Adam lr 25"*).
+The agent can also build and run FWI / LSRTM tasks through `sweepx.tasks` from
+plain language (e.g. *"run a 2-D acoustic FWI on Marmousi, 30 epochs, Adam lr 25"*).

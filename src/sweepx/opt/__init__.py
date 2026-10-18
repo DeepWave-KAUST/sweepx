@@ -1,4 +1,4 @@
-"""sweep-opt - PyTorch optimizers tailored for Full Waveform Inversion (FWI)."""
+"""sweepx.opt - PyTorch optimizers tailored for Full Waveform Inversion (FWI)."""
 
 from sweepx.opt import optim, precond, parameterization, linalg, linesearch
 

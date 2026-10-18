@@ -68,7 +68,7 @@ sharper Wiener filter.
 
 ## Tests
 
-`tests/test_awi.py` checks:
+`tests/loss/test_awi.py` checks:
 
 * invariance under positive amplitude scaling of either input,
 * monotone growth with small time shifts,

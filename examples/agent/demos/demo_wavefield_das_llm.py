@@ -4,10 +4,10 @@ DAS records strain / strain-rate along a fibre rather than particle velocity.
 sweep has several DAS equations (DASZhao, DASMu, DASElastic). This demo runs a
 DAS elastic wavefield on a homogeneous model and animates it. The agent calls
 list_equations to find the DAS equation (vp/vs/rho models) and animates it.
-Needs a vLLM server (examples/start_vllm_qwen7b.sh).
+Needs a vLLM server (examples/agent/start_vllm_qwen7b.sh).
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_wavefield_das_llm.py
+    python examples/agent/demos/demo_wavefield_das_llm.py
 
 NOTE: sweep exposes 3 DAS variants; picking one from plain language is at the
 edge of Qwen2.5-7B, so this demo names "DAS" explicitly and may need a retry. A

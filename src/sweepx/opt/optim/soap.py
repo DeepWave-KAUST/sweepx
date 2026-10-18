@@ -44,7 +44,7 @@ Deviations from the official code:
   Parameters must be float32 or float64.
 * ``closure`` is evaluated with gradients enabled.
 * ``update_freq`` is the official ``precondition_frequency``; the optional
-  ``bounds`` clamp after the step is sweep-opt's; there is no ``data_format``
+  ``bounds`` clamp after the step is sweepx.opt's; there is no ``data_format``
   option (channels-last 4-D convolution weights).
 
 Reference:

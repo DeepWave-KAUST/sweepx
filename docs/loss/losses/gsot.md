@@ -54,7 +54,7 @@ gsot_loss(syn, obs, eta=1e3, dt=1e-3, max_shift_samples=20)
 
 ## Tests
 
-`tests/test_gsot.py` checks:
+`tests/loss/test_gsot.py` checks:
 
 * zero for identical inputs,
 * monotone growth with small shifts,

@@ -1,4 +1,4 @@
-"""Shared fixtures for sweep-opt unit tests.
+"""Shared fixtures for sweepx.opt unit tests.
 
 These intentionally use small CPU tensors so the suite runs quickly and
 hardware-independent.

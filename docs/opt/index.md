@@ -9,26 +9,25 @@ PyTorch's standard `torch.optim.Optimizer` interface, packaged so that they
 drop into any PyTorch-based FWI workflow with at most one constructor change.
 It pairs naturally with:
 
-- [`sweep`](https://github.com/DeepWave-KAUST/sweep) - the seismic forward
-  propagator (the library itself is backend-agnostic).
-- [`sweep-loss`](https://github.com/DeepWave-KAUST/sweep-loss) - misfit (loss)
-  functions for FWI.
+- [`sweep`](../solver/index.md) - the seismic forward propagator, which `sweepx`
+  installs as a dependency (the library itself is backend-agnostic).
+- [`sweepx.loss`](../loss/index.md) - misfit (loss) functions for FWI, in the
+  same package.
 
-All three are part of [`sweepx`](https://github.com/DeepWave-KAUST/sweepx).
+## What is in it
 
-## What ships when
+| Category | Optimizers |
+|---|---|
+| First-order | Steepest Descent (strong-Wolfe line search), Nonlinear CG (PR+) |
+| Quasi-Newton | L-BFGS-FWI, L-BFGS-B |
+| Newton-type and trust region | Truncated Newton, Truncated Gauss-Newton, Trust-Region (TTR/ASTR) |
+| Adaptive | Adam-FWI (adam / adamw / radam / nadam), Lion |
+| Second-order (Kronecker) | Shampoo, SOAP |
+| Wrapper | SAM (sharpness-aware) |
 
-The library is built out commit-by-commit, with one optimizer per commit and a
-mkdocs page for each.
-
-| Tier | Adds | Commits |
-|---|---|---|
-| Tier-1 | Steepest Descent (Wolfe) - Pseudo-Hessian preconditioner - Nonlinear CG (PR+) - L-BFGS-FWI | 6 |
-| Tier-2 | HVP/CG infra - Truncated Newton - Truncated Gauss-Newton - Trust-Region (ASTR/TTR) - L-BFGS-B - parameterizations + depth weighting | 7 |
-| Tier-3 | Adam-FWI (adam/adamw/radam/nadam) - Lion - SAM - Shampoo - SOAP - DIP-FWI parameterization | 7 |
-
-See [the optimizer overview](optimizers/index.md) for the comparison matrix
-that grows with each Tier.
+They come with the pseudo-Hessian and depth-weighting preconditioners and with
+bound, log-velocity, perturbation and DIP-FWI parameterizations.
+[The optimizer overview](optimizers/index.md) compares them side by side.
 
 ## Get going
 

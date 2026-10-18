@@ -57,7 +57,7 @@ author.
   in exploration geophysics.* **Geophysics** 74 (6), WCC1-WCC26.
   doi:[10.1190/1.3238367](https://doi.org/10.1190/1.3238367)
 
-## B. Correlation / amplitude-normalised (planned)
+## B. Correlation / amplitude-normalised
 
 * Choi, Y. & Alkhalifah, T. (2012). *Application of multi-source waveform
   inversion to marine streamer data using the global correlation norm.*
@@ -74,7 +74,7 @@ author.
   182 (3), 1383-1394.
   doi:[10.1111/j.1365-246X.2010.04681.x](https://doi.org/10.1111/j.1365-246X.2010.04681.x)
 
-## C. Envelope / instantaneous phase (planned)
+## C. Envelope / instantaneous phase
 
 * Bozdağ, E., Trampert, J. & Tromp, J. (2011). *Misfit functions for full
   waveform inversion based on instantaneous phase and envelope
@@ -92,7 +92,7 @@ author.
   seismic tomography.*  Geophys. J. Int. 206 (3), 1599-1618.
   doi:[10.1093/gji/ggw233](https://doi.org/10.1093/gji/ggw233)
 
-## D. Frequency / Laplace domain (planned)
+## D. Frequency / Laplace domain
 
 * Pratt, R. G., Shin, C. & Hicks, G. J. (1998). *Gauss-Newton and full
   Newton methods in frequency-space seismic waveform inversion.*
@@ -111,7 +111,7 @@ author.
   inversion, part 2: phase approach.*  Geophys. Prospect. 55 (4), 465-475.
   doi:[10.1111/j.1365-2478.2007.00618.x](https://doi.org/10.1111/j.1365-2478.2007.00618.x)
 
-## E. Travel-time / picking (planned)
+## E. Travel-time / picking
 
 * Luo, Y. & Schuster, G. T. (1991). *Wave-equation traveltime inversion.*
   **Geophysics** 56 (5), 645-653.
@@ -126,7 +126,7 @@ author.
   with dynamic warping and full-waveform inversion.*  **Geophysics** 78 (6),
   R223-R233.  doi:[10.1190/geo2013-0004.1](https://doi.org/10.1190/geo2013-0004.1)
 
-## F. Convolution / matching-filter (planned)
+## F. Convolution / matching-filter
 
 * Luo, S. & Sava, P. (2011). *A deconvolution-based objective function for
   wave-equation inversion.* SEG Technical Program Expanded Abstracts,
@@ -140,14 +140,14 @@ author.
   U61-U72.
   doi:[10.1190/geo2015-0596.1](https://doi.org/10.1190/geo2015-0596.1)
 
-## G. Normalized integration method (planned)
+## G. Normalized integration method
 
 * Donno, D., Chauris, H. & Calandra, H. (2013). *Estimating the
   background velocity model with the normalised integration method.*  75th
   EAGE Conference & Exhibition.
   doi:[10.3997/2214-4609.20130411](https://doi.org/10.3997/2214-4609.20130411)
 
-## H. Optimal transport (planned)
+## H. Optimal transport
 
 * Cuturi, M. (2013). *Sinkhorn distances: lightspeed computation of
   optimal transport.*  NeurIPS 26.

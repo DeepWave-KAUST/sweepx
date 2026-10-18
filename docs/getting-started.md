@@ -10,9 +10,10 @@ pip install sweepx
 ```
 
 That pulls the engine ([sweep-solver](solver/index.md)) and the toolkit built on it:
-the YAML task runner ([`sweepx.tasks`](tasks/index.md)), the losses, networks and I/O it
-uses ([`sweepx.loss`](loss/index.md), [`sweepx.nn`](nn/index.md), [`sweepx.io`](io/index.md))
-and the natural-language layer ([`sweepx.agent`](agent/index.md)). The engine imports as
+the YAML task runner ([`sweepx.tasks`](tasks/index.md)), the losses, networks, optimizers
+and I/O it uses ([`sweepx.loss`](loss/index.md), [`sweepx.nn`](nn/index.md),
+[`sweepx.opt`](opt/index.md), [`sweepx.io`](io/index.md)) and the natural-language layer
+([`sweepx.agent`](agent/index.md)). The engine imports as
 `sweep` (the name `sweep` was taken on PyPI, hence `sweep-solver`), the toolkit as `sweepx.<module>`:
 
 ```python
@@ -79,8 +80,8 @@ sweep-agent chat
 
     ---
 
-    Equations, propagators, backends, boundary-saving — and 26 runnable
-    notebooks under [Examples](../solver/examples/).
+    Equations, propagators, backends, boundary-saving — and over thirty
+    runnable notebooks under [Examples](../solver/examples/).
 
 -   :material-cog-play-outline: __[Tasks](tasks/index.md)__
 
@@ -116,7 +117,7 @@ sweep-agent chat
 
     ---
 
-    Tools, install tiers, and how to point it at any OpenAI-compatible LLM.
+    Tools, the web UI, and how to point it at any OpenAI-compatible LLM.
 
 -   :material-api: __[API reference](../solver/api/)__
 

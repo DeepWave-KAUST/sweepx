@@ -5,7 +5,7 @@ start, and an acoustic FWI that recovers the reflector — then the inverted-vs-
 true model comparison and the loss-convergence curve. Needs a vLLM server.
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_fwi_en.py
+    python examples/agent/demos/demo_fwi_en.py
 """
 
 from __future__ import annotations

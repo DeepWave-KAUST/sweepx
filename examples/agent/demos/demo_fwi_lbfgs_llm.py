@@ -3,10 +3,10 @@
 Same synthetic two-layer inversion as demo_fwi_llm.py, but the user asks for
 L-BFGS instead of Adam — demonstrating that the optimizer is a free parameter.
 The agent maps "L-BFGS" to run_fwi(optimizer='lbfgs', ...). Needs a vLLM server
-(examples/start_vllm_qwen7b.sh).
+(examples/agent/start_vllm_qwen7b.sh).
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_fwi_lbfgs_llm.py
+    python examples/agent/demos/demo_fwi_lbfgs_llm.py
 """
 
 from __future__ import annotations

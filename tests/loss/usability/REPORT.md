@@ -405,12 +405,12 @@ $$D_\gamma(x, y) = \mathrm{sDTW}_\gamma(x, y) - \tfrac{1}{2}\bigl[\mathrm{sDTW}_
 
 ```bash
 # 编辑 sweepx.loss 代码（如有需要）
-$ cd sweep-loss
+$ cd sweepx
 
 # 在 ibex glogin 节点提交（v100 GPU）
 $ ssh vscode.ibex.kaust.edu.sa
 $ ssh glogin
-$ cd sweep-loss/tests/usability
+$ cd sweepx/tests/loss/usability
 $ sbatch run_ibex.sbatch        # 跑 01 sanity + 02 cycle-skip + 03 FWI(lr=4) + 04 softdtw fix
 $ sbatch run_ibex_fwi_only.sbatch   # 只跑 03 FWI(lr=4, 60 ep)
 $ sbatch run_ibex_grad.sbatch       # 只跑 05 gradient alignment

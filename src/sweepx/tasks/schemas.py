@@ -1535,7 +1535,7 @@ class FreeParamSpec(_Forbid):
 
 
 class ReparamSpec(_Forbid):
-    """Neural-network reparameterization of the velocity model (sweep-nn).
+    """Neural-network reparameterization of the velocity model (sweepx.nn).
 
     When set on an FWISpec, the runner replaces the raw vp tensor with a
     :class:`sweepx.nn.VelocityINR` (hash-encoded SIREN by default). The
@@ -1927,7 +1927,7 @@ class PlanSamplingConfig(_Forbid):
         index (an iteration where it falls back to the random sampler draws
         from every node in the grid). The random shared-shot and per-CRG
         samplers draw from the in-grid nodes the loop hands them, and
-        sweep-io's samplers ignore ``min_coverage`` when given that set, so a
+        sweepx.io's samplers ignore ``min_coverage`` when given that set, so a
         value other than 0 is refused unless ``receiver_first`` is on.
     shared_shots_per_iter
         At most this many shots per node gather and iteration (the
@@ -2405,7 +2405,7 @@ class FWISpec(BaseTaskSpec):
                 "the receiver-first sampler.")
         # min_coverage reaches the receiver-first sampler's node index only:
         # the random shared-shot and per-CRG samplers are handed the in-grid
-        # nodes, and sweep-io's samplers ignore min_coverage given that set.
+        # nodes, and sweepx.io's samplers ignore min_coverage given that set.
         # A source_encoding block switched off has no effect, its min_coverage
         # included, which used to reach that index all the same.
         receiver_first = sampling.receiver_first and not per_crg
@@ -2677,7 +2677,7 @@ class FWISpec(BaseTaskSpec):
     data_plan: DataPlanSpec | None = None
     model_plan: ModelPlanSpec | None = None
 
-    # Optional NN reparameterization of vp (sweep-nn VelocityINR).
+    # Optional NN reparameterization of vp (sweepx.nn VelocityINR).
     # When set, vp is rendered by a hash-encoded SIREN each forward; the
     # optimizer trains the network's parameters instead of the raw tensor.
     reparam: ReparamSpec | None = None

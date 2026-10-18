@@ -12,8 +12,8 @@
 #
 # Usage (from the vllm-server conda env):
 #   conda activate vllm-server
-#   bash examples/start_vllm_qwen7b.sh                 # Qwen2.5-7B on first free port from 8000
-#   MODEL=Qwen/Qwen2.5-14B-Instruct bash examples/start_vllm_qwen7b.sh
+#   bash examples/agent/start_vllm_qwen7b.sh                 # Qwen2.5-7B on first free port from 8000
+#   MODEL=Qwen/Qwen2.5-14B-Instruct bash examples/agent/start_vllm_qwen7b.sh
 #
 # Connect from another shell (in the env that has sweep / sweepx.tasks):
 #   export SWEEP_AGENT_LLM_URL=http://localhost:<PORT>/v1

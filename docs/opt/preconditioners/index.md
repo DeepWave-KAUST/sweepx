@@ -26,7 +26,7 @@ multiplied by depth weighting); see the per-algorithm pages.
 
 ## Available preconditioners
 
-| Name | Class | Tier | Notes |
-|---|---|---|---|
-| [Pseudo-Hessian](pseudo_hessian.md) | `PseudoHessianPrecond` | 1 | Plessix-Mulder diagonal; needs source / receiver illumination. |
-| [Depth weighting](depth_weighting.md) | `DepthWeighting` | 2 | `(z / z_max)^p` mask along the depth axis; composable with PH. |
+| Name | Class | Notes |
+|---|---|---|
+| [Pseudo-Hessian](pseudo_hessian.md) | `PseudoHessianPrecond` | Plessix-Mulder diagonal; needs source / receiver illumination. |
+| [Depth weighting](depth_weighting.md) | `DepthWeighting` | `(z / z_max)^p` mask along the depth axis; composable with PH. |

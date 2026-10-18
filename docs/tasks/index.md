@@ -4,7 +4,7 @@ The **typed YAML task layer** for [`sweep`](../solver/) — the front door for
 **CLI-** and **LLM-driven** FWI / LSRTM / RTM / forward / wavefield runs.
 
 If you just want a Python loop around the wave solver, use `sweep` directly.
-`sweep-tasks` is for when you want to describe a job in **YAML** (or JSON, from
+`sweepx.tasks` (the `sweep-tasks` command) is for when you want to describe a job in **YAML** (or JSON, from
 an LLM) and have it executed **reproducibly** — one process or `torchrun`
 multi-rank, shot-parallel by default, with `status.json` + `checkpoint.pt` +
 figures written per run.

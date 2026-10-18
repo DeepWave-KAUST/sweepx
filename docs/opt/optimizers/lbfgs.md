@@ -5,10 +5,9 @@
 extensions on top of `torch.optim.LBFGS`:
 
 1. **Bounds.** ``bounds=(lo, hi)`` enforces a box on every parameter via
-   projection after each step. (The proper active-set Byrd-Lu-Nocedal
-   L-BFGS-B variant lands in Tier-2 as
-   :class:`sweepx.opt.optim.LBFGSB`; the two share the same FWI-friendly knobs
-   and differ only in how bounds are handled.)
+   projection after each step. (The active-set Byrd-Lu-Nocedal L-BFGS-B
+   variant is :class:`sweepx.opt.optim.LBFGSB`; the two share the same
+   FWI-friendly knobs and differ only in how bounds are handled.)
 2. **Preconditioner as $H_0$.** A preconditioner can be supplied as the
    initial inverse-Hessian inside the two-loop recursion. With
    :class:`sweepx.opt.precond.PseudoHessianPrecond`, this gives
@@ -99,7 +98,7 @@ than NCG and Steepest Descent, and a pseudo-Hessian preconditioner can speed
 it up further.
 
 For ill-posed problems where the Hessian has near-zero eigenvalues, consider
-Truncated Newton (Tier-2) - it can solve the indefinite Newton system more
+Truncated Newton - it can solve the indefinite Newton system more
 robustly via inner CG with explicit forcing.
 
 ## References

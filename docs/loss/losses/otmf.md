@@ -45,7 +45,7 @@ OTMFLoss(dt=1e-3, epsilon=1e-4, positive="square", order=2)(syn, obs)
 
 ## Tests
 
-`tests/test_otmf.py` checks:
+`tests/loss/test_otmf.py` checks:
 
 * small but non-zero baseline for identical inputs (low-pass-kernel
   width from the Tikhonov stabiliser),

@@ -8,7 +8,7 @@ Prereqs:
 
 Usage:
     python -m sweepx.agent.examples.demo_real_llm
-    python examples/demo_real_llm.py "your custom prompt"
+    python examples/agent/demo_real_llm.py "your custom prompt"
 """
 
 from __future__ import annotations

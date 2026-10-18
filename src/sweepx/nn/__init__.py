@@ -1,4 +1,4 @@
-"""sweep-nn — PyTorch neural reparameterization and priors for seismic FWI."""
+"""sweepx.nn — PyTorch neural reparameterization and priors for seismic FWI."""
 
 from __future__ import annotations
 

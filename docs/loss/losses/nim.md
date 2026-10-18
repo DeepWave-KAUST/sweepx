@@ -41,7 +41,7 @@ nim_loss(syn, obs, positive="linear", dt=1e-3)
 
 ## Tests
 
-`tests/test_nim.py` checks:
+`tests/loss/test_nim.py` checks:
 
 * zero for identical signals across all four positive transforms,
 * monotone growth in the shift of a Gaussian wavelet,

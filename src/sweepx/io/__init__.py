@@ -1,4 +1,4 @@
-"""sweep-io — file and dataset I/O for seismic FWI.
+"""sweepx.io — file and dataset I/O for seismic FWI.
 
 Always-available submodules:
 - :mod:`sweepx.io.models`       — velocity / parameter model I/O (numpy)
@@ -15,10 +15,10 @@ Always-available submodules:
 - :mod:`sweepx.io.crg_build`, :mod:`sweepx.io.crg_plan` — CRG plan cache
 - :mod:`sweepx.io.wavelet`      — source wavelet from an ``.npz``
 
-Lazy-imported (require optional extras):
-- :mod:`sweepx.io.datasets`        — torch Dataset wrappers (extra: ``[torch]``)
-- :mod:`sweepx.io.cuda_prefetch`   — CUDA-aware prefetcher (extra: ``[torch]``)
-- :mod:`sweepx.io.crg_dataset`     — Dataset over a CRG plan (extra: ``[torch]``)
+Lazy-imported on first access (they import torch):
+- :mod:`sweepx.io.datasets`        — torch Dataset wrappers
+- :mod:`sweepx.io.cuda_prefetch`   — CUDA-aware prefetcher
+- :mod:`sweepx.io.crg_dataset`     — Dataset over a CRG plan
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ def __getattr__(name: str):
         from . import cuda_prefetch as _m
         return _m
     if name == "crg_dataset":
-        # Lazy because it imports torch.utils.data; sweep-io's base install
-        # is torch-free until the user asks for the torch dataset wrappers.
+        # Lazy because it imports torch.utils.data; `import sweepx.io` stays
+        # torch-free until the user asks for the torch dataset wrappers.
         from . import crg_dataset as _m
         return _m
     raise AttributeError(f"module 'sweepx.io' has no attribute {name!r}")

@@ -215,7 +215,7 @@ def _snap_covered(stage_idx, native_idx, stage_shape, native_shape):
 def _set_physical_inr_frame(net, *, shape, dh, frame_shape, frame_dh) -> None:
     """Give a reparam network the native coordinate frame on a stage grid.
 
-    sweep-nn evaluates the network at ``coord_min + (coord_max - coord_min)
+    sweepx.nn evaluates the network at ``coord_min + (coord_max - coord_min)
     * i / n`` along each axis of whatever grid it holds, so the same physical
     point gets a different coordinate on every grid and the learned field
     stretches at each stage change. On the native grid (``frame_shape`` at
@@ -249,7 +249,7 @@ def _set_physical_inr_frame(net, *, shape, dh, frame_shape, frame_dh) -> None:
         raise RuntimeError(
             f"reparam network coords {None if coords is None else tuple(coords.shape)} "
             f"do not match the stage grid {shape}; call this right after "
-            "update_base_velocity / update_base_models (or the sweep-nn "
+            "update_base_velocity / update_base_models (or the sweepx.nn "
             "coordinate layout changed)")
     lo, hi = float(net.coord_min), float(net.coord_max)
     axes = []

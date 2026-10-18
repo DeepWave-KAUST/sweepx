@@ -51,7 +51,7 @@ local_similarity_loss(syn, obs, sigma_samples=8.0)
 
 ## Tests
 
-`tests/test_local_similarity.py` checks:
+`tests/loss/test_local_similarity.py` checks:
 
 * zero for identical inputs (with energy-weighted boundary handling),
 * invariance under per-trace amplitude scaling,

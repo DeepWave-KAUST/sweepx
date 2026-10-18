@@ -82,7 +82,7 @@ SD is **slow** on ill-conditioned problems - its convergence rate degrades as
 $O((\kappa-1)/(\kappa+1))^k$ where $\kappa$ is the condition number of the
 Hessian. FWI Hessians have $\kappa \sim 10^4$ in realistic settings, so SD is
 mostly useful as a baseline. Reach for Nonlinear CG, L-BFGS, or Truncated
-Newton for production work (added in later commits).
+Newton for production work.
 
 ## References
 

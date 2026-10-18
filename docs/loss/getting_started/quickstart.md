@@ -26,9 +26,9 @@ A rough decision tree:
 * Outliers / impulsive noise → `L1Loss`, `HuberLoss`, `CauchyLoss`,
   `TukeyLoss`.
 * Strong cycle-skipping → envelope, instantaneous-phase, optimal-transport
-  or AWI families (coming soon).
+  or AWI families.
 * Frequency-domain inversion → Pratt-style frequency-domain L2 or the
-  Shin-Min log-amplitude/phase split (coming soon).
+  Shin-Min log-amplitude/phase split.
 
 See the per-loss pages on the left for the precise formulas and tested
 parameter ranges, and the [Report](../report.md) for the full bibliography.

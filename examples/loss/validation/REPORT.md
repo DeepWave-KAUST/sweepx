@@ -1,8 +1,8 @@
 # `sweepx.loss` 公式级验证报告（19 张图覆盖全部 25 个 loss）
 
 > 测试日期：2026-05-28
-> 测试代码：`examples/validation/`
-> 测试目的：与 `tests/usability/` 的"FWI 收敛性"评估互补 ——
+> 测试代码：`examples/loss/validation/`
+> 测试目的：与 `tests/loss/usability/` 的"FWI 收敛性"评估互补 ——
 > 这里**逐 loss 复现论文 signature 实验**，把每个 loss 内部用到的
 > *中间量*（包络、Wiener 滤波器、CDF、STFT、Sinkhorn 传输计划、Hungarian
 > 排列、γ_σ(τ) 等）和**伴随源** `∂J/∂syn`（autograd）都直接画出来，验证
@@ -23,7 +23,7 @@
 
 ```bash
 conda activate ifwitorch
-cd examples/validation
+cd examples/loss/validation
 python run_all.py            # 跑全部 19 个脚本，约 1.5 min（Sinkhorn 18 s + SoftDTW 70 s）
 python run_all.py --only 04  # 只跑 envelope
 ```
@@ -405,6 +405,6 @@ divergence=True (Blondel 2020) 与 divergence=False (原始 Cuturi-Blondel)；
 形状与论文期望相符；时移扫描的吸引域宽度也与"anti-cycle-skipping
 literature"的排序一致（D, F, G.1, H 家族宽；A, B, C, E, G.2, J 窄）。
 
-**与 `tests/usability/REPORT.md` 的关系**：该报告是从"FWI 训练收敛性"角度
+**与 `tests/loss/usability/REPORT.md` 的关系**：该报告是从"FWI 训练收敛性"角度
 （端到端 sweep solver + 11 炮 + 200 epoch）验证；本报告是从"公式与中间量"
 角度的*互补*验证。两份报告共同覆盖 sweepx.loss 的所有 25 个类。

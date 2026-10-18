@@ -75,11 +75,11 @@ plugins:
       cleanup: true
       # keep_docs_dir omitted → imported docs land at /<section>/… not
       # /<section>/docs/… (cleaner URLs, matches the standalone preview).
-  # Render sub-repos' Jupyter notebooks (Solver's examples). Config mirrors
-  # sweep's own mkdocs.yml.
+  # Render the Jupyter notebooks (the solver's examples, imported, and
+  # docs/nn/examples/). Config mirrors sweep's own mkdocs.yml.
   - mkdocs-jupyter:
       # Notebooks only. The default also turns every .py under docs/ into a page:
-      # sweep-nn's examples/ifwi_models.py (embedded velocity models) became a
+      # docs/nn/examples/ifwi_models.py (embedded velocity models) became a
       # 2.5 MB orphan page that way. The .py files are still copied as files.
       include: ["*.ipynb"]
       include_source: true

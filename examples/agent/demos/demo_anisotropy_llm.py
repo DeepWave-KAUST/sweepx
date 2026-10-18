@@ -3,10 +3,10 @@
 A real local LLM runs the same homogeneous model under three equations and then
 calls compare_wavefields to plot the wavefronts side by side — the isotropic
 one circular, VTI elliptical, TTI tilted. The model drives the whole thing from
-natural language. Needs a vLLM server (examples/start_vllm_qwen7b.sh).
+natural language. Needs a vLLM server (examples/agent/start_vllm_qwen7b.sh).
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_anisotropy_llm.py
+    python examples/agent/demos/demo_anisotropy_llm.py
 
 NOTE: this 3-run + aggregate-compare flow is HARD for a 7B model — it tends to
 nest extra_models inside `extra`, confuse forward/wavefield, or mis-pass

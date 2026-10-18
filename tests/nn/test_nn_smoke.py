@@ -1,4 +1,4 @@
-"""Smoke tests for sweep-nn."""
+"""Smoke tests for sweepx.nn."""
 
 import pytest
 import torch

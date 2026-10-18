@@ -1,11 +1,7 @@
 """``run_forward_sweep`` — forward modelling straight through the `sweep` solver.
 
 Every other modelling tool here routes through ``sweepx.tasks``: build a spec,
-write YAML, hand it to ``TaskRunner``. That tier is unreleased, so on a plain
-``pip install -e .`` plus ``sweep`` the agent can inspect files and list
-equations but cannot actually run a shot.
-
-This tool closes that gap by driving the solver directly —
+write YAML, hand it to ``TaskRunner``. This one drives the solver directly —
 ``sweep.equations`` + ``sweep.propagator.torch.PropTorch`` — with no
 ``sweepx.tasks``, ``sweepx.io`` or ``sweepx.loss`` anywhere in the path. It needs
 only ``sweep`` + torch + numpy + matplotlib, so it runs on a laptop, CPU or
@@ -42,8 +38,7 @@ def _require_sweep():
         return None, {
             "error": (
                 f"the sweep solver (or torch) is not importable: {exc}. "
-                "Install a PyTorch environment, then `pip install .` from a clone of "
-                "https://github.com/DeepWave-KAUST/sweep"
+                "sweepx depends on it: reinstall it with `pip install sweep-solver`."
             )
         }
     import torch

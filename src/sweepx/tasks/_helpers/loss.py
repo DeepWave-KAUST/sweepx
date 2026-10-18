@@ -48,7 +48,7 @@ def _compute_loss(syn, obs, loss_spec):
     if kind == "huber":
         return huber_loss(syn, obs, delta=float(loss_spec.huber_delta), reduction="none")
     if kind == "trace_cosine":
-        # sweep-loss expects canonical (ns, nt, nrec, nchan). Both backends
+        # sweepx.loss expects canonical (ns, nt, nrec, nchan). Both backends
         # (eager + c, after geophyai 21041c5) deliver this layout natively
         # so no permutation is needed. The historical 3-D fallback
         # ``(nt, nrec, 1)`` is dropped: sweep no longer produces 3-D, and
@@ -69,7 +69,7 @@ def _compute_loss(syn, obs, loss_spec):
         per_trace = global_correlation_loss(
             syn, obs,
             offset_one=True, demean=demean, eps=eps, reduction="none",
-        )  # (N,) where N = ns * nrec * nchan after sweep-loss flatten
+        )  # (N,) where N = ns * nrec * nchan after sweepx.loss flatten
 
         # Reshape back to per-trace canonical and broadcast across time so
         # the caller's .sum() / global_norm yields mean(1-cos) over traces.

@@ -36,8 +36,8 @@ def have_triton() -> bool:
 
 if _HAVE_TRITON:
     _MASK = tl.constexpr(0xFFFFFFFF)
-    _P1 = tl.constexpr(2654435761)   # Knuth prime for dim 1 (matches sweep-nn primes[1])
-    _P2 = tl.constexpr(805459861)    # prime for dim 2 (matches sweep-nn primes[2])
+    _P1 = tl.constexpr(2654435761)   # Knuth prime for dim 1 (matches sweepx.nn primes[1])
+    _P2 = tl.constexpr(805459861)    # prime for dim 2 (matches sweepx.nn primes[2])
 
     @triton.jit
     def _hash_fwd_kernel(

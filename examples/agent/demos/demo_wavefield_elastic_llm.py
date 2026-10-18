@@ -5,10 +5,10 @@ natural language: the model inspects the three elastic parameter files
 (vp / vs / rho), recognises this needs the Elastic equation, builds a wavefield
 task with a centred source, runs it, and animates the snapshots into a GIF
 showing the fast P-wave ring and the slower S-wave ring. Needs a vLLM server
-(examples/start_vllm_qwen7b.sh).
+(examples/agent/start_vllm_qwen7b.sh).
 
     export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
-    python examples/demos/demo_wavefield_elastic_llm.py
+    python examples/agent/demos/demo_wavefield_elastic_llm.py
 
 The system prompt's intent routing maps "弹性 / P波 / S波 / 看波场传播" to a
 wavefield task with source_at_center=True + make_wavefield_gif.

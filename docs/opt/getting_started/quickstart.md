@@ -20,17 +20,18 @@ for epoch in range(cfg["epochs"]):
     optimizer.step()
 ```
 
-To use any first-order sweepx.opt optimizer, change only the constructor
-(everything Tier-1+ supports a closure-less `step()` for compatibility with
-this exact loop):
+For an optimizer whose `step()` works without a closure (Steepest Descent
+without a line search, Adam-FWI, Lion, Shampoo, SOAP), change only the
+constructor:
 
 ```python
 import sweepx.opt
 optimizer = sweepx.opt.optim.SteepestDescent([inv_vp], lr=cfg["lr"])
 ```
 
-For algorithms that need a closure (line-search variants, L-BFGS, Newton-type,
-trust-region) wrap the loss block in a function and pass it to `step()`:
+For algorithms that need a closure (line-search variants, NCG, L-BFGS,
+Newton-type, trust-region) wrap the loss block in a function and pass it to
+`step()`:
 
 ```python
 def closure():
@@ -60,5 +61,5 @@ optimizer = sweepx.opt.optim.LBFGS(
 )
 ```
 
-The available algorithms grow tier-by-tier; see the
-[optimizer overview](../optimizers/index.md).
+The [optimizer overview](../optimizers/index.md) lists every algorithm and
+whether it needs a closure.

@@ -5,8 +5,8 @@ recursion (Nocedal 1980; Nocedal & Wright 2006, Algorithm 7.4) that adds
 three FWI-friendly knobs ``torch.optim.LBFGS`` does not expose:
 
 1. ``bounds=(lo, hi)`` - projected gradient enforcement of velocity (or any)
-   box constraints. The active-set Byrd-Lu-Nocedal L-BFGS-B variant lands
-   later as :class:`sweepx.opt.optim.LBFGSB` (Tier-2).
+   box constraints. The active-set Byrd-Lu-Nocedal L-BFGS-B variant is
+   :class:`sweepx.opt.optim.LBFGSB`.
 2. ``preconditioner`` - an optional preconditioner used as the initial
    inverse Hessian ``H_0`` inside the two-loop recursion. Pairs naturally
    with :class:`sweepx.opt.precond.PseudoHessianPrecond`.

@@ -6,7 +6,7 @@ and how the per-stage ``to_grid`` snaps + dedupes when the FWI grid is
 coarser than the receiver spacing.
 
 Run:
-    python examples/plan_demo.py
+    python examples/io/plan_demo.py
 """
 
 from __future__ import annotations

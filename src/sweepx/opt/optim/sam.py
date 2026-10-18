@@ -29,7 +29,7 @@ class SAM(Optimizer):
     """SAM wrapper around an arbitrary base optimizer.
 
     Args:
-        base_optimizer: an instance of any optimizer (torch or sweep-opt).
+        base_optimizer: an instance of any optimizer (torch or sweepx.opt).
             The same param-groups will be used; SAM intercepts the
             gradient before calling ``base_optimizer.step()``.
         rho: ascent radius. ``rho=0`` reduces SAM to the base optimizer.

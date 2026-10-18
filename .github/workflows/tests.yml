@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   layers:
-    # The layering contract: agent -> tasks -> io | loss | nn, libraries free of
-    # the engine. Static, so it needs no torch.
+    # The layering contract: agent -> tasks -> io | loss | nn | opt, libraries free
+    # of the engine. Static, so it needs no torch.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

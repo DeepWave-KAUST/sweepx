@@ -6,8 +6,8 @@ makes its own synthetic data and runs on a CPU in seconds:
 
 ```bash
 git clone https://github.com/DeepWave-KAUST/sweepx
-cd sweep-io
-python examples/segy_to_plan.py
+cd sweepx
+python examples/io/segy_to_plan.py
 ```
 
 | Script | What it shows |

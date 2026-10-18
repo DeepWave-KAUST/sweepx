@@ -17,7 +17,7 @@ sweep-agent chat
 Other entry points:
 
 ```bash
-sweep-agent ui          # same agent in a browser (needs [ui] + a running LLM) → :7860
+sweep-agent ui          # same agent in a browser (needs sweepx[agent-ui] + a running LLM) → :7860
 sweep-agent tools       # list the ~30 tools — no LLM/GPU needed; --json emits tool specs
 ```
 

@@ -89,7 +89,7 @@ def _check(case, device):
     gen = torch.Generator().manual_seed(0)
     inits = [torch.randn(*s, generator=gen).to(device) for s in shapes]
     grads = [[(scale * torch.randn(*s, generator=gen)).to(device) for s in shapes] for _ in range(steps)]
-    wd = 0.0                                           # sweep-opt default; official default is 0.01
+    wd = 0.0                                           # sweepx.opt default; official default is 0.01
     ours_kw = {("update_freq" if k == "precondition_frequency" else k): v for k, v in extra.items()}
     pa, oa = _trajectory(lambda g: SOAPRef(g, weight_decay=wd, **extra), inits, grads, groups, gamma, skip)
     pb, ob = _trajectory(lambda g: SOAP(g, weight_decay=wd, **ours_kw), inits, grads, groups, gamma, skip)

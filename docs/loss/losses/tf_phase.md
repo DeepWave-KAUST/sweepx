@@ -49,7 +49,7 @@ frequency resolution but coarser time resolution.
 
 ## Tests
 
-`tests/test_tf_phase.py` checks:
+`tests/loss/test_tf_phase.py` checks:
 
 * zero for identical signals, all $\alpha$,
 * $\alpha=0$ vs $\alpha=1$ vs $\alpha=0.5$ linear decomposition,

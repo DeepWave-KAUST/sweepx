@@ -22,10 +22,10 @@ useful for:
 
 ## Available parameterizations
 
-| Name | Class | Tier | Notes |
-|---|---|---|---|
-| Identity | `IdentityParameterization` | 2 | Pass-through; the default. |
-| [Sigmoid bounds](bounds.md) | `SigmoidBounds` | 2 | Smooth box constraint via logistic. |
-| [Log-velocity](bounds.md) | `LogVelocity` | 2 | Latent in `log(physical)` space. |
-| [Perturbation from background](bounds.md) | `PerturbationFromBackground` | 2 | Latent is the perturbation `dv` around a fixed background. |
-| [DIP-FWI](dip.md) | `DIPParameterization` (+ `SmallUNet2D`) | 3 | Generator network as implicit regularizer. |
+| Name | Class | Notes |
+|---|---|---|
+| Identity | `IdentityParameterization` | Pass-through; the default. |
+| [Sigmoid bounds](bounds.md) | `SigmoidBounds` | Smooth box constraint via logistic. |
+| [Log-velocity](bounds.md) | `LogVelocity` | Latent in `log(physical)` space. |
+| [Perturbation from background](bounds.md) | `PerturbationFromBackground` | Latent is the perturbation `dv` around a fixed background. |
+| [DIP-FWI](dip.md) | `DIPParameterization` (+ `SmallUNet2D`) | Generator network as implicit regularizer. |

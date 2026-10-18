@@ -41,7 +41,7 @@ soft_dtw_loss(syn, obs, gamma=0.1, normalize_by_length=True)
 
 ## Tests
 
-`tests/test_soft_dtw.py` checks:
+`tests/loss/test_soft_dtw.py` checks:
 
 * small $\gamma$ ⇒ Soft-DTW $\approx 0$ for identical signals,
 * growth with shift,

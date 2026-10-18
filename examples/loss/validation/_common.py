@@ -1,6 +1,6 @@
 """Shared helpers for the per-loss validation scripts.
 
-Every script under ``examples/validation/`` follows the same recipe:
+Every script under ``examples/loss/validation/`` follows the same recipe:
 
 1. build a synthetic Ricker trace pair (``obs``, ``syn``);
 2. call the loss-specific intermediate quantity (envelope, Wiener filter,

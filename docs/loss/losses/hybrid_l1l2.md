@@ -28,7 +28,7 @@ loss = HybridL1L2Loss(delta=0.5)(syn, obs)
 
 ## Tests
 
-`tests/test_hybrid_l1l2.py` checks:
+`tests/loss/test_hybrid_l1l2.py` checks:
 
 * numerical agreement with `PseudoHuberLoss` for several $\delta$,
 * L2 limit for $|r|\ll\delta$,

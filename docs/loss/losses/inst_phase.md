@@ -54,7 +54,7 @@ EnvelopePhaseLoss(alpha=0.5, envelope_log=False)(syn, obs)
 
 ## Tests
 
-`tests/test_inst_phase.py` checks:
+`tests/loss/test_inst_phase.py` checks:
 
 * perfect match → 0,
 * amplitude scaling of `syn` leaves the envelope-weighted misfit invariant

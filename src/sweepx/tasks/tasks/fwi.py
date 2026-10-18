@@ -417,7 +417,7 @@ class FWIRunnerMixin:
             if dist_info.is_root:
                 print(f"[fwi] water: {water.describe()}")
 
-        # 4b) Optional NN reparameterization of vp (sweep-nn).
+        # 4b) Optional NN reparameterization of vp (sweepx.nn).
         # When active, vp is rendered each forward by a hash-encoded SIREN
         # whose parameters become the optimization variables. The vp leaf
         # tensor in inv_by_name is repurposed as a buffer holding the
@@ -564,7 +564,7 @@ class FWIRunnerMixin:
                 print(f"[fwi] smooth_regularization (TVPrior) ON: "
                       f"weight={smooth_weight:.2e} order={_smooth_spec.order}")
 
-        # Plug-and-play DDPM diffusion prior (sweep-nn). Built once here and
+        # Plug-and-play DDPM diffusion prior (sweepx.nn). Built once here and
         # threaded into _fwi_train_step, mirroring tv_prior: a scalar
         # ``weight * red_loss(vp)`` (or sds_loss) whose .backward() accumulates
         # onto the data gradient before the optimizer step. RED is deterministic
@@ -774,7 +774,7 @@ class FWIRunnerMixin:
             "inv_in_order": inv_in_order, "inv_by_name": inv_by_name,
             "solver": solver, "wavelet": wavelet,
             "optimizer": optimizer, "initial_lrs": initial_lrs,
-            # Reparam (sweep-nn): the network + pristine base for stage
+            # Reparam (sweepx.nn): the network + pristine base for stage
             # transitions. Both None when reparam is not configured.
             "reparam_net": reparam_net,
             "pristine_base_vp": pristine_base_vp,

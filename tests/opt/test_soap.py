@@ -126,7 +126,7 @@ def test_soap_frequent_refresh_is_stable():
 
 
 def test_soap_float64_parameters():
-    """The official code fails on float64 (factors in the default dtype); sweep-opt keeps
+    """The official code fails on float64 (factors in the default dtype); sweepx.opt keeps
     the factors in the parameter dtype."""
     torch.manual_seed(8)
     p = torch.randn(6, 5, dtype=torch.float64, requires_grad=True)

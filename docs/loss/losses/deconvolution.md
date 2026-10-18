@@ -38,7 +38,7 @@ DeconvolutionLoss(dt=1e-3, epsilon=1e-4, normalize=True)(syn, obs)
 
 ## Tests
 
-`tests/test_deconvolution.py` checks:
+`tests/loss/test_deconvolution.py` checks:
 
 * `normalize=True` is invariant under positive amplitude scaling,
 * `normalize=False` is *not* (sanity check that the option matters),

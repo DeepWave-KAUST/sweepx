@@ -9,7 +9,7 @@ forcing sequences control how tightly the inner CG must converge:
 
 The outer step length is then chosen by strong-Wolfe.
 
-Unlike the rest of sweep-opt's optimizers, ``TruncatedNewton.step()`` takes
+Unlike the rest of sweepx.opt's optimizers, ``TruncatedNewton.step()`` takes
 a ``loss_fn`` that **must not call backward** - the optimizer needs the
 intact autograd graph to build Hessian-vector products. A standard
 ``zero_grad / forward / backward / return loss`` closure would discard the

@@ -1,4 +1,4 @@
-"""Internal helpers shared across sweep-opt optimizers."""
+"""Internal helpers shared across sweepx.opt optimizers."""
 from __future__ import annotations
 
 from typing import Iterable, List

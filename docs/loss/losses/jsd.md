@@ -37,7 +37,7 @@ JensenShannonLoss(positive="square")(syn, obs)
 
 ## Tests
 
-`tests/test_jsd.py` checks:
+`tests/loss/test_jsd.py` checks:
 
 * zero for identical signals across positive transforms,
 * symmetry $\mathrm{JSD}(p, q) = \mathrm{JSD}(q, p)$,

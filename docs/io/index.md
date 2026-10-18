@@ -44,8 +44,8 @@ Scan the trace headers once into a `SEGYIndex`. Organise the traces as shot gath
 (CSG) or receiver gathers (CRG) in a `SeismicPlan`, filtering by shot, offset or trace
 count, and save it. Then read gathers by number through a `PlanReader`: it seeks
 straight to each trace's byte offset and merges adjacent reads, so a gather costs a few
-large reads rather than one per trace. [sweep-tasks](../tasks/index.md) runs this path
-from its CLI (`sweep-tasks build-index`, `sweep-tasks build-plan`) and its YAML specs.
+large reads rather than one per trace. [`sweepx.tasks`](../tasks/index.md) runs this
+path from its CLI (`sweep-tasks build-index`, `sweep-tasks build-plan`) and its YAML specs.
 
 ## What is in it
 

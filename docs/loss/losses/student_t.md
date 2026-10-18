@@ -45,7 +45,7 @@ student_t_loss(syn, obs, nu=4.0, sigma=0.5, full_nll=False)
 
 ## Tests
 
-`tests/test_student_t.py` checks:
+`tests/loss/test_student_t.py` checks:
 
 * point-wise formula on hand-picked residuals,
 * zero at zero,

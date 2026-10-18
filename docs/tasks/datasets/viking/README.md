@@ -42,12 +42,11 @@ clean reference run is captured.
 
 ## Prerequisites
 
-1. **Sweep installed.** From a checkout of this repo:
+1. **sweepx installed**, which brings the solver along and puts the
+   `sweep-tasks` command used below on your PATH:
 
    ```bash
-   pip install -e sweep            # propagator
-   pip install -e sweep-io         # SEG-Y readers, SeismicPlan
-   pip install -e sweep-tasks      # the CLI entry points used below
+   pip install "sweepx[segy]"      # or, from a checkout of this repo: pip install -e ".[segy]"
    ```
 
 2. **One CUDA-capable GPU.** Anything with ≥ 16 GB works for Viking
@@ -213,7 +212,7 @@ sweep-tasks build-index \
 
 `--num-workers 8` finishes Viking in ~10 s on a laptop CPU; bump it
 to whatever your machine has. (The `-n N` MPI shortcut covered in
-[`docs/cli_workflow.md`](../../cli_workflow.md) is for much larger
+[`docs/tasks/cli_workflow.md`](../../cli_workflow.md) is for much larger
 3-D surveys — Viking does not need it.)
 
 **Console output (measured on Viking)**
@@ -937,7 +936,7 @@ imaging:
 
 One `sweep-tasks run viking_rtm.yaml` produces raw + filtered products
 together. Full knob surface in
-[`docs/cli_workflow.md`](../../cli_workflow.md).
+[`docs/tasks/cli_workflow.md`](../../cli_workflow.md).
 
 ---
 
@@ -1080,7 +1079,7 @@ scripts and trying to map field names:
 
 ## See also
 
-- [`docs/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
+- [`docs/tasks/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
   build-plan / run reference (covers all datasets).
 - [`examples/tasks/field/viking/*.yaml`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/field/viking) — every
   Viking task YAML, including the 6-stage and 8-stage FWI ladders

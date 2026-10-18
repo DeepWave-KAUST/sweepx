@@ -46,7 +46,7 @@ EnvelopeLoss(squared=True)(syn, obs)         # Chi 2014
 
 ## Tests
 
-`tests/test_envelope.py` checks:
+`tests/loss/test_envelope.py` checks:
 
 * `envelope()` matches `scipy.signal.hilbert` to float64 precision
   (with `eps=0`),
