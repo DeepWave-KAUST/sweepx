@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+.env
+.ipynb_checkpoints/
+*.log
+
+# run outputs & generated demo artifacts (runtime-generated, not source)
+sweep_runs/
+examples/demos/outputs/
+/p_wavefield.gif
+/s_wavefield.gif
+/synthetic_elastic.npy
