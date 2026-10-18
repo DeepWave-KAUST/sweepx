@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────
+# sweep-loss — documentation config  (from sweepx/docs-template)
+#
+# STYLE comes from the sweepx umbrella at build time: mkdocs-multirepo pulls
+# this docs/ into https://sweepx.deepwave.group/ and renders it with sweepx's
+# theme. This file only declares the package name + nav so the umbrella can
+# import it. Do NOT add the real theme / plugins / mkdocstrings options here —
+# the ecosystem look is defined ONCE, in the sweepx repo.
+#
+# Quick standalone check (plain Material, no sweepx skin): `mkdocs serve` here.
+# Real look: preview from the sweepx repo.
+# ─────────────────────────────────────────────────────────────────────────
+site_name: sweep-loss
+theme:
+  name: material                 # placeholder only — sweepx supplies the real theme
+
+markdown_extensions:             # what the pages need for a standalone check
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting_started/installation.md
+      - Quick start: getting_started/quickstart.md
+      - Data convention: getting_started/data_convention.md
+  - Loss functions:
+      - Overview: losses/index.md
+      - L2 (least squares): losses/l2.md
+      - L1 (absolute): losses/l1.md
+      - Huber / pseudo-Huber: losses/huber.md
+      - Hybrid L1/L2 (Bube–Langan): losses/hybrid_l1l2.md
+      - Cauchy / Tukey / Geman–McClure: losses/robust.md
+      - Student-t NLL: losses/student_t.md
+      - Trace-normalised L2 / NCC: losses/correlation.md
+      - Cross-correlation travel-time: losses/traveltime.md
+      - Envelope (Bozdağ / Wu / Chi): losses/envelope.md
+      - Instantaneous phase + Envelope+Phase: losses/inst_phase.md
+      - Exponentiated phase (Yuan 2020): losses/exponentiated_phase.md
+      - Time-Frequency phase (Fichtner-Kristeková): losses/tf_phase.md
+      - Frequency / Laplace domain: losses/frequency.md
+      - Normalised Integration Method (NIM): losses/nim.md
+      - Jensen-Shannon divergence (Yan 2024): losses/jsd.md
+      - Adaptive Waveform Inversion (AWI): losses/awi.md
+      - OT of Matching Filter (Sun-Alkhalifah 2019): losses/otmf.md
+      - Deconvolution (Luo–Sava): losses/deconvolution.md
+      - 1-Wasserstein (Métivier 2016): losses/w1.md
+      - 2-Wasserstein (Engquist–Froese / Yang): losses/w2.md
+      - Sinkhorn / entropic OT: losses/sinkhorn.md
+      - Graph-space OT (Métivier 2018): losses/gsot.md
+      - Soft-DTW (Cuturi-Blondel 2017): losses/soft_dtw.md
+      - Local similarity (Fomel 2007): losses/local_similarity.md
+  - Report (formulas + bibliography): report.md
+  - References: references.md

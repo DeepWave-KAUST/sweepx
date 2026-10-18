@@ -1,0 +1,41 @@
+# Installation
+
+`sweep-loss` is a pure-Python package with PyTorch and NumPy as its only
+required runtime dependencies.  The importable Python name is `sweep_loss`
+(underscore), the project / repo name is `sweep-loss` (hyphen).
+
+## From PyPI
+
+```bash
+pip install sweep-loss
+```
+
+## From source
+
+```bash
+git clone https://github.com/DeepWave-KAUST/sweep-loss.git
+cd sweep-loss
+pip install -e .
+```
+
+With test / dev extras:
+
+```bash
+pip install -e ".[test]"
+# or
+pip install -e ".[dev]"
+```
+
+## Verifying the install
+
+```bash
+pytest -q
+```
+
+All tests should pass; if they don't, please file an issue with the
+`pytest -q --tb=short` output.
+
+## Optional dependencies
+
+* `scipy` — required only for some reference comparisons in the tests.
+* `mkdocs-material` — to render this documentation site locally.

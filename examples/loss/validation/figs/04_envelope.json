@@ -1,0 +1,37 @@
+{
+  "variants": [
+    {
+      "label": "p=2 (Wu 2014)",
+      "loss_at_tau_20ms": 5.751842268244475,
+      "adjoint_l2": 4.765891868859121,
+      "adjoint_max_abs_at_t_s": 0.339,
+      "scan_argmin_halfL": 0.0,
+      "scan_y_at_0": 2.55073151419283e-30
+    },
+    {
+      "label": "p=1",
+      "loss_at_tau_20ms": 39.153327666276056,
+      "adjoint_l2": 21.857369622361386,
+      "adjoint_max_abs_at_t_s": 0.26,
+      "scan_argmin_halfL": 0.0,
+      "scan_y_at_0": 5.526781370034648e-14
+    },
+    {
+      "label": "log (Bozda\u011f 2011)",
+      "loss_at_tau_20ms": 195.57071234347978,
+      "adjoint_l2": 2562968.9865455483,
+      "adjoint_max_abs_at_t_s": 0.812,
+      "scan_argmin_halfL": 0.0,
+      "scan_y_at_0": 5.0687904973666025e-21
+    },
+    {
+      "label": "squared (Chi 2014)",
+      "loss_at_tau_20ms": 7.832712168263638,
+      "adjoint_l2": 7.485368603326571,
+      "adjoint_max_abs_at_t_s": 0.296,
+      "scan_argmin_halfL": 0.0,
+      "scan_y_at_0": 1.418358309278923e-30
+    }
+  ],
+  "fig": "04_envelope.png"
+}

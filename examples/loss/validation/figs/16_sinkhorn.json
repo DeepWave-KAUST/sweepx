@@ -1,0 +1,6 @@
+{
+  "fig": "16_sinkhorn.png",
+  "epsilon": 0.0005,
+  "max_marginal_err_rows": 3.469446951953614e-17,
+  "max_marginal_err_cols": 6.210290363191373e-06
+}
