@@ -1,7 +1,7 @@
 # Viking 2-D — end-to-end example
 
 Reproduces the **Mobil AVO Viking Graben (line 12)** FWI + RTM result
-with the sweep-tasks CLI, starting from the public S3 download and
+with the sweep-tasks CLI, starting from the public download and
 ending at a filtered RTM image. The walkthrough below assumes you are
 running **locally on a single workstation with one GPU** — no SLURM,
 no cluster filesystem layout. A short [§ Running on a cluster
@@ -116,35 +116,50 @@ primary command and list the full CLI alternative when relevant.
 
 ## Step 0 — Download the public dataset
 
-The data lives in the SEG open-data S3 bucket:
-
-> <http://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/mobil_avo.html>
+The data set used to be served by the SEG open-data S3 bucket
+(`open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/`), which stopped
+serving anonymous downloads in 2026. Its data files are re-hosted on Zenodo,
+[doi:10.5281/zenodo.23481108](https://doi.org/10.5281/zenodo.23481108), with a second copy
+in the `viking_graben_line12/` folder of the Hugging Face dataset
+[shaowinw/seismic-benchmark-models](https://huggingface.co/datasets/shaowinw/seismic-benchmark-models).
+The data are in the public domain (terms of use on the data set's
+[SEG wiki page](https://wiki.seg.org/wiki/Mobil_AVO_viking_graben_line_12)); cite Keys and
+Foster (1998), [doi:10.1190/1.9781560802082.ch1](https://doi.org/10.1190/1.9781560802082.ch1).
 
 ```bash
 cd $VIKING_HOME/raw
 
-BASE=https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12
+ZENODO=https://zenodo.org/records/23481108/files
+HF=https://huggingface.co/datasets/shaowinw/seismic-benchmark-models/resolve/main/viking_graben_line12
+get() { curl -fL -O "$ZENODO/$1" || curl -fL -O "$HF/$1"; }   # Zenodo first, then Hugging Face
 
 # Pre-stack SEG-Y (750 MB) — the only file FWI / RTM strictly need.
-curl -fL -O ${BASE}/seismic.segy
+get seismic.segy
 
 # Far-field source signature (ASCII, one sample per line; dt = 4 ms).
-# NOTE the capital F in FarField — the bucket is case-sensitive and
-# `Farfield.dat` returns HTTP 403.
-curl -fL -O ${BASE}/FarField.dat
+get FarField.dat
 
 # Optional auxiliary material.
-curl -fL -O ${BASE}/mobil_wellogs.tar.gz           # well logs (LIS)
-curl -fL -O ${BASE}/Mobil_migration_well_logs.pdf  # wellog plots
-curl -fL -O ${BASE}/284E_frontmatter.pdf           # SEG Open Pub No. 4 front matter
-curl -fL -O ${BASE}/README.txt
-curl -fL -O ${BASE}/sufirst.job
-curl -fL -O ${BASE}/FarField.jpg
+get mobil_wellogs.tar        # well logs (LIS)
+get FarField.jpg             # plot of the far-field signature
+get README.txt
+get sufirst.job              # Seismic Unix: SEG-Y -> SU, print headers
+get TERMS_OF_USE.txt
 ```
 
-Sanity-check the bundle:
+The bucket served the well logs gzip-compressed as `mobil_wellogs.tar.gz`; the copy is that
+archive decompressed. Two more files of the original distribution are under copyright and
+are not re-hosted; the Internet Archive keeps them:
+[well-log plots](https://web.archive.org/web/20250527002516/https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/Mobil_migration_well_logs.pdf)
+and the [front matter of SEG Open File Publication No. 4](https://web.archive.org/web/20250527010149/https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/284E_frontmatter.pdf).
+
+Check the bundle:
 
 ```bash
+sha256sum -c <<'EOF'
+64cbb49796b940717c57cddf5c7e0130b56df7061009a770565bdd0978cfccf3  seismic.segy
+ed57339125285905933984a4518ada58ad41b0697d2cdc43c1bf48412144a1df  FarField.dat
+EOF
 ls -l seismic.segy FarField.dat           # 749,552,400 and 8,500 bytes
 ```
 
@@ -949,9 +964,9 @@ mkdir -p $VIKING_HOME/{raw,run}
 
 # === Step 0: download (~750 MB) ============================================
 cd $VIKING_HOME/raw
-BASE=https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12
-curl -fL -O ${BASE}/seismic.segy
-curl -fL -O ${BASE}/FarField.dat        # capital F twice — Farfield.dat is HTTP 403
+ZENODO=https://zenodo.org/records/23481108/files      # doi:10.5281/zenodo.23481108
+HF=https://huggingface.co/datasets/shaowinw/seismic-benchmark-models/resolve/main/viking_graben_line12
+for f in seismic.segy FarField.dat; do curl -fL -O $ZENODO/$f || curl -fL -O $HF/$f; done
 
 # === one-time config =======================================================
 sweep-tasks init -o $VIKING_HOME/viking.yaml

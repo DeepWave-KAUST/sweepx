@@ -1848,7 +1848,7 @@ def main(argv: list[str] | None = None) -> int:
     # `sweep-tasks convert-farfield` — ASCII FarField → npz adapter.
     cf = subparsers.add_parser(
         "convert-farfield",
-        help="Convert a one-column ASCII FarField wavelet (e.g. Viking Farfield.dat) "
+        help="Convert a one-column ASCII FarField wavelet (e.g. Viking FarField.dat) "
              "into a sweep-compatible npz with optional taper / zero-padding.",
     )
     cf.add_argument("--input", default=None,
