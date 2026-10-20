@@ -19,7 +19,7 @@ EQUATIONS_2D = [
     "Acoustic", "Acoustic1st", "AcousticVRZ",
     "AcousticVTI", "AcousticVTI1st", "AcousticVTILiang", "AcousticVTIDuveneck",
     "AcousticVTIDefault", "AcousticTTI", "AcousticTTILiang", "AcousticTariq",
-    "Elastic", "ElasticAPM", "ElasticTTI", "ElasticTTISG",
+    "Elastic", "ElasticTTI", "ElasticTTISG",
     "DASElastic", "DASMu", "DASZhao",
 ]
 EQUATIONS_3D = ["Acoustic3D", "AcousticVTIDuveneck3D", "Elastic3D"]

@@ -79,11 +79,12 @@ _PROBE_KWARGS = {
 }
 
 # Attributes an equation's eager step reads when it honours an irregular
-# surface: the image-method surface rows and the APM air mask the propagator
-# attaches from ``topography=``. sweep has no declared capability flag for
-# this, and the propagator accepts ``topography=`` for every equation, so an
-# equation whose step never reads either one ignores ``physics.topography``.
-_TOPOGRAPHY_ATTRS = ("_topo_rows_runtime", "_apm_air_mask_runtime")
+# surface: the image-method surface rows the propagator attaches from
+# ``topography=``. sweep has no declared capability flag for this, and the
+# propagator accepts ``topography=`` for every equation, so an equation whose
+# step never reads them ignores ``physics.topography`` (the curvilinear ones
+# are recognised by ``is_curvilinear`` instead).
+_TOPOGRAPHY_ATTRS = ("_topo_rows_runtime",)
 
 
 def equation_catalog() -> dict[str, dict]:

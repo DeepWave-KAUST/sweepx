@@ -108,7 +108,7 @@ def test_acoustic_models_and_defaults():
 
 
 @pytest.mark.parametrize("name", [
-    "Elastic", "Elastic3D", "ElasticAPM", "ElasticCurvilinear",
+    "Elastic", "Elastic3D", "ElasticCurvilinear",
     "DASElastic", "DASElastic3D", "DASMu", "DASMu3D", "DASZhao", "DASZhao3D",
 ])
 def test_elastic_family_has_vp_vs_rho(catalog, name):
