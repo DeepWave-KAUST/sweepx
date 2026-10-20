@@ -170,7 +170,7 @@ estimate_wavelet:
 # ═══════════════════════════════════════════════════════════════════════
 convert_farfield:
   # ASCII text file, one sample per line.
-  input:  ${VIKING_HOME}/raw/Farfield.dat
+  input:  ${VIKING_HOME}/raw/FarField.dat
   # Output npz path.
   output: ${VIKING_HOME}/run/wavelet/farfield/farfield_wavelet.npz
   # Sample interval of the source ASCII (4 ms for Viking's FarField.dat).

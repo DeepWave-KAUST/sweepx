@@ -303,7 +303,7 @@ why) where it is not.
 ## End-to-end example (Viking 2-D)
 
 Quick summary below assuming **one local GPU, no SLURM**. The full
-walkthrough — including the public S3 download URLs, SEG-Y header
+walkthrough — including the download URLs, SEG-Y header
 specs, the legacy wavelet / initial-model bridge, the post-filter
 recipe, and an optional appendix on SLURM / ibex sbatch entry points —
 lives in [`docs/tasks/datasets/viking/README.md`](datasets/viking/README.md).
@@ -313,7 +313,7 @@ lives in [`docs/tasks/datasets/viking/README.md`](datasets/viking/README.md).
 export VIKING_HOME=$HOME/viking
 mkdir -p $VIKING_HOME/{raw,run}
 
-# Step 0: one-time download of seismic.segy + Farfield.dat (~1.4 GB).
+# Step 0: one-time download of seismic.segy + FarField.dat (~750 MB).
 # Full URLs in docs/tasks/datasets/viking/README.md § Step 0.
 
 # Step 1: scan SEG-Y → index (~10 s for Viking 1001 shots)

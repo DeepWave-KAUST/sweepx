@@ -80,7 +80,7 @@ estimate_wavelet:
   initial_wavelet_prior_weight: 0.05
 
 convert_farfield:
-  input:  ${VIKING_HOME}/raw/Farfield.dat
+  input:  ${VIKING_HOME}/raw/FarField.dat
   output: ${VIKING_HOME}/run/wavelet/farfield/farfield_wavelet.npz
   dt_s:   0.004
 
