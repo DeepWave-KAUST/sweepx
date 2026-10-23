@@ -74,7 +74,9 @@ in the `viking_graben_line12/` folder of the Hugging Face dataset
 The data are in the public domain (terms of use on the data set's
 [SEG wiki page](https://wiki.seg.org/wiki/Mobil_AVO_viking_graben_line_12)); cite Keys and
 Foster (1998), [doi:10.1190/1.9781560802082.ch1](https://doi.org/10.1190/1.9781560802082.ch1).
-The same folder holds the FWI starting model used in Step 3.
+The FWI starting model used in Step 3 is not part of the original release; it is
+in the `viking_graben_line12/derived/` folder of the Hugging Face copy only, under
+CC BY 4.0.
 
 ```bash
 cd $VIKING_HOME/raw
@@ -85,7 +87,7 @@ get() { curl -fL -O "$ZENODO/$1" || curl -fL -O "$HF/$1"; }   # Zenodo first, th
 
 # What this example needs.
 get seismic.segy                   # pre-stack SEG-Y, 750 MB
-get viking_initial_vp_12.5m.npy    # FWI starting model (Step 3), 5.8 MB
+curl -fL -O "$HF/derived/viking_initial_vp_12.5m.npy"   # FWI starting model (Step 3), 5.8 MB
 
 # Optional material of the original release.
 get FarField.dat             # far-field source signature (ASCII, dt = 4 ms)
@@ -260,19 +262,21 @@ python -c "from sweepx.io.seismic_plan import SeismicPlan; \
 ## Step 3 — Starting model (downloaded)
 
 `viking_initial_vp_12.5m.npy` is a (320, 2285) float64 array of vp in m/s on
-the 12.5 m model grid: 4.0 km deep and 28.56 km along the line. It is built
-from three pieces:
+the 12.5 m model grid: 4.0 km deep and 28.56 km along the line, with x = 0 at
+the SEG-Y coordinate origin (the first receiver), which is also where
+`extract-coeff` puts grid index 0 by default. It is built from three pieces:
 
 * **0-1.2 km**: a smoothed first-arrival traveltime tomogram (50 m grid,
   upsampled), from 78,955 first-break picks over all 1001 shots;
-* **below 1.7 km**: a smoothed velocity trend from the two wells on the line;
+* **below 1.7 km**: a smoothed velocity trend from wells 4 and 5 of the data set;
 * **1.2-1.7 km**: a cosine taper between the two;
 * **rows 0-27** (the top 350 m): water at 1485.6 m/s, the velocity measured
   from the direct arrival.
 
 The first-break picks are not part of the public release, so the model cannot
 be regenerated from `seismic.segy` alone; that is why it is distributed as a
-file. The task YAML reads it with
+file (CC BY 4.0; the README next to it on Hugging Face says how to cite it).
+The task YAML reads it with
 
 ```yaml
 init_model:
@@ -485,9 +489,8 @@ mkdir -p $VIKING_HOME/{raw,run/shards}
 cd $VIKING_HOME/raw
 ZENODO=https://zenodo.org/records/23481108/files      # doi:10.5281/zenodo.23481108
 HF=https://huggingface.co/datasets/shaowinw/seismic-benchmark-models/resolve/main/viking_graben_line12
-for f in seismic.segy viking_initial_vp_12.5m.npy; do
-  curl -fL -O $ZENODO/$f || curl -fL -O $HF/$f
-done
+curl -fL -O $ZENODO/seismic.segy || curl -fL -O $HF/seismic.segy
+curl -fL -O $HF/derived/viking_initial_vp_12.5m.npy        # starting model: Hugging Face only
 
 # === Steps 1-2: index and plan =============================================
 CFG=$SWEEPX/examples/tasks/field/viking/pipeline_config.yaml
