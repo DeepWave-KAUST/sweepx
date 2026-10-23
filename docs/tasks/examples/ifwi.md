@@ -25,7 +25,8 @@ where 02 does.
 | free parameters | 382,441 cells | **251,728 weights** |
 
 A wash on accuracy, which is the honest result. What the parametrisation buys
-is a model with fewer degrees of freedom than the grid it renders onto.
+is a model with fewer degrees of freedom than the grid it renders onto. On a
+32 GB V100 the run takes 20 min and peaks at 15.1 GiB in `nvidia-smi`.
 
 ![iFWI result](figures/07_vp_final.png)
 

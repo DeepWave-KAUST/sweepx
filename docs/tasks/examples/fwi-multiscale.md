@@ -22,7 +22,8 @@ single broadband band cycle-skips from there; the four-stage `stages:` ladder
 | stage 4 — broadband | **317.3** |
 
 perturbation correlation `r` = 0.752; low-wavenumber RMSE (both smoothed by
-σ = 8 cells) 184.9, a **42.5 % improvement** on the starting model.
+σ = 8 cells) 184.9, a **42.5 % improvement** on the starting model. On a
+32 GB V100 the same run takes 19 min and peaks at 14.8 GiB in `nvidia-smi`.
 
 ![per-stage evolution](figures/03_by_stage.png)
 

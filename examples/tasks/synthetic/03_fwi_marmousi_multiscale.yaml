@@ -3,15 +3,18 @@
 # Teaches:  `stages:` — per-stage bandpass and lr_scale, and why a 1-D start
 #           needs them at all.
 # Needs:    nothing (models from `sweep.datasets`).
-# Produces: output/inverted_vp.npy + per-stage QC.
+# Produces: output/inverted_vp.npy, a vp snapshot every 5 epochs (and the
+#           last) under output/epochs/, QC images at the first and last
+#           epoch, and a stage-shaded qc/loss_curve.png.
 #
 # Run:
 #   sweep-tasks run examples/tasks/synthetic/03_fwi_marmousi_multiscale.yaml
 #
 # Same grid / geometry / 8 Hz Ricker as 01 and 02. The difference is the START:
-# `vp_linear` is a 1-D gradient with ZERO lateral structure, so a single
-# broadband band would cycle-skip. Each stage low-passes the data to a higher
-# cutoff, letting the loss see a smooth view of the wavefield first.
+# a 1-D gradient with ZERO lateral structure (built below, not the `vp_linear`
+# preset), so a single broadband band would cycle-skip. Each stage low-passes
+# the data to a higher cutoff, letting the loss see a smooth view of the
+# wavefield first.
 #
 # How the bandpass works (StageSpec.bandpass + StageBandpass):
 #  - At stage entry the runner low-passes the PRISTINE obs once.
@@ -37,6 +40,7 @@
 #   low-wavenumber RMSE (both smoothed sigma=8 cells)  184.9, a 42.5%
 #                  improvement on the starting model
 #   left-half two-way traveltime error at 2 km: -160 ms (init) -> -13 ms
+# On a 32 GB V100: 19 min, `nvidia-smi` peak 14.8 GiB.
 # See docs/tasks/examples/fwi-multiscale.md for the figures and for how to check
 # your own run against these numbers.
 

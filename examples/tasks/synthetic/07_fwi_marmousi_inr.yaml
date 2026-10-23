@@ -9,15 +9,16 @@
 # Run:
 #   sweep-tasks run examples/tasks/synthetic/07_fwi_marmousi_inr.yaml
 #
-# Everything OUTSIDE the `reparam:` block is deliberately the same as 03 —
-# same grid, geometry, wavelet, stage ladder, epochs, batch size. That is the
-# point of the example: the parametrisation should be the only variable, so
-# 03 and 07 stay comparable.
+# Same grid, geometry, wavelet, stage ladder, epochs and batch size as 03,
+# but NOT the same start: 07 starts from 02's `vp_smooth` and has no
+# `water:` block (see below). The reference below is therefore compared
+# with 02, grid FWI from that same start — which runs single-scale with a
+# batch of 16, so the parametrisation is not the only difference.
 #
 # What the network actually predicts here: a PERTURBATION added to the
 # starting model (`direct_velocity: false`), scaled by `vp_std`. So the net
-# starts near zero and the run starts from `init_model`, exactly like 02 —
-# only the parametrisation differs. `direct_velocity: true` would instead have
+# starts near zero and the run starts from `init_model`, the same start as
+# 02. `direct_velocity: true` would instead have
 # it predict absolute velocity, which needs `vp_mean` / `vp_std` set to the
 # model's own statistics and is the from-scratch setup.
 #
@@ -27,6 +28,7 @@
 #   perturbation correlation with the true update   r = 0.687
 #   low-wavenumber RMSE (both smoothed sigma=8)     114.5, a 21.4% improvement
 #   water rows 0-36  1537.7 -> 1499.6  (true 1500.0)
+# On a 32 GB V100: 20 min, `nvidia-smi` peak 15.1 GiB.
 # Compare 02, which is grid FWI from the SAME start for the same 200 epochs:
 # RMSE 270.6, r = 0.700. The parametrisation is a wash on this problem — what
 # it buys is a model with far fewer free parameters (251,728 weights against

@@ -32,7 +32,8 @@ right edges, which is the CPML doing its job.
 
 With `free_surface: true` the snapshots show the downgoing wave, its
 polarity-flipped ghost, and the surface multiples behind it. Set it to `false`
-and re-run, and only the direct wavefront is left:
+and re-run, and the ghost and the surface multiples disappear; the direct wave
+and the reflections and scattering from inside the model remain:
 
 ```bash
 sweep-tasks run examples/tasks/synthetic/06_wavefield_snapshots.yaml \

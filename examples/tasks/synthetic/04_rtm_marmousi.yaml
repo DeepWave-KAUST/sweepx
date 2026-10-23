@@ -2,7 +2,8 @@
 #
 # Teaches:  `task_type: rtm` — imaging with a FIXED velocity instead of
 #           inverting one, plus the imaging knobs that decide what the picture
-#           looks like (illumination normalisation, Laplacian post-filter).
+#           looks like (illumination normalisation, depth-tapered z-axis
+#           low-cut post-filter).
 # Needs:    nothing (models from `sweep.datasets`).
 # Produces: output/rtm_image.npy + migrated-image PNGs.
 #
@@ -26,8 +27,8 @@ grid:
 
 time:
   dt: 0.001
-  nt: 10000                 # 10 s — a 7 s record cut the 17 km far offsets
-                            # off right after their first arrival (see 01)
+  nt: 10000                 # 10 s — a 7 s record would miss the first
+                            # arrival at the 17 km far offsets (see 01)
 
 wavelet:
   kind: ricker
@@ -74,13 +75,14 @@ imaging:
   filter_lowcut_hz: 3.0
   filter_highcut_hz: 20.0
   filter_target: syn
-  # Depth-tapered z-axis low-cut: strips the smooth low-wavenumber backdrop a
-  # correlation-condition image always carries, while tapering the cut off with
-  # depth so the shallow section is not gutted. Also available standalone as
+  # Depth-tapered z-axis low-cut: subtracts the smooth low-wavenumber backdrop a
+  # correlation-condition image always carries, at full strength from the
+  # surface down to `depth_m` and tapered to nothing over the next `taper_m`,
+  # so the deep section is left untouched. Also available standalone as
   # `sweep-tasks filter-image <npy>` if you want to re-tune it without
   # re-migrating.
   post_filter:
     wavelength_m: 300.0     # cut structure longer than this in z
-    depth_m: 600.0          # full strength below this depth
-    taper_m: 400.0          # ramp in over this interval
+    depth_m: 600.0          # full strength from the surface down to here
+    taper_m: 400.0          # cosine ramp-out to zero below depth_m
     clip_percentile: 1.0    # display clip for the PNG only

@@ -28,13 +28,18 @@ tells you which equations and backends your build has.
 ## Before you start
 
 The examples default to `backend.impl: c` — sweep's fused CUDA kernels — so a
-CUDA GPU is recommended. On a CPU-only machine set `backend.impl: eager` (or
-pass `--override backend.impl=eager`) and expect roughly 30× the wall time.
-09, 10, 16 and 17 already run on `eager`.
+CUDA GPU is recommended. On a CPU-only machine replace the whole backend block,
+`--override 'backend={impl: eager, use_ckpt: true}'`: overriding only
+`backend.impl=eager` is refused when the file carries a `cuda_options:` block,
+and without `use_ckpt` the eager gradient keeps every time step in memory.
+Expect hours — 05 took 3 h 53 min and 40 GiB of RAM on 16 CPU cores, against
+3 minutes with `c` on a V100 — and run 04 on a GPU: RTM needs the illumination
+only `c` computes. 06, 09, 10, 16 and 17 already run on `eager`.
 
 Relative paths in a task YAML resolve against the YAML **file**, not your
 shell's working directory, so every run lands in
-`examples/tasks/synthetic/sweep_runs/<task_id>/` (gitignored). Pass
+`examples/tasks/synthetic/sweep_runs/<task_id>/` (gitignored; a file without
+`task_id` gets `<task_type>-<timestamp>`). Pass
 `--override output_dir=/somewhere/else` to put it elsewhere.
 
 ## The Marmousi velocity presets

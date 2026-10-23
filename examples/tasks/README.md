@@ -85,12 +85,26 @@ extract-coeff`, then invert. The headers of 11 (2-D) and 13 (3-D) spell out the
 exact commands. In a field project the first command disappears — real node
 gathers replace it and `extract-coeff` reads those instead.
 
-Wall times are not filled in yet; they get measured and written into each YAML
-header once the set has been run on a known GPU.
-
 **No GPU?** The examples default to `backend.impl: c` (fused CUDA kernels).
-Switch to `impl: eager` to run on CPU and expect roughly 30× the wall time —
-08 explains the trade in full.
+On a CPU, replace the whole `backend:` block from the command line:
+
+```bash
+sweep-tasks run examples/tasks/synthetic/05_lsrtm_marmousi.yaml \
+    --override 'backend={impl: eager, use_ckpt: true}'
+```
+
+Overriding only `backend.impl=eager` is refused wherever the file has a
+`cuda_options:` block (02–05, 07, 08, 12, 14), because those options exist
+only for `c`. `use_ckpt: true` makes the eager gradient recompute the forward
+in chunks instead of keeping all of the Marmousi examples' 10,000 steps in
+memory. 04 is the exception: RTM reads the source illumination that only
+`impl: c` computes, so on `eager` every shot batch fails — run 04 on a GPU.
+
+Expect hours, not minutes: on 16 cores of an AMD EPYC 7702, 05 took 3 h 53 min
+(88 min of it synthesising the observed data, then about 5 min per epoch) and
+40 GiB of RAM, against 3 minutes with `c` on a V100. Its loss was 0.6–1.6 %
+away from the `c` run's at every epoch (08 shows where eager and `c` differ).
+06, 09, 10, 16 and 17 already run on `eager` as written.
 
 **Multiple GPUs?** Shot-parallel is a flag, not a different file:
 

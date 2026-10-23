@@ -22,23 +22,27 @@
 #     the record's last axis 2 rather than 1.
 #
 # What to look for: two arrivals where the acoustic examples have one.
-# Measured on the far trace of shot 2, `vz` component, the two strongest
-# arrivals land at 598.5 ms and 954.5 ms — a ratio of 1.59.
+# Measured on shot index 2 (x = 3.0 km), the P envelope peaks at 590 ms and
+# the S on `vz` at 917.5 ms at 1000 m offset; at 1400 m, 762 and 1215 ms.
+# Take the 0.15 s wavelet delay off both and the ratio is 1.74 at each, and
+# 1.73-1.76 over 0.6-1.6 km offset on all three shots (the raw ratio of the
+# two times drifts from 1.47 to 1.61). That is vp/vs = 1.73 at every offset
+# because vs = vp/sqrt(3) holds at every depth: the two gradients are
+# proportional, so P and S follow the same ray.
 #
-# The Poisson-solid ratio vp/vs is 1.73, and 1.59 is the RIGHT answer rather
-# than a near miss: the models are gradients, so P and S turn at different
-# depths and average different velocities on the way. Arrival-time ratios equal
-# velocity ratios only in a homogeneous medium. Flatten the three gradients to
-# constants and it goes to 1.73.
+# The S comes from the gradients. An explosive source radiates no S in a
+# homogeneous solid: with all three models constant, `vz` where S would
+# arrive stays below 5e-4 of the P peak beyond 1.1 km offset.
 #
 # Set `free_surface: true` and a third, slower, dispersive arrival appears —
 # the Rayleigh wave — which is the whole subject of surface-wave inversion and
 # does not exist in an acoustic model at all.
 #
 # Reference (`--override device=cpu`, 8 threads): 61.8 s on `impl: eager`,
-# record.npy is (3, 3000, 178, 2). At the first break `vx` carries 4-7x the
-# amplitude of `vz`, which is what a near-horizontal direct P should do — the
-# component split is geometry, not a property of the equation.
+# record.npy is (3, 3000, 178, 2). Around the P arrival `vx` carries 4-7x the
+# amplitude of `vz` at 1.0-1.4 km offset (17x at 600 m, 3x at 1.6 km): the P
+# ray arrives at a shallow angle — the component split is geometry, not a
+# property of the equation.
 
 task_type: forward
 output_dir: ./sweep_runs
@@ -50,12 +54,15 @@ grid:
   dh: 10.0                  # 200 x 360 cells = 2.0 x 3.6 km
 
 time:
-  dt: 0.0005                # HALF the acoustic examples' step. The elastic
-                            # stability bound is set by the FASTEST wave (vp)
-                            # while the sampling requirement is set by the
-                            # SLOWEST (vs), so an elastic run is squeezed from
-                            # both ends and 1 ms is not safe here.
-  nt: 3000                  # 1.5 s — enough for the direct S at far offset
+  dt: 0.0005                # a wide margin, not a necessity: the order-8
+                            # staggered scheme is stable for
+                            # dt < dh / (vp_max * sqrt(2) * sum|c_k|), 1.37 ms
+                            # here (1.35 ms ran 8 s cleanly, 1.4 ms blew up).
+                            # 1 ms runs too, about 1% (rel. L2) from this
+                            # record once its amplitude, which scales as 1/dt,
+                            # is matched.
+  nt: 3000                  # 1.5 s — S out to about 1.6 km offset; on the
+                            # farthest traces it runs into the record's end
 
 wavelet:
   kind: ricker
@@ -86,7 +93,7 @@ backend:
 
 # vs and rho are the textbook relations to vp, so the example stays
 # self-contained and the wave types stay easy to identify:
-#   vs  = vp / sqrt(3)      Poisson solid -> S arrives at 1.73x the P time
+#   vs  = vp / sqrt(3)      Poisson solid -> S traveltime 1.73x the P one
 #   rho = 310 * vp^0.25     Gardner
 models:
   - name: vp

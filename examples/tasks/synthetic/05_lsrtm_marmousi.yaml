@@ -33,8 +33,8 @@ grid:
 
 time:
   dt: 0.001
-  nt: 10000                 # 10 s — a 7 s record cut the 17 km far offsets
-                            # off right after their first arrival (see 01)
+  nt: 10000                 # 10 s — a 7 s record would miss the first
+                            # arrival at the 17 km far offsets (see 01)
 
 wavelet:
   kind: ricker
