@@ -74,3 +74,12 @@ def test_small_unet_dip_optim_loop_runs():
         opt.step()
     final = (p.forward(z) - target).pow(2).mean().item()
     assert final < 0.1  # any decrease is fine; DIP fits the low-frequency content fast
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_random_latent_defaults_to_generator_device():
+    gen = SmallUNet2D(in_channels=4, out_channels=1, base_channels=8).cuda()
+    p = DIPParameterization(gen, latent_shape=(1, 4, 16, 16))
+    z = p.random_latent()
+    assert z.device == next(gen.parameters()).device
+    assert p.forward(z).shape == (1, 16, 16)

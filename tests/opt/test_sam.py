@@ -2,6 +2,7 @@
 import pytest
 import torch
 
+import sweepx.opt
 from sweepx.opt.optim import SAM, AdamFWI, SteepestDescent
 
 
@@ -65,3 +66,21 @@ def test_sam_with_adam_base_runs_end_to_end():
     for _ in range(500):
         opt.step(_make_closure(lambda y: (y ** 2).sum(), x, opt))
     assert (x ** 2).sum().item() < 1.0
+
+
+@pytest.mark.parametrize("make_base", [
+    lambda x: sweepx.opt.optim.LBFGS([x]),
+    lambda x: sweepx.opt.optim.LBFGSB([x], bounds=(-5.0, 5.0)),
+    lambda x: sweepx.opt.optim.NCG([x]),
+    lambda x: sweepx.opt.optim.SteepestDescent([x], line_search="strong_wolfe"),
+    lambda x: sweepx.opt.optim.TruncatedNewton([x]),
+    lambda x: sweepx.opt.optim.TruncatedGaussNewton([x]),
+    lambda x: sweepx.opt.optim.TrustRegion([x]),
+    lambda x: torch.optim.LBFGS([x]),
+])
+def test_sam_rejects_base_that_needs_a_closure(make_base):
+    """SAM calls base.step() without a closure; such a base would fail (or,
+    given SAM's closure, re-evaluate g at theta and drop g_temp)."""
+    x = torch.zeros(2, requires_grad=True)
+    with pytest.raises(TypeError, match="closure"):
+        SAM(make_base(x), rho=0.05)

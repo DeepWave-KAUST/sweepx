@@ -1,7 +1,7 @@
 # SAM - Sharpness-Aware Minimization
 
-`sweepx.opt.optim.SAM` wraps **any base optimizer** in Foret et al.'s (2021)
-two-step ascent-then-descent update:
+`sweepx.opt.optim.SAM` wraps a **closure-free base optimizer** in Foret et
+al.'s (2021) two-step ascent-then-descent update:
 
 $$
 \epsilon_w = \rho \, \frac{g}{\|g\|},\qquad
@@ -17,15 +17,24 @@ then call the base optimizer's `step()` using $g_{\text{tmp}}$ at the
 
 ```python
 sweepx.opt.optim.SAM(
-    base_optimizer,                 # an Optimizer instance (torch or sweepx.opt)
+    base_optimizer,                 # an Optimizer whose step() needs no closure
     *,
-    rho=0.05,                       # ascent radius
+    rho=0.05,                       # ascent radius, parameter units (L2 norm)
     eps=1e-12,                      # gradient-normalization stabilizer
 )
 ```
 
 `SAM.step()` requires a closure and **calls it twice** per step (once for
-$g$, once for $g_{\text{tmp}}$).
+$g$, once for $g_{\text{tmp}}$). It then calls `base_optimizer.step()`
+**without** a closure, so the base must update from the gradient in `.grad`:
+Adam-FWI, Lion, Shampoo, SOAP, Steepest Descent without a line search, or
+`torch.optim.SGD` / `Adam`. A base that needs a closure (L-BFGS, L-BFGS-B,
+NCG, Steepest Descent with a line search, the Newton-type and trust-region
+optimizers, `torch.optim.LBFGS`) raises `TypeError` at construction.
+
+`rho` is the Euclidean norm of the perturbation $\epsilon_w$ over all
+parameters, in parameter units, so it grows with the model size: on the
+setup model, `rho=50.0` moves the largest cell by about 3 m/s.
 
 ## Drop-in usage
 
@@ -33,8 +42,8 @@ $g$, once for $g_{\text{tmp}}$).
 import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
-base = sweepx.opt.optim.LBFGS([vp], history_size=10, bounds=(1500.0, 5500.0))
-opt = sweepx.opt.optim.SAM(base, rho=0.05)
+base = sweepx.opt.optim.AdamFWI([vp], lr=cfg["lr"], bounds=(1500.0, 5500.0))
+opt = sweepx.opt.optim.SAM(base, rho=50.0)
 
 def closure():
     base.zero_grad()

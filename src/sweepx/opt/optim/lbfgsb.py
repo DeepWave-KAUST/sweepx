@@ -37,9 +37,12 @@ from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import (
+    check_initial_step,
+    scaled_bracket,
+    wolfe_step,
+)
 
 
 class LBFGSB(Optimizer):
@@ -50,10 +53,17 @@ class LBFGSB(Optimizer):
         bounds: ``(lo, hi)`` box. **Required** - that's the whole point.
             Use :class:`sweepx.opt.optim.LBFGS` if you do not want bounds.
         history_size: number of stored ``(s, y)`` pairs (default 10).
-        preconditioner: optional callable used as the initial inverse Hessian
-            ``H_0`` inside the two-loop recursion.
+        preconditioner: optional callable ``P``; the initial inverse Hessian
+            inside the two-loop recursion is then ``H_0 = gamma_k P`` with
+            ``gamma_k = s . y / y . P y`` (``gamma_k I`` without it).
         line_search: must be ``"strong_wolfe"``.
         c1, c2, alpha_init, alpha_max, max_ls_iter: Wolfe parameters.
+            ``alpha`` multiplies the search direction ``d = -H_k g``.
+        initial_step: size of the first line-search trial in parameter units
+            (``max |alpha_0 d| = initial_step``), used whenever there is no
+            curvature history (first step, restart, fallback to the projected
+            gradient). See :class:`sweepx.opt.optim.LBFGS`; ``None`` starts
+            every search at ``alpha_init``.
         restart_every: optional periodic cold restart.
         active_tol: tolerance when comparing parameters to the bound (in
             the units of the parameter; default 0).
@@ -72,6 +82,7 @@ class LBFGSB(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
         active_tol: float = 0.0,
     ) -> None:
@@ -90,6 +101,7 @@ class LBFGSB(Optimizer):
         self.alpha_init = alpha_init
         self.alpha_max = alpha_max
         self.max_ls_iter = max_ls_iter
+        self.initial_step = check_initial_step(initial_step)
         self.restart_every = restart_every
         self.active_tol = active_tol
 
@@ -112,15 +124,24 @@ class LBFGSB(Optimizer):
         at_hi = (x_flat >= self.hi - self.active_tol) & (g_flat < 0.0)
         return at_lo | at_hi
 
+    def _precondition(self, q_flat: Tensor) -> Tensor:
+        r = torch.empty_like(q_flat)
+        offset = 0
+        for p in iter_params(self.param_groups):
+            n = p.numel()
+            chunk = q_flat[offset : offset + n].view_as(p)
+            r[offset : offset + n] = self.preconditioner(chunk, p).reshape(-1)
+            offset += n
+        return r
+
     def _apply_initial_inv_hessian(self, q_flat: Tensor) -> Tensor:
         if self.preconditioner is not None:
-            r = torch.empty_like(q_flat)
-            offset = 0
-            for p in iter_params(self.param_groups):
-                n = p.numel()
-                chunk = q_flat[offset : offset + n].view_as(p)
-                r[offset : offset + n] = self.preconditioner(chunk, p).reshape(-1)
-                offset += n
+            r = self._precondition(q_flat)
+            if self._y_hist:
+                y_last = self._y_hist[-1]
+                y_p_y = float(torch.dot(y_last, self._precondition(y_last)))
+                if y_p_y > 0.0:
+                    r = r * ((1.0 / self._rho_hist[-1]) / y_p_y)
             return r
         if not self._y_hist:
             return q_flat
@@ -209,23 +230,22 @@ class LBFGSB(Optimizer):
             # Nothing to do this iteration.
             return loss
 
-        def eval_alpha(alpha: float):
-            trial = x0 + alpha * d
-            trial.clamp_(self.lo, self.hi)  # projected line search
-            write_flat_to_params(self.param_groups, trial)
+        def evaluate():
             with torch.enable_grad():
                 ll = closure()
-            new_g = flat_grads(self.param_groups)
-            return float(ll.detach()), float(torch.dot(new_g, d))
+            return float(ll.detach()), flat_grads(self.param_groups)
 
-        strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        if self.initial_step is not None and not self._s_hist:
+            alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
+        else:
+            alpha0, alpha_max = self.alpha_init, self.alpha_max
+        # Projected line search: every trial is clamped onto the box.
+        wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=(self.lo, self.hi), alpha_init=alpha0, alpha_max=alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="LBFGSB", step_hints=True, initial_step=self.initial_step,
         )
-        self._project_params()
 
         self._prev_x = x0
         self._prev_g = g

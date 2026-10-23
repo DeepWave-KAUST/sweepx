@@ -81,3 +81,17 @@ def test_amsgrad_uses_max_v():
         opt_b.zero_grad(); ((x_b - 1.0) ** 2).sum().backward(); opt_b.step()
     # The two trajectories should differ; AMSGrad is only equivalent if v never decreased.
     assert not torch.allclose(x_a.detach(), x_b.detach(), atol=1e-8)
+
+
+@pytest.mark.parametrize("variant", ["adam", "adamw"])
+def test_mask_pins_components_against_weight_decay(variant):
+    """A water-layer freeze must hold with weight decay (L2 or decoupled) too."""
+    x = torch.tensor([2000.0, 2000.0, 2000.0], requires_grad=True)
+    mask = torch.tensor([0.0, 1.0, 1.0])
+    opt = AdamFWI([x], lr=10.0, variant=variant, weight_decay=1e-4, mask=mask, eps=1e-8)
+    for _ in range(5):
+        opt.zero_grad()
+        ((x - 2100.0) ** 2).sum().backward()
+        opt.step()
+    assert x[0].item() == 2000.0
+    assert x[1].item() != 2000.0 and x[2].item() != 2000.0

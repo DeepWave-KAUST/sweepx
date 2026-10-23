@@ -11,8 +11,8 @@ Single class, four update rules selected by the ``variant`` flag:
 On top of the stock formulas, all variants accept the FWI-flavoured knobs:
 
 - ``bounds=(lo, hi)`` projected after each step.
-- ``mask`` tensor (or callable returning one) to zero gradient updates in
-  pinned regions (e.g. water-layer freeze).
+- ``mask`` tensor (or callable returning one) that scales every update,
+  weight decay included, so zeros pin a region (e.g. water-layer freeze).
 - ``amsgrad=True`` to use the running max of the second moment.
 - ``eps=1e-22`` default matches sweep's existing FWI examples.
 
@@ -107,14 +107,18 @@ class AdamFWI(Optimizer):
                 continue
             grad = p.grad
             mask = self._resolve_mask(p)
-            if mask is not None:
-                grad = grad * mask
             if self.weight_decay > 0.0:
                 if self.variant == "adamw":
-                    # Decoupled weight decay (applied to the parameter directly).
-                    p.data.mul_(1.0 - lr * self.weight_decay)
+                    # Decoupled weight decay (applied to the parameter directly);
+                    # masked components are pinned against it too.
+                    if mask is None:
+                        p.data.mul_(1.0 - lr * self.weight_decay)
+                    else:
+                        p.data.sub_(p.data * mask, alpha=lr * self.weight_decay)
                 else:
                     grad = grad + self.weight_decay * p.data
+            if mask is not None:
+                grad = grad * mask
 
             state = self.state[p]
             if len(state) == 0:

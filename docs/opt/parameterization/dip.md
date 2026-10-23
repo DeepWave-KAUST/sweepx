@@ -39,15 +39,18 @@ after).
 
 ## Drop-in usage
 
+Build the generator on the solver's device; `random_latent` puts the latent
+on the generator's device:
+
 ```python
 import torch, sweepx.opt
 
 generator = sweepx.opt.parameterization.SmallUNet2D(
     in_channels=8, out_channels=1, base_channels=32,
-)
+).to(dev)
 param = sweepx.opt.parameterization.DIPParameterization(
     generator,
-    latent_shape=(1, 8, 64, 128),    # batch + channels + (nx, nz)
+    latent_shape=(1, 8, 96, 128),    # batch + channels + (nz, nx)
     out_min=1500.0, out_max=5500.0,  # bounded vp
 )
 latent = param.random_latent(scale=0.1)
@@ -56,10 +59,14 @@ opt = sweepx.opt.optim.AdamFWI(
     lr=1e-3,
     variant="adamw", weight_decay=1e-4,
 )
+```
 
+then optimize the latent and the weights:
+
+```python
 for _ in range(cfg["epochs"]):
     opt.zero_grad()
-    vp = param.forward(latent).squeeze(0).squeeze(0)
+    vp = param.forward(latent).squeeze(0)   # SmallUNet2D: (1, nz, nx) -> (nz, nx)
     syn = solver(wavelet, sources, receivers, models=[vp])
     loss = (syn - obs).pow(2).sum()
     loss.backward()
@@ -72,6 +79,12 @@ for _ in range(cfg["epochs"]):
   initialise ``latent`` randomly and accept that ``generator(latent_init)``
   does not match the initial physical model. If you need a particular
   starting model, fit the generator to it offline first.
+- With `out_min` / `out_max` the first model is close to the middle of the
+  range whatever the starting model (3300-3600 m/s in our runs of the example
+  above, for a true background of 2000 m/s), and every model the optimizer
+  tries stays inside it. The solver must therefore be stable up to `out_max`: the setup's
+  `dt=1e-3` is, the 2 ms of Getting started is not (above about 3000 m/s it
+  returns NaN, and the generator's weights become NaN after the first step).
 - The choice of generator architecture matters more than for any other
   parameterization in the library; see He et al. 2024 for FWI-specific
   recommendations.

@@ -18,7 +18,9 @@ $$
 $$
 
 where $g_k = \nabla f(\theta_k)$, $P$ is an optional preconditioner (identity
-by default), and $\alpha$ is the fixed `lr`.
+by default), and $\alpha$ is the fixed `lr`. `lr` multiplies the raw
+gradient, so it is in (parameter units) / (gradient units): for a velocity
+model in m/s, whose gradients are tiny, it is a large number.
 
 With `line_search="strong_wolfe"`:
 
@@ -27,9 +29,17 @@ $$
 \quad \text{subject to strong-Wolfe},\qquad d_k = -P g_k
 $$
 
-solved by Algorithms 3.5 + 3.6 of Nocedal & Wright. Bounds, when supplied as
-`bounds=(lo, hi)`, are enforced by an in-place clamp after each step
-(projected gradient).
+solved by Algorithms 3.5 + 3.6 of Nocedal & Wright. `initial_step=` sizes
+the first trial of the first search in parameter units (it changes the
+largest component by that much); later searches start from the previous
+step (Nocedal & Wright eq. 3.60), and no trial changes a parameter by more
+than `alpha_max / alpha_init` (10) times `initial_step`. Without it every
+search starts at
+`alpha_init=1`, which does not move an m/s model; a search that ends at
+`alpha_max` or leaves the parameters unchanged emits a `RuntimeWarning`.
+Bounds, when supplied as `bounds=(lo, hi)`, are enforced by an in-place
+clamp after each step (projected gradient); line-search trials are projected
+before they are evaluated.
 
 ## API
 
@@ -42,29 +52,46 @@ sweepx.opt.optim.SteepestDescent(
     preconditioner=None,            # callable (grad, param) -> grad
     line_search=None,               # None or "strong_wolfe"
     c1=1e-4, c2=0.9,                # Wolfe constants
-    alpha_init=1.0, alpha_max=10.0, # Wolfe step bracket
+    alpha_init=1.0, alpha_max=10.0, # Wolfe step bracket, multiplies d = -P g
     max_ls_iter=25,                 # Wolfe iteration cap
+    initial_step=None,              # first trial, parameter units (line search only)
 )
 ```
 
 ## Drop-in usage
 
+(a) Fixed-`lr` SD, no closure required. `lr` multiplies the (preconditioned)
+raw gradient, so it is in (m/s) / (gradient units). Without a preconditioner
+the stable `lr` is set by the stiffest part of the model: on the setup,
+`lr=300` already diverges and `lr=100` lowers the misfit by less than 1 % in
+10 steps. With the [pseudo-Hessian](../preconditioners/pseudo_hessian.md),
+`lr=3e4` is stable and moves the model by about 8 m/s on the first step:
+
 ```python
 import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
+precond = sweepx.opt.precond.PseudoHessianPrecond(eps=1e-5)
+solver.compute_illumination = True   # impl='c': backward() fills the illumination maps
 
-# (a) Plain SD - no closure required.
-opt = sweepx.opt.optim.SteepestDescent([vp], lr=cfg["lr"])
+opt = sweepx.opt.optim.SteepestDescent([vp], lr=3e4, bounds=(1500.0, 5500.0),
+                                       preconditioner=precond)
 for _ in range(cfg["epochs"]):
     opt.zero_grad()
     loss = (solver(wavelet, sources, receivers, [vp]) - obs).pow(2).sum()
     loss.backward()
+    S, R = solver.source_illumination, solver.receiver_illumination
+    precond.update([vp], source_illum=S / S.max(), receiver_illum=R / R.max())
     opt.step()
+```
 
-# (b) SD with strong-Wolfe line search - closure required.
+(b) SD with the strong-Wolfe line search, closure required; `initial_step`
+sizes the first trial in m/s:
+
+```python
+vp = init_vp.clone().requires_grad_(True)
 opt = sweepx.opt.optim.SteepestDescent([vp], line_search="strong_wolfe",
-                                       bounds=(1500.0, 5500.0))
+                                       bounds=(1500.0, 5500.0), initial_step=20.0)
 
 def closure():
     opt.zero_grad()

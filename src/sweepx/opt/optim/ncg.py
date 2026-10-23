@@ -26,9 +26,12 @@ from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import (
+    check_initial_step,
+    scaled_bracket,
+    wolfe_step,
+)
 
 
 class NCG(Optimizer):
@@ -36,7 +39,8 @@ class NCG(Optimizer):
 
     Args:
         params: iterable of parameter tensors / param-groups.
-        bounds: optional ``(lo, hi)`` box-projection enforced after each step.
+        bounds: optional ``(lo, hi)`` box; every line-search trial point is
+            projected onto it.
         preconditioner: optional callable ``(grad, param) -> grad``. The PR+
             update is computed on the *preconditioned* gradient
             (Hager-Zhang style preconditioned NCG).
@@ -46,6 +50,17 @@ class NCG(Optimizer):
         c1, c2: Wolfe constants. Defaults match the values recommended for
             CG (``c2=0.1``) in Nocedal & Wright Section 3.5.
         alpha_init, alpha_max, max_ls_iter: Wolfe step bracket / iteration cap.
+            ``alpha`` multiplies the search direction ``d``, whose size follows
+            the gradient.
+        initial_step: size of the first line-search trial of the first step,
+            in parameter units (``max |alpha_0 d| = initial_step``). Later
+            searches start from the previous step,
+            ``alpha_0 = alpha_{k-1} g_{k-1}.d_{k-1} / g_k.d_k`` (Nocedal &
+            Wright eq. 3.60), which needs no units. No trial changes a
+            parameter by more than ``alpha_max / alpha_init`` times
+            ``initial_step``. ``None`` (default) starts every search at
+            ``alpha_init``, which does not move parameters with tiny
+            gradients, such as a velocity model in m/s.
         restart_every: if set, force ``d = -P g`` every ``N`` iterations as
             an extra safety reset on top of PR+'s automatic restart.
 
@@ -66,6 +81,7 @@ class NCG(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
     ) -> None:
         if line_search != "strong_wolfe":
@@ -81,9 +97,11 @@ class NCG(Optimizer):
         self.alpha_init = alpha_init
         self.alpha_max = alpha_max
         self.max_ls_iter = max_ls_iter
+        self.initial_step = check_initial_step(initial_step)
         self.restart_every = restart_every
 
         # Inter-iteration state.
+        self._prev_alpha_dphi: Optional[float] = None  # alpha_{k-1} g_{k-1}.d_{k-1}
         self._prev_g: Optional[Tensor] = None
         self._prev_z: Optional[Tensor] = None
         self._prev_d: Optional[Tensor] = None
@@ -92,13 +110,6 @@ class NCG(Optimizer):
         self._last_restart: bool = True  # first iteration always uses -z.
 
     # ----------------------------------------------------------------- utils
-    def _project(self) -> None:
-        if self.bounds is None:
-            return
-        lo, hi = self.bounds
-        for p in iter_params(self.param_groups):
-            p.data.clamp_(lo, hi)
-
     def _precondition(self, g_flat: Tensor) -> Tensor:
         """Apply the preconditioner per parameter, returning a flat tensor."""
         if self.preconditioner is None:
@@ -159,21 +170,25 @@ class NCG(Optimizer):
         if init_dphi >= 0.0:
             return loss
 
-        def eval_alpha(alpha: float):
-            write_flat_to_params(self.param_groups, x0 + alpha * d)
+        def evaluate():
             with torch.enable_grad():
                 ll = closure()
-            new_g = flat_grads(self.param_groups)
-            return float(ll.detach()), float(torch.dot(new_g, d))
+            return float(ll.detach()), flat_grads(self.param_groups)
 
-        strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        if self.initial_step is None:
+            alpha0, alpha_max = self.alpha_init, self.alpha_max
+        else:
+            alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
+            if self._prev_alpha_dphi is not None:
+                # Nocedal & Wright eq. 3.60, inside the same bracket.
+                alpha0 = min(self._prev_alpha_dphi / init_dphi, alpha_max)
+        alpha_star = wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="NCG", step_hints=True, initial_step=self.initial_step,
         )
-        self._project()
+        self._prev_alpha_dphi = alpha_star * init_dphi if alpha_star > 0.0 else None
 
         # Cache the gradient at the *start* of this step, so the next step
         # can compute PR+ as (g_new - g_old)^T z_new / (g_old^T z_old).

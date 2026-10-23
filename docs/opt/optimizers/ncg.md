@@ -22,6 +22,17 @@ with $d_0 = -z_0$. The step size $\alpha_k$ is chosen by strong-Wolfe line
 search; default $c_2 = 0.1$ matches the Nocedal & Wright recommendation for
 CG-type methods.
 
+The direction $d_k$ has the size of the gradient, not of the parameters, so
+for a velocity model in m/s pass `initial_step=` (parameter units): the first
+search then starts with a trial that changes the largest component by that
+much, and every later search starts from the previous step,
+$\alpha_k^{(0)} = \alpha_{k-1}\, g_{k-1}^\top d_{k-1} / g_k^\top d_k$
+(Nocedal & Wright eq. 3.60). No trial changes a parameter by more than
+`alpha_max / alpha_init` (10) times `initial_step`. Without `initial_step`
+every search starts at `alpha_init=1`, which does not move an m/s model; a
+search that ends at `alpha_max` or leaves the parameters unchanged emits a
+`RuntimeWarning`.
+
 ## API
 
 ```python
@@ -32,8 +43,9 @@ sweepx.opt.optim.NCG(
     preconditioner=None,             # callable (grad, param) -> grad
     line_search="strong_wolfe",      # currently the only choice
     c1=1e-4, c2=0.1,                 # Wolfe constants (CG-tuned default for c2)
-    alpha_init=1.0, alpha_max=10.0,
+    alpha_init=1.0, alpha_max=10.0,  # multiply d
     max_ls_iter=25,
+    initial_step=None,               # first trial of the first search, parameter units
     restart_every=None,              # optional periodic safety restart
 )
 ```
@@ -54,7 +66,7 @@ vp = init_vp.clone().requires_grad_(True)
 opt = sweepx.opt.optim.NCG(
     [vp],
     bounds=(1500.0, 5500.0),
-    preconditioner=sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3),
+    initial_step=20.0,               # first trial step: 20 m/s
 )
 
 def closure():
@@ -67,6 +79,10 @@ def closure():
 for _ in range(cfg["epochs"]):
     opt.step(closure)
 ```
+
+A `preconditioner=` (e.g. the pseudo-Hessian) is fed exactly as in the
+[L-BFGS example](lbfgs.md#drop-in-usage): refresh it in the closure after
+`backward()`.
 
 ## When to use
 

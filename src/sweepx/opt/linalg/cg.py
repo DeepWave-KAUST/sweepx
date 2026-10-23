@@ -25,6 +25,7 @@ References:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -41,6 +42,7 @@ class CGInfo:
     converged: bool
     boundary: bool = False  # only meaningful for steihaug_cg
     negative_curvature: bool = False  # only meaningful for steihaug_cg
+    nonfinite: bool = False  # stopped on a non-finite p^T A p (NaN / inf matvec)
 
 
 def cg(
@@ -64,7 +66,8 @@ def cg(
         preconditioner: optional callable ``r -> M^{-1} r``. Default identity.
 
     Returns:
-        ``(x, info)``.
+        ``(x, info)``. If ``matvec`` returns a non-finite ``p^T A p``, the
+        iteration stops at the last finite iterate with ``info.nonfinite``.
     """
     if b.dim() != 1:
         raise ValueError(f"b must be 1-D, got shape {tuple(b.shape)}")
@@ -86,6 +89,11 @@ def cg(
     for k in range(max_iter):
         Ap = matvec(p)
         pAp = float(torch.dot(p, Ap))
+        if not math.isfinite(pAp):
+            return x, CGInfo(
+                iters=k + 1, residual=float(r.norm()) / b_norm,
+                converged=False, nonfinite=True,
+            )
         if pAp <= 0.0:
             # Should not happen for SPD; bail out with current iterate.
             return x, CGInfo(
@@ -136,7 +144,8 @@ def steihaug_cg(
         tol, max_iter, preconditioner: as in :func:`cg`.
 
     Returns:
-        ``(x, info)``.
+        ``(x, info)``. A non-finite ``p^T A p`` stops the iteration at the last
+        finite iterate with ``info.nonfinite``.
     """
     if trust_radius <= 0.0:
         raise ValueError(f"trust_radius must be positive, got {trust_radius}")
@@ -158,6 +167,11 @@ def steihaug_cg(
     for k in range(max_iter):
         Ap = matvec(p)
         pAp = float(torch.dot(p, Ap))
+        if not math.isfinite(pAp):
+            return x, CGInfo(
+                iters=k + 1, residual=float(r.norm()) / b_norm,
+                converged=False, nonfinite=True,
+            )
         if pAp <= 0.0:
             tau = _steihaug_boundary_tau(x, p, trust_radius)
             return x + tau * p, CGInfo(

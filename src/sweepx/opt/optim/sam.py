@@ -1,6 +1,6 @@
 """Sharpness-Aware Minimization (SAM) wrapper.
 
-Wraps any base optimizer in two-step "ascent then descent" updates:
+Wraps a closure-free base optimizer in two-step "ascent then descent" updates:
 
     1. e_w = rho * g / ||g||
     2. theta_temp = theta + e_w     (perturb to the worst nearby point)
@@ -9,6 +9,11 @@ Wraps any base optimizer in two-step "ascent then descent" updates:
 
 The result is a step that minimizes the *sharpness* of the loss surface
 in addition to the loss itself, which empirically finds flatter minima.
+
+The base step is ``base_optimizer.step()`` without a closure, consuming the
+``g_temp`` SAM left in ``.grad``. Optimizers whose ``step`` needs a closure or
+loss function (line searches, Newton-type, trust region) cannot be the base:
+they would re-evaluate the gradient at the original point and drop ``g_temp``.
 
 Reference:
     Foret, P., Kleiner, A., Mobahi, H., and Neyshabur, B. (2021).
@@ -23,16 +28,39 @@ import torch
 from torch.optim.optimizer import Optimizer
 
 from sweepx.opt._utils import flat_grads, iter_params
+from sweepx.opt.optim.gauss_newton import TruncatedGaussNewton
+from sweepx.opt.optim.lbfgs import LBFGS
+from sweepx.opt.optim.lbfgsb import LBFGSB
+from sweepx.opt.optim.ncg import NCG
+from sweepx.opt.optim.newton import TruncatedNewton
+from sweepx.opt.optim.steepest_descent import SteepestDescent
+from sweepx.opt.optim.trust_region import TrustRegion
+
+_NEEDS_CLOSURE = (LBFGS, LBFGSB, NCG, TruncatedNewton, TruncatedGaussNewton,
+                  TrustRegion, torch.optim.LBFGS)
+
+
+def _needs_closure(opt: Optimizer) -> bool:
+    if isinstance(opt, _NEEDS_CLOSURE):
+        return True
+    return isinstance(opt, SteepestDescent) and opt.line_search is not None
 
 
 class SAM(Optimizer):
-    """SAM wrapper around an arbitrary base optimizer.
+    """SAM wrapper around a closure-free base optimizer.
 
     Args:
-        base_optimizer: an instance of any optimizer (torch or sweepx.opt).
-            The same param-groups will be used; SAM intercepts the
-            gradient before calling ``base_optimizer.step()``.
-        rho: ascent radius. ``rho=0`` reduces SAM to the base optimizer.
+        base_optimizer: an optimizer whose ``step()`` works without a closure
+            (e.g. AdamFWI, Lion, Shampoo, SOAP, SteepestDescent without a line
+            search, torch.optim.SGD / Adam). The same param-groups will be
+            used; SAM intercepts the gradient before calling
+            ``base_optimizer.step()``. Passing LBFGS, LBFGSB, NCG,
+            TruncatedNewton, TruncatedGaussNewton, TrustRegion,
+            torch.optim.LBFGS or a line-search SteepestDescent raises
+            ``TypeError``.
+        rho: ascent radius, the Euclidean norm of the perturbation over all
+            parameters in parameter units. ``rho=0`` reduces SAM to the base
+            optimizer.
         eps: numerical stability for the gradient normalization.
 
     Calling convention:
@@ -46,6 +74,13 @@ class SAM(Optimizer):
                  eps: float = 1e-12) -> None:
         if rho < 0.0:
             raise ValueError("rho must be non-negative")
+        if _needs_closure(base_optimizer):
+            raise TypeError(
+                f"SAM calls base_optimizer.step() without a closure, but "
+                f"{type(base_optimizer).__name__} needs one in step(). Use a closure-free "
+                "base: AdamFWI, Lion, Shampoo, SOAP, SteepestDescent(line_search=None), "
+                "torch.optim.SGD / Adam."
+            )
         # Borrow the base optimizer's param-groups so torch.optim's
         # introspection still works on us.
         super().__init__(base_optimizer.param_groups, base_optimizer.defaults)

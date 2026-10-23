@@ -95,3 +95,24 @@ def test_tn_beats_lbfgs_on_strict_quadratic(quadratic_illconditioned):
                              max_inner_iter=20)
     opt_tn.step(_make_loss_fn(f, x_tn))
     assert torch.allclose(x_tn.detach(), x_star, atol=1e-5)
+
+
+class _FirstOrderOnly(torch.autograd.Function):
+    """sum(x^2) whose backward has no graph - like sweep's impl='c' gradient."""
+
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return (x * x).sum()
+
+    @staticmethod
+    def backward(ctx, grad):
+        (x,) = ctx.saved_tensors
+        return (2.0 * x * grad).detach()
+
+
+def test_tn_rejects_gradient_without_graph():
+    x = torch.tensor([1.0, -1.0], requires_grad=True)
+    opt = TruncatedNewton([x])
+    with pytest.raises(RuntimeError, match="twice-differentiable"):
+        opt.step(lambda: _FirstOrderOnly.apply(x))

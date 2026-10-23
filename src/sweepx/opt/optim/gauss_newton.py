@@ -8,7 +8,9 @@ Hessian by dropping the second-derivative-of-residual term ``sum r_i H_i``.
 Truncated GN is the standard Newton-type method for FWI's least-squares
 data misfit (Metivier et al. 2013). It is matrix-free: each inner CG iter
 needs one ``J v`` (a JVP) and one ``J^T u`` (a VJP), both available via
-PyTorch autograd.
+PyTorch autograd. The JVP is a double backward through the residual, so with
+sweep the solver must be ``impl='eager'`` without ``torch.compile``
+(``impl='c'`` refuses a second backward over the same graph).
 
 References:
     Metivier, L., Brossier, R., Virieux, J., and Operto, S. (2013).
@@ -18,6 +20,8 @@ References:
 """
 from __future__ import annotations
 
+import math
+import warnings
 from typing import Callable, Optional, Tuple
 
 import torch
@@ -27,10 +31,9 @@ from torch.optim.optimizer import Optimizer
 from sweepx.opt._utils import (
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
 from sweepx.opt.linalg.cg import cg
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import wolfe_step
 
 
 class TruncatedGaussNewton(Optimizer):
@@ -38,7 +41,8 @@ class TruncatedGaussNewton(Optimizer):
 
     Args:
         params: iterable of parameter tensors / param-groups.
-        bounds: optional ``(lo, hi)`` box-projection enforced after each step.
+        bounds: optional ``(lo, hi)`` box; every line-search trial point is
+            projected onto it.
         preconditioner: optional callable used inside the inner CG.
         damping: Levenberg-Marquardt damping added to ``J^T J``: solves
             ``(J^T J + damping I) d = -g``. Defaults to 0.0 (pure GN).
@@ -53,7 +57,8 @@ class TruncatedGaussNewton(Optimizer):
         ``L = 0.5 ||r||^2`` and ``g = J^T r`` internally and uses ``J^T J``
         as the curvature matrix. **Do not call ``backward`` inside
         ``residual_fn``** - the autograd graph must remain intact for the
-        JVP / VJP machinery.
+        JVP / VJP machinery, and it must support a double backward (sweep:
+        ``impl='eager'`` with ``EagerOptions(use_compile=False)``).
     """
 
     def __init__(
@@ -94,13 +99,6 @@ class TruncatedGaussNewton(Optimizer):
         self._last_forcing = 0.0
 
     # ------------------------------------------------------------------ utils
-    def _project(self) -> None:
-        if self.bounds is None:
-            return
-        lo, hi = self.bounds
-        for p in iter_params(self.param_groups):
-            p.data.clamp_(lo, hi)
-
     def _flatten_list(self, tensors) -> Tensor:
         return torch.cat([t.reshape(-1) for t in tensors])
 
@@ -149,6 +147,10 @@ class TruncatedGaussNewton(Optimizer):
             )
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
         g_norm = float(g_flat.norm())
+        if not (math.isfinite(float(loss.detach())) and math.isfinite(g_norm)):
+            raise RuntimeError(
+                "TruncatedGaussNewton: the loss or its gradient is not finite at the current parameters"
+            )
         if g_norm == 0.0:
             return loss
 
@@ -189,6 +191,11 @@ class TruncatedGaussNewton(Optimizer):
             preconditioner=precond_callable,
         )
         self._last_inner_iters = info.iters
+        if info.nonfinite:
+            warnings.warn(
+                f"TruncatedGaussNewton: inner CG met a non-finite curvature p.(J^T J)p at "
+                f"iteration {info.iters}; using the last finite iterate", RuntimeWarning, stacklevel=2,
+            )
 
         if info.negative_curvature and float(d.norm()) == 0.0:
             return loss
@@ -206,23 +213,19 @@ class TruncatedGaussNewton(Optimizer):
 
         x0 = flat_params(self.param_groups).clone()
 
-        def eval_alpha(alpha: float):
-            write_flat_to_params(self.param_groups, x0 + alpha * d)
+        def evaluate():
             with torch.enable_grad():
                 r_a = residual_fn()
                 ll_a = 0.5 * (r_a ** 2).sum()
                 grads_a = torch.autograd.grad(ll_a, params)
-            g_a_flat = self._flatten_list([g.detach() for g in grads_a])
-            return float(ll_a.detach()), float(torch.dot(g_a_flat, d))
+            return float(ll_a.detach()), self._flatten_list([g.detach() for g in grads_a])
 
-        strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=self.bounds, alpha_init=self.alpha_init, alpha_max=self.alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="TruncatedGaussNewton",
         )
-        self._project()
         return loss
 
     # ----------------------------------------------------------- diagnostics

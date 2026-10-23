@@ -2,7 +2,7 @@
 
 `sweepx.opt.optim.LBFGSB` is the **bound-constrained** limited-memory BFGS
 algorithm of Byrd, Lu, and Nocedal (1995). Unlike the projected-gradient
-variant in :doc:`L-BFGS-FWI <lbfgs>`, it identifies an *active set* at
+variant in [L-BFGS-FWI](lbfgs.md), it identifies an *active set* at
 each iteration and updates the BFGS history only on the *free* subspace
 - preventing curvature pairs from mixing components that are pinned to
 the box.
@@ -35,14 +35,36 @@ sweepx.opt.optim.LBFGSB(
     preconditioner=None,            # optional H_0
     line_search="strong_wolfe",
     c1=1e-4, c2=0.9,
-    alpha_init=1.0, alpha_max=10.0,
+    alpha_init=1.0, alpha_max=10.0, # multiply d = -H_k g
     max_ls_iter=25,
+    initial_step=None,              # first trial without history, parameter units
     restart_every=None,
     active_tol=0.0,
 )
 ```
 
-A closure is required.
+A closure is required. `preconditioner` and `initial_step` work as in
+[L-BFGS-FWI](lbfgs.md): $H_0 = \gamma_k P$, and `initial_step` sizes the
+first trial of a search that has no stored pairs, in parameter units.
+
+## Drop-in usage
+
+```python
+import sweepx.opt
+
+vp = init_vp.clone().requires_grad_(True)
+opt = sweepx.opt.optim.LBFGSB([vp], bounds=(1500.0, 5500.0), initial_step=20.0)
+
+def closure():
+    opt.zero_grad()
+    syn = solver(wavelet, sources, receivers, models=[vp])
+    loss = (syn - obs).pow(2).sum()
+    loss.backward()
+    return loss
+
+for _ in range(cfg["epochs"]):
+    opt.step(closure)
+```
 
 ## When to use
 

@@ -26,15 +26,16 @@ class DepthWeighting(Preconditioner):
 
     Args:
         depth_axis: index of the depth axis in the parameter tensor.
-            For sweep's 2-D ``(nx, nz)`` models this is ``-1``; for 3-D
-            ``(nx, ny, nz)`` it is also ``-1``. Default: ``-1``.
+            sweep models are ``(nz, nx)`` in 2-D and ``(nz, ny, nx)`` in 3-D,
+            so this is ``0`` for both (``1`` for a batched ``(B, nz, ...)``
+            tensor). Default: ``0``.
         p: exponent. ``p > 0`` boosts deep components, ``p < 0`` boosts
             shallow. Default: ``1.0``.
         z_max_strategy: ``"size"`` uses the depth-axis size as ``z_max``
             (per Mulder & Plessix); ``"unit"`` normalizes to 1 directly.
     """
 
-    def __init__(self, depth_axis: int = -1, p: float = 1.0,
+    def __init__(self, depth_axis: int = 0, p: float = 1.0,
                  z_max_strategy: str = "size") -> None:
         if z_max_strategy not in ("size", "unit"):
             raise ValueError(f"unknown z_max_strategy: {z_max_strategy!r}")

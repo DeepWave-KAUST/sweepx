@@ -78,3 +78,53 @@ def test_tr_projects_bounds(bounded_quadratic_2d):
     assert (x.detach() >= lo - 1e-9).all()
     assert (x.detach() <= hi + 1e-9).all()
     assert torch.allclose(x.detach(), x_star, atol=1e-2)
+
+
+def test_tr_rejects_nonfinite_trial_and_shrinks():
+    """(x - 2)^2 is NaN past x = 1.5: the full Newton step (to x = 2) must be
+    rejected with a smaller radius, not retried with the same one."""
+    x = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+
+    def loss_fn():
+        return ((x - 2.0) ** 2).sum() + (0.0 * torch.sqrt(1.5 - x)).sum()
+
+    opt = TrustRegion([x], variant="ttr", initial_radius=10.0)
+    opt.step(loss_fn)
+    assert not opt.last_accepted and opt.trust_radius < 10.0 and float(x) == 0.0
+    for _ in range(5):
+        opt.step(loss_fn)
+    assert 0.0 < float(x) <= 1.5
+
+
+def test_tr_trial_point_is_projected_onto_bounds():
+    x = torch.tensor([0.5], dtype=torch.float64, requires_grad=True)
+    seen = []
+
+    def loss_fn():
+        seen.append(float(x))
+        return ((x - 3.0) ** 2).sum()
+
+    opt = TrustRegion([x], variant="ttr", bounds=(0.0, 1.0), initial_radius=10.0)
+    opt.step(loss_fn)
+    assert all(0.0 <= v <= 1.0 for v in seen) and float(x) == 1.0
+
+
+class _FirstOrderOnly(torch.autograd.Function):
+    """sum(x^2) whose backward has no graph - like sweep's impl='c' gradient."""
+
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return (x * x).sum()
+
+    @staticmethod
+    def backward(ctx, grad):
+        (x,) = ctx.saved_tensors
+        return (2.0 * x * grad).detach()
+
+
+def test_tr_rejects_gradient_without_graph():
+    x = torch.tensor([1.0, -1.0], requires_grad=True)
+    opt = TrustRegion([x])
+    with pytest.raises(RuntimeError, match="twice-differentiable"):
+        opt.step(lambda: _FirstOrderOnly.apply(x))

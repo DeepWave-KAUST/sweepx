@@ -14,8 +14,9 @@ flag:
 On top of the stock formulas, every variant accepts:
 
 - `bounds=(lo, hi)` projected after each step,
-- `mask` tensor (or callable returning one) to zero specific gradient
-  components (water-layer freeze, ROI mask, ...),
+- `mask` tensor (or callable returning one) that scales every update,
+  weight decay included, so zeros pin components (water-layer freeze, ROI
+  mask, ...),
 - `amsgrad=True` to use the running max of the second moment,
 - default `eps=1e-22` matching sweep's existing FWI Adam baseline.
 
@@ -39,6 +40,10 @@ sweepx.opt.optim.AdamFWI(
 A closure is **optional** (the closure path matches `torch.optim.Adam`'s
 behaviour: it just recomputes the loss and returns it for tracking).
 
+As for `torch.optim.Adam`, the update is normalized by the running gradient
+magnitude, so `lr` is roughly the change per step in parameter units (m/s for
+a velocity model), whatever the scale of the gradient.
+
 ## Drop-in usage
 
 ```python
@@ -46,14 +51,13 @@ import sweepx.opt
 
 vp = init_vp.clone().requires_grad_(True)
 
-# Water-layer freeze: top 10 grid rows do not update.
-mask = torch.ones_like(vp); mask[:, :10] = 0.0
+# Water-layer freeze: the top 10 grid rows (depth is axis 0 of (nz, nx)) do not update.
+mask = torch.ones_like(vp); mask[:10, :] = 0.0
 
 opt = sweepx.opt.optim.AdamFWI(
     [vp],
     lr=cfg["lr"],
-    variant="adamw",
-    weight_decay=1e-4,
+    variant="adam",
     bounds=(1500.0, 5500.0),
     mask=mask,
 )
@@ -70,7 +74,10 @@ for _ in range(cfg["epochs"]):
 
 - **`adam`** is the safe default and matches the baseline sweep uses today.
 - **`adamw`** is preferred when you also want regularization toward zero
-  (or toward a background, via `PerturbationFromBackground`).
+  (or toward a background, via `PerturbationFromBackground`). Its decay is
+  `lr * weight_decay` of the parameter per step, so on a velocity in m/s it
+  pulls the whole model toward 0 m/s: `lr=10`, `weight_decay=1e-4` take
+  2 m/s per step off a 2000 m/s cell. Use it on a perturbation instead.
 - **`radam`** stabilizes the early steps when the gradient variance is
   high (e.g. stochastic source encoding with very small batches).
 - **`nadam`** trades a little extra cost for slightly faster convergence

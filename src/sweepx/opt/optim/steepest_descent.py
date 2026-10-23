@@ -11,9 +11,12 @@ from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import (
+    check_initial_step,
+    scaled_bracket,
+    wolfe_step,
+)
 
 
 class SteepestDescent(Optimizer):
@@ -30,7 +33,8 @@ class SteepestDescent(Optimizer):
        ``d = -P g_k``. A closure is required.
 
     Bounds, when supplied as ``bounds=(lo, hi)``, are enforced by an in-place
-    ``clamp_(lo, hi)`` on every parameter after each update (projected gradient).
+    ``clamp_(lo, hi)`` on every parameter after each update (projected
+    gradient); with the line search every trial point is projected as well.
 
     A preconditioner, when supplied, must follow the
     :class:`sweepx.opt.precond.base.Preconditioner` contract: it is called
@@ -38,14 +42,23 @@ class SteepestDescent(Optimizer):
 
     Args:
         params: iterable of parameter tensors (or torch param-groups).
-        lr: step size used when ``line_search`` is ``None``.
+        lr: step size used when ``line_search`` is ``None``. The step is
+            ``lr * P g``, so ``lr`` carries the units of parameter / gradient.
         bounds: optional ``(lo, hi)`` box-projection enforced after each step.
         preconditioner: optional callable applied to the gradient before the
             step direction is computed.
         line_search: ``None`` for fixed-lr SD, or ``"strong_wolfe"`` for
             Wolfe-controlled step length.
         c1, c2, alpha_init, alpha_max, max_ls_iter: Wolfe parameters; ignored
-            when ``line_search`` is ``None``.
+            when ``line_search`` is ``None``. ``alpha`` multiplies ``d = -P g``.
+        initial_step: size of the first line-search trial of the first step,
+            in parameter units (``max |alpha_0 P g| = initial_step``). Later
+            searches start from ``alpha_{k-1} g_{k-1}.d_{k-1} / g_k.d_k``
+            (Nocedal & Wright eq. 3.60); no trial changes a parameter by more
+            than ``alpha_max / alpha_init`` times ``initial_step``. ``None``
+            (default) starts every search at ``alpha_init``, which does not
+            move parameters with tiny gradients, such as a velocity model in
+            m/s. Only valid with ``line_search="strong_wolfe"``.
 
     References:
         Nocedal, J., and Wright, S. J. (2006). Numerical Optimization, 2nd ed.,
@@ -65,11 +78,17 @@ class SteepestDescent(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        initial_step: Optional[float] = None,
     ) -> None:
         if lr <= 0.0:
             raise ValueError(f"lr must be positive, got {lr}")
         if line_search not in (None, "strong_wolfe"):
             raise ValueError(f"unknown line_search: {line_search!r}")
+        if line_search is None and initial_step is not None:
+            raise ValueError(
+                "initial_step sizes the line search; with line_search=None the "
+                "step is lr * P g (pass line_search='strong_wolfe' or drop initial_step)"
+            )
         super().__init__(params, dict(lr=lr))
         self.bounds = bounds
         self.preconditioner = preconditioner
@@ -79,6 +98,8 @@ class SteepestDescent(Optimizer):
         self.alpha_init = alpha_init
         self.alpha_max = alpha_max
         self.max_ls_iter = max_ls_iter
+        self.initial_step = check_initial_step(initial_step)
+        self._prev_alpha_dphi: Optional[float] = None  # alpha_{k-1} g_{k-1}.d_{k-1}
 
     # ------------------------------------------------------------------ utils
     def _project(self) -> None:
@@ -152,20 +173,24 @@ class SteepestDescent(Optimizer):
                 # Even -g is not descent (numerical zero gradient); skip step.
                 return loss
 
-        def eval_alpha(alpha: float):
-            write_flat_to_params(self.param_groups, x0 + alpha * d)
+        def evaluate():
             with torch.enable_grad():
                 ll = closure()
-            new_g = flat_grads(self.param_groups)
-            return float(ll.detach()), float(torch.dot(new_g, d))
+            return float(ll.detach()), flat_grads(self.param_groups)
 
-        alpha_star, _ = strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        if self.initial_step is None:
+            alpha0, alpha_max = self.alpha_init, self.alpha_max
+        else:
+            alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
+            if self._prev_alpha_dphi is not None:
+                # Nocedal & Wright eq. 3.60, inside the same bracket.
+                alpha0 = min(self._prev_alpha_dphi / init_dphi, alpha_max)
+        # Leaves the parameters at the projected x0 + alpha* d.
+        alpha_star = wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="SteepestDescent", step_hints=True, initial_step=self.initial_step,
         )
-        # eval_alpha already wrote params at the final alpha; just project.
-        self._project()
+        self._prev_alpha_dphi = alpha_star * init_dphi if alpha_star > 0.0 else None
         return loss
