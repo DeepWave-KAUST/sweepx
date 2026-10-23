@@ -730,6 +730,14 @@ class FWIRunnerMixin:
                         dt=effective_dt, nt=effective_nt,
                     )
                     break
+        if pristine_physical_geom is None and _obs_plan_mat:
+            # Same for obs.plan: the materialised indices are rounded to the
+            # native grid, and re-snapping those at a coarser dh puts shots on
+            # half cells and merges neighbours (25 m from 12.5 m: 1001 -> 503).
+            pristine_physical_geom = PhysicalGeometry(
+                sources_xyz_m=_mat["sources_m"], receivers_xyz_m=_mat["receivers_m"],
+                dt=effective_dt, nt=effective_nt,
+            )
         if pristine_physical_geom is None:
             pristine_physical_geom = PhysicalGeometry(
                 sources_xyz_m=sources.astype("float64") * float(spec.grid.dh),

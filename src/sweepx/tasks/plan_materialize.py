@@ -41,6 +41,17 @@ def _stamp(msg: str, t0: float, *, verbose: bool) -> float:
     return now
 
 
+def _file_stamp(path) -> list | None:
+    """``[size, mtime_ns]`` of a file, so rewriting it in place misses the cache."""
+    if path is None:
+        return None
+    try:
+        st = os.stat(Path(path).expanduser())
+    except OSError:
+        return None
+    return [int(st.st_size), int(st.st_mtime_ns)]
+
+
 def _cache_key(spec, init_models, *, effective_dt, effective_nt, source_delay_s) -> str:
     """Stable hash of everything that determines the materialised dataset."""
     geom = spec.geometry
@@ -48,18 +59,19 @@ def _cache_key(spec, init_models, *, effective_dt, effective_nt, source_delay_s)
     mp = spec.model_plan
     payload = {
         "plan": str(geom.plan_path),
+        "plan_stamp": _file_stamp(geom.plan_path),
         "rot": str(geom.rotation_metadata),
+        "rot_stamp": _file_stamp(geom.rotation_metadata),
         "dh_xyz": list(geom.dh_xyz_m) if geom.dh_xyz_m else None,
+        "dh": float(spec.grid.dh),
         "origin": (list(geom.grid_origin_xyz_m) if geom.grid_origin_xyz_m else None),
         "pad": list(geom.auto_origin_pad_cells or (0, 0, 0)),
-        # Identify the vp source in a way that is stable across all three
-        # ModelRef sources, so a dataset-backed run gets its own cache slot.
-        "init_vp": next((f"path:{m.path}" if m.path is not None else
-                         f"dataset:{m.dataset}:{m.preset}:{m.downsample}"
-                         if m.dataset is not None else f"const:{m.constant}")
-                        for m in init_models if m.name == "vp"),
-        "smooth": next((m.smooth_sigma_cells for m in init_models
-                        if m.name == "vp"), None),
+        "lift": getattr(geom, "lift_source_to_water_vp", None),
+        # Every field of every starting model: the cached crops REPLACE the
+        # starting models, so any source / linear_gradient / shape / smoothing
+        # change (or an .npy rewritten in place) must miss.
+        "init_models": [{**m.model_dump(mode="json"), "stamp": _file_stamp(m.path)}
+                        for m in init_models],
         "nrec": ocfg.n_receivers_per_shot,
         "select": ocfg.receiver_select,
         "max_shots": ocfg.max_shots,
@@ -90,6 +102,10 @@ def materialize_plan_dataset(
       ``sources``        (nshots, 3) int64 grid indices (x, y, z);
                          (nshots, 2) as (x, z) when the model is 2-D
       ``receivers``      (nshots, nrec, 3) int64 grid indices; (…, 2) when 2-D
+      ``sources_m`` / ``receivers_m``
+                         the same positions in metres from grid index 0,
+                         before rounding (float64, same layout) — what a
+                         stage at another dh must re-snap
       ``obs``            (nshots, nt, nrec, 1) float32 numpy (canonical layout)
       ``shape``          (nz, ny, nx) of the cropped model; (nz, nx) when 2-D
       ``cropped_models`` {name: cropped float32 array}  (model_plan applied)
@@ -116,6 +132,8 @@ def materialize_plan_dataset(
             out = {
                 "sources": np.load(cache_dir / "sources.npy"),
                 "receivers": np.load(cache_dir / "receivers.npy"),
+                "sources_m": np.load(cache_dir / "sources_m.npy"),
+                "receivers_m": np.load(cache_dir / "receivers_m.npy"),
                 # Full RAM load (sequential, fast) rather than mmap: avoids
                 # per-iter Lustre paging on slow GPU nodes + the non-writable
                 # torch.from_numpy warning.
@@ -229,6 +247,11 @@ def materialize_plan_dataset(
             np.rint((z_raw - origin_z) / dz_m).astype(np.int64),
         ], axis=-1)
 
+    def _metres(model_xy, z_raw):
+        # What _project rounds: (x, y, z) metres from grid index 0.
+        return np.stack([model_xy[:, 0] - origin_x, model_xy[:, 1] - origin_y,
+                         z_raw - origin_z], axis=-1)
+
     rec_grid = _project(rec_model_xy, rec_xyz_raw[:, 2])
     src_grid = _project(src_model_xy, src_xyz_raw[:, 2])
     t = _stamp(f"grid projection + crop -> shape (nz,ny,nx)=({nz},{ny},{nx})", t, verbose=verbose)
@@ -261,6 +284,8 @@ def materialize_plan_dataset(
                   f"{n_oob_groups} OOB groups -> n_rows={plan.n_rows:,} n_groups={plan.n_groups}",
                   flush=True)
     t = _stamp("in-window filter", t, verbose=verbose)
+    rec_m = _metres(rec_model_xy, rec_xyz_raw[:, 2])
+    src_m = _metres(src_model_xy, src_xyz_raw[:, 2])
 
     # ---- 4b) lift CRG sources off the seabed sediment cell into water ------
     # OBN node depths snap onto the discretized seabed (often the first sediment
@@ -277,8 +302,10 @@ def materialize_plan_dataset(
         sb = np.full(src_grid.shape[0], nz, dtype=np.int64)
         sb[inb] = seabed_iz[sy[inb], sx[inb]]
         lifted = np.maximum(np.minimum(src_grid[:, 2], sb - 1), 0)
+        moved = lifted != src_grid[:, 2]
         n_lifted = int((lifted < src_grid[:, 2]).sum())
         src_grid[:, 2] = lifted
+        src_m[moved, 2] = lifted[moved] * dz_m
         if verbose:
             print(f"[materialize] lifted {n_lifted}/{src_grid.shape[0]} sources to water "
                   f"(vp!={wv:g}); seabed_iz [{int(seabed_iz.min())},{int(seabed_iz.max())}]", flush=True)
@@ -296,7 +323,7 @@ def materialize_plan_dataset(
                                        replace=False))
 
     sel_rows_per_shot: list[np.ndarray] = []   # absolute plan-row indices
-    kept_src_grid: list[np.ndarray] = []
+    kept_groups: list[int] = []
     n_dropped = 0
     for g in group_ids:
         sl = plan.group_slice(int(g))
@@ -335,7 +362,7 @@ def materialize_plan_dataset(
                 pick = rng.choice(uniq_rows.size, size=int(nrec), replace=False)
                 uniq_rows = np.sort(uniq_rows[pick])
         sel_rows_per_shot.append(uniq_rows)
-        kept_src_grid.append(src_grid[int(g)])
+        kept_groups.append(int(g))
 
     if not sel_rows_per_shot:
         raise ValueError("materialize: no shots survived receiver selection "
@@ -349,8 +376,10 @@ def materialize_plan_dataset(
         nrec = sel_rows_per_shot[0].size
 
     nshots = len(sel_rows_per_shot)
-    sources = np.stack(kept_src_grid, axis=0).astype(np.int64)             # (nshots, 3)
+    sources = src_grid[kept_groups].astype(np.int64)                       # (nshots, 3)
     receivers = np.stack([rec_grid[r] for r in sel_rows_per_shot], axis=0).astype(np.int64)
+    sources_m = src_m[kept_groups]
+    receivers_m = np.stack([rec_m[r] for r in sel_rows_per_shot], axis=0)
     if verbose:
         print(f"[materialize] selected nshots={nshots} x nrec={nrec} "
               f"(dropped {n_dropped} groups; grouping={plan.grouping})", flush=True)
@@ -419,6 +448,8 @@ def materialize_plan_dataset(
     if is_2d:
         sources = np.ascontiguousarray(sources[:, [0, 2]])
         receivers = np.ascontiguousarray(receivers[..., [0, 2]])
+        sources_m = np.ascontiguousarray(sources_m[:, [0, 2]])
+        receivers_m = np.ascontiguousarray(receivers_m[..., [0, 2]])
         cropped_models = {k: np.ascontiguousarray(v[:, 0, :])
                           for k, v in cropped_models.items()}
         shape_out = (int(nz), int(nx))
@@ -434,6 +465,8 @@ def materialize_plan_dataset(
         tmp.mkdir(parents=True, exist_ok=True)
         np.save(tmp / "sources.npy", sources)
         np.save(tmp / "receivers.npy", receivers)
+        np.save(tmp / "sources_m.npy", sources_m)
+        np.save(tmp / "receivers_m.npy", receivers_m)
         np.save(tmp / "obs.npy", obs_canon)
         for k, v in cropped_models.items():
             np.save(tmp / f"model_{k}.npy", v)
@@ -458,6 +491,8 @@ def materialize_plan_dataset(
     return {
         "sources": sources,
         "receivers": receivers,
+        "sources_m": sources_m,
+        "receivers_m": receivers_m,
         "obs": obs_canon,
         "shape": shape_out,
         "cropped_models": cropped_models,
