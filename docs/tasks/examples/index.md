@@ -19,7 +19,7 @@ reference run produced, so you can check your own run against something.
 | [Frequency-selection FWI, 3-D](freqsel-3d.md) | 13, 14 | the same pipeline on 3-D Overthrust |
 | [Anisotropic and elastic](multiparameter.md) | 16, 17 | multi-parameter equations: VTI, and P + S in one record |
 | [Introspection](introspect.md) | 15 | ask the installed solver what it can do |
-| [Viking (field data)](../datasets/viking/README.md) | `examples/tasks/field/viking/` | real SEG-Y: build-index → wavelet → FWI → RTM |
+| [Viking (field data)](../datasets/viking/README.md) | `examples/tasks/field/viking/` | real SEG-Y: build-index → build-plan → extract-coeff → frequency-selection FWI |
 
 New to task YAMLs? Read [09](forward.md#09-the-smallest-task-there-is) first:
 it annotates every field. On a new machine, run [15](introspect.md) first: it

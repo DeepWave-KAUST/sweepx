@@ -1,116 +1,65 @@
-# Viking 2-D — end-to-end example
+# Viking 2-D — frequency-selection FWI from the raw SEG-Y
 
-Reproduces the **Mobil AVO Viking Graben (line 12)** FWI + RTM result
-with the sweep-tasks CLI, starting from the public download and
-ending at a filtered RTM image. The walkthrough below assumes you are
-running **locally on a single workstation with one GPU** — no SLURM,
-no cluster filesystem layout. A short [§ Running on a cluster
-(optional)](#running-on-a-cluster-optional) appendix at the end shows
-the ibex-style sbatch entry points if you want them.
+Inverts the **Mobil AVO Viking Graben (line 12)** pre-stack data with the
+sweep-tasks CLI, from the public download to an inverted velocity model. The
+inversion is frequency-selection FWI (Tromp & Bachmann 2019): every shot
+radiates its own frequencies continuously, all 1001 shots go into one forward
+per iteration, and the misfit needs no source wavelet. The walkthrough assumes
+**one workstation with one GPU**; [§ Running on a cluster](#running-on-a-cluster-optional)
+at the end gives the sbatch template that runs the same steps.
 
 ```
-download → build-index → build-plan ┐
-                                     ├─ wavelet (legacy) ┐
-                                     └─ initial model (legacy) ┤
-                                                                └─ FWI → RTM → filter-image
+download → build-index → build-plan → extract-coeff (6 bands) → sweep-tasks run
+             (Step 1)      (Step 2)        (Step 4)                (Step 5)
 ```
 
-The end-to-end pipeline matches the legacy `fwi_workflow-dev`
-reference number-for-number. Indexing, plan-building, wavelet
-estimation (rank-1 average + SIREN/sweep refinement), FWI, RTM, and
-the depth-tapered post-filter all live inside `sweep-tasks`; only the
-**initial velocity model** builder is still served by a legacy
-script (TODO: port, see [§ Roadmap](#roadmap)).
+Every file this needs is either downloaded in Step 0 or written by an earlier
+step. The two files in this repository it uses are
+[`examples/tasks/field/viking/pipeline_config.yaml`](https://github.com/DeepWave-KAUST/sweepx/blob/main/examples/tasks/field/viking/pipeline_config.yaml)
+(Steps 1-2) and
+[`examples/tasks/field/viking/viking_freqsel_allteeth.yaml`](https://github.com/DeepWave-KAUST/sweepx/blob/main/examples/tasks/field/viking/viking_freqsel_allteeth.yaml)
+(Step 5).
 
 ## Visual tour — what each step produces
 
-**Every** `sweep-tasks` command in the pipeline writes at least one
-preview PNG by default (use `--no-qc-png` or `--no-plot` to disable).
-Only the steps verified end-to-end against the Viking dataset are
-shown below; the remaining steps (3b, 3d, 6, 7) will be added once a
-clean reference run is captured.
-
-| Step | One-line product | Visual |
+| Step | Product | Visual |
 |---|---|---|
-| 1 `build-index`         | SEG-Y per-trace catalog (3-panel geometry QC) | ![index QC](figures/sweep_tasks_smoke/build_index_qc.png) |
-| 2 `build-plan`          | Filtered + grouped plan (3-panel filter QC)   | ![plan QC](figures/sweep_tasks_smoke/build_plan_qc_full.png) |
-| 3a `analyze-wavelet`    | Robust direct-wave average across all shots   | ![overlay](figures/sweep_tasks_smoke/analyze_wavelet_overlay_1001shot.png) |
-| 3c `convert-farfield`   | Far-field signature (QC reference)            | ![farfield](figures/sweep_tasks_smoke/convert_farfield_qc.png) |
-| 5 freqsel FWI           | Inverted vp from a 1-D cold start, 10 min     | ![inverted](figures/05_freqsel_inverted.png) |
+| 1 `build-index` | SEG-Y per-trace catalog (3-panel geometry QC) | ![index QC](figures/01_build_index_qc.png) |
+| 2 `build-plan`  | Grouped plan of all 1001 shots (3-panel QC)   | ![plan QC](figures/02_build_plan_full_qc.png) |
+| 5 `sweep-tasks run` | Inverted vp, 6 bands from 3-7 Hz to 3-16 Hz | ![inverted](figures/05_freqsel_allteeth_vp.png) |
 
 ---
 
 ## Prerequisites
 
 1. **sweepx installed**, which brings the solver along and puts the
-   `sweep-tasks` command used below on your PATH:
+   `sweep-tasks` command used below on your PATH, and **a checkout of this
+   repository** for the two example files:
 
    ```bash
-   pip install "sweepx[segy]"      # or, from a checkout of this repo: pip install -e ".[segy]"
+   git clone https://github.com/DeepWave-KAUST/sweepx.git $HOME/sweepx
+   pip install -e "$HOME/sweepx[segy]"
+   export SWEEPX=$HOME/sweepx
    ```
 
-2. **One CUDA-capable GPU.** Anything with ≥ 16 GB works for Viking
-   at the 12.5 m grid (24 GB recommended for the full 6-stage ladder).
-   Sanity check:
+2. **One CUDA-capable GPU** with at least 16 GB. Sanity check:
 
    ```bash
    python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
    ```
 
 3. **Working directory.** Pick one writable folder for the whole
-   pipeline; the doc uses `$VIKING_HOME` everywhere. Around 5 GB free
-   is plenty (SEG-Y 750 MB + outputs ~3 GB).
+   pipeline; the doc and both example files use `$VIKING_HOME` everywhere.
+   About 8 GB free is enough (SEG-Y 750 MB, six coefficient shards of
+   0.96 GB each, run outputs ~0.6 GB).
 
    ```bash
    export VIKING_HOME=$HOME/viking          # change to taste
    mkdir -p $VIKING_HOME/{raw,run}
    ```
 
-   - `$VIKING_HOME/raw` will hold the downloaded SEG-Y + far-field.
-   - `$VIKING_HOME/run` will hold the index, the plan, FWI / RTM
-     outputs.
-
-That's all the environment setup. No `SWEEP_*_ROOT` / `PROJECT_DATA_ROOT`
-exports are needed for local single-GPU runs — those variables only
-matter for the cluster sbatch templates discussed at the bottom of
-this file.
-
-### One file drives every step — `sweep-tasks init viking`
-
-Every command in Steps 1–3d below accepts **either** a forest of CLI
-flags **or** `--config viking.yaml` (one YAML, sections per step).
-This is the recommended path — no 30-flag invocations to remember.
-Generate the starter config with `sweep-tasks init`:
-
-```bash
-sweep-tasks init -o $VIKING_HOME/viking.yaml
-# wrote 'viking' template -> /home/you/viking/viking.yaml
-# next: edit the paths inside (especially $VIKING_HOME / $HOME), then run:
-#        sweep-tasks build-index --config /home/you/viking/viking.yaml
-```
-
-(`sweep-tasks init --list` shows what's bundled. Three templates ship
-today: `viking` (wavelet pipeline, default), `fwi` (FWI task YAML
-for `sweep-tasks run`), `rtm` (RTM task YAML). Run without `-o` to
-dump to stdout and pipe / edit directly.)
-
-The generated YAML has one section per subcommand (`build_index:`,
-`build_plan:`, `analyze_wavelet:`, `estimate_wavelet:`,
-`convert_farfield:`, `plot_wavelet_steps:`) plus a `common:` block
-for shared defaults. **All paths inside use `$VIKING_HOME`** so
-once that env var is set the file is usable as-is. Open the file
-and adjust any value you want different from the canonical Viking
-defaults; saving / re-running is enough — no re-init needed.
-
-**CLI flags override YAML**, so you can adjust one knob at a time
-without editing the file:
-
-```bash
-sweep-tasks analyze-wavelet --config $VIKING_HOME/viking.yaml --shot-stop 50
-```
-
-The step-by-step sections below show the `--config` form as the
-primary command and list the full CLI alternative when relevant.
+   - `$VIKING_HOME/raw` holds the downloads (SEG-Y and starting model).
+   - `$VIKING_HOME/run` holds the index, the plan, the shards and the FWI run.
 
 ---
 
@@ -125,6 +74,7 @@ in the `viking_graben_line12/` folder of the Hugging Face dataset
 The data are in the public domain (terms of use on the data set's
 [SEG wiki page](https://wiki.seg.org/wiki/Mobil_AVO_viking_graben_line_12)); cite Keys and
 Foster (1998), [doi:10.1190/1.9781560802082.ch1](https://doi.org/10.1190/1.9781560802082.ch1).
+The same folder holds the FWI starting model used in Step 3.
 
 ```bash
 cd $VIKING_HOME/raw
@@ -133,15 +83,14 @@ ZENODO=https://zenodo.org/records/23481108/files
 HF=https://huggingface.co/datasets/shaowinw/seismic-benchmark-models/resolve/main/viking_graben_line12
 get() { curl -fL -O "$ZENODO/$1" || curl -fL -O "$HF/$1"; }   # Zenodo first, then Hugging Face
 
-# Pre-stack SEG-Y (750 MB) — the only file FWI / RTM strictly need.
-get seismic.segy
+# What this example needs.
+get seismic.segy                   # pre-stack SEG-Y, 750 MB
+get viking_initial_vp_12.5m.npy    # FWI starting model (Step 3), 5.8 MB
 
-# Far-field source signature (ASCII, one sample per line; dt = 4 ms).
-get FarField.dat
-
-# Optional auxiliary material.
-get mobil_wellogs.tar        # well logs (LIS)
+# Optional material of the original release.
+get FarField.dat             # far-field source signature (ASCII, dt = 4 ms)
 get FarField.jpg             # plot of the far-field signature
+get mobil_wellogs.tar        # well logs (LIS)
 get README.txt
 get sufirst.job              # Seismic Unix: SEG-Y -> SU, print headers
 get TERMS_OF_USE.txt
@@ -153,18 +102,18 @@ are not re-hosted; the Internet Archive keeps them:
 [well-log plots](https://web.archive.org/web/20250527002516/https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/Mobil_migration_well_logs.pdf)
 and the [front matter of SEG Open File Publication No. 4](https://web.archive.org/web/20250527010149/https://s3.amazonaws.com/open.source.geoscience/open_data/Mobil_Avo_Viking_Graben_Line_12/284E_frontmatter.pdf).
 
-Check the bundle:
+Check the two files the example needs:
 
 ```bash
 sha256sum -c <<'EOF'
 64cbb49796b940717c57cddf5c7e0130b56df7061009a770565bdd0978cfccf3  seismic.segy
-ed57339125285905933984a4518ada58ad41b0697d2cdc43c1bf48412144a1df  FarField.dat
+ffaa4bb07d9a91fe475e4ecee5232a9b977a1f57d5966e2aaee55e069aa2dea6  viking_initial_vp_12.5m.npy
 EOF
-ls -l seismic.segy FarField.dat           # 749,552,400 and 8,500 bytes
+ls -l seismic.segy viking_initial_vp_12.5m.npy   # 749,552,400 and 5,849,728 bytes
 ```
 
-That byte count is not approximate — it is exactly what the headers imply, so
-it doubles as an integrity check:
+The SEG-Y byte count is not approximate — it is exactly what the headers imply,
+so it doubles as an integrity check:
 
 ```
 3600 + 120120 x (240 + 1500 x 4) = 749,552,400
@@ -189,7 +138,7 @@ not from the reel stationery.
 | Record length | 6.0 s |
 | Sample format | 1 (IBM 32-bit float) |
 | FFID range | 3 to 1003 |
-| Shot interval | 25 m |
+| Shot interval | 25 m (nominal; four gaps of 75-100 m) |
 | Group interval | 25 m |
 | Offset range | -262 m (near) to -3,237 m (far) |
 | Source x | 3,237 to 28,512 m |
@@ -198,22 +147,25 @@ not from the reel stationery.
 `sy = gy = 0` for every trace — the line is genuinely 2-D in x. SEG-Y
 coordinate scalar = 1 (so `sx, sy, gx, gy` are already metres) and
 coord-units = 3 (m). **Source / receiver depth bytes are zero**, so
-Step 1 below injects the canonical Viking acquisition constants:
-airgun array at **6 m**, streamer at **10 m**.
+Step 1 below injects the Viking acquisition constants: airgun array at
+**6 m**, streamer at **10 m**.
 
 ---
 
 ## Step 1 — `sweep-tasks build-index`
 
-Scans every SEG-Y trace header in parallel and writes a tiny
-per-trace catalog. Run **once**; the same index serves every plan
-you build later.
+Scans every SEG-Y trace header in parallel and writes a small per-trace
+catalog. Run **once**; the same index serves every plan you build later.
+Steps 1 and 2 read their settings from one pipeline config, one section per
+command:
 
 ```bash
-sweep-tasks build-index --config $VIKING_HOME/viking.yaml
+sweep-tasks build-index --config $SWEEPX/examples/tasks/field/viking/pipeline_config.yaml
 ```
 
-Or, equivalently, all-CLI:
+(`sweep-tasks init viking -o viking.yaml` writes the same two sections plus
+sections for the wavelet tools, which this example does not use.) Or,
+equivalently, all-CLI:
 
 ```bash
 sweep-tasks build-index \
@@ -225,8 +177,8 @@ sweep-tasks build-index \
     --progress
 ```
 
-`--num-workers 8` finishes Viking in ~10 s on a laptop CPU; bump it
-to whatever your machine has. (The `-n N` MPI shortcut covered in
+With `--num-workers 8` the scan itself takes about half a second on Viking;
+the command is done in seconds. (The `-n N` MPI shortcut covered in
 [`docs/tasks/cli_workflow.md`](../../cli_workflow.md) is for much larger
 3-D surveys — Viking does not need it.)
 
@@ -240,39 +192,28 @@ to whatever your machine has. (The `-n N` MPI shortcut covered in
 [build-index] QC PNG -> /…/viking_index_qc.png
 ```
 
-Wall time end-to-end (process startup + scan + npz + PNG): **14 s** measured
-here (8.6 s of that is the scan itself, 8 threads).
-
 **Outputs**
 
 - `$VIKING_HOME/run/viking_index.npz` (~300 KB) — per-trace `file_id`,
-  `byte_offset`, `ffid`, `sx/sy/sz`, `gx/gy/gz`. `source_depth_m` and
-  `receiver_depth_m` arrays are constant at 6 m / 10 m (overrides).
+  `byte_offset`, `shot_id`, `receiver_id` and positions `sx_m/sy_m/sz_m`,
+  `rx_m/ry_m/rz_m` in metres; `sz_m` and `rz_m` are constant at the injected
+  6 m / 10 m.
 - `viking_index_qc.png` (~100 KB) — 3-panel acquisition geometry
-  preview (pass `--no-qc-png` to skip).
-
-The QC PNG (see Visual tour above) is a 3-panel preview: plan-view
-(sources red, receivers blue — Viking is a 2-D line so both
-collapse to single tracks along x); source & receiver depth
-histograms (sharp peaks at 6 m / 10 m — the constants we injected
-via `--source-depth-m` / `--receiver-depth-m`); per-shot trace-count
-histogram (perfectly flat 120 traces × 1001 shots).
+  preview (pass `--no-qc-png` to skip): plan view (sources red, receivers
+  blue, both on one track along x), source and receiver depth histograms
+  (sharp peaks at the injected 6 m / 10 m), and the per-shot trace count
+  (a flat 120 traces × 1001 shots).
 
 Verify programmatically with:
 
-```python
->>> from sweepx.io.segy_index import SEGYIndex
->>> idx = SEGYIndex.load("$VIKING_HOME/run/viking_index.npz")
->>> idx.n_traces, idx.n_shots, idx.dt_s, idx.n_samples
-(120120, 1001, 0.004, 1500)
->>> idx.sx_m.min(), idx.sx_m.max()      # positions are sx_m / rx_m, in metres
-(3237.0, 28512.0)
+```bash
+python -c "from sweepx.io.segy_index import SEGYIndex; \
+           idx=SEGYIndex.load('$VIKING_HOME/run/viking_index.npz'); \
+           print(idx.n_traces, idx.n_shots, idx.dt_s, idx.n_samples); \
+           print(float(idx.sx_m.min()), float(idx.sx_m.max()))"
+# 120120 1001 0.004 1500
+# 3237.0 28512.0
 ```
-
-Measured on this index, every row of the acquisition table above checks out:
-1001 shots of exactly 120 traces, 25 m shot and group interval, |offset|
-262-3237 m, `sy = ry = 0`, and `sz / rz` constant at the 6 m / 10 m injected
-by the flags.
 
 ![build-index QC](figures/01_build_index_qc.png)
 
@@ -280,14 +221,12 @@ by the flags.
 
 ## Step 2 — `sweep-tasks build-plan`
 
-Filters + groups the index into a `seismic_plan_v1` npz that declares
-**exactly which trace bytes FWI will read**. Plans are cheap to rebuild
-— iterate freely on shot subsets, offset windows, sub-sampling, etc.
-
-### Full CSG plan (all 1001 shots × 120 receivers)
+Groups the index into a `seismic_plan_v1` npz that declares **exactly which
+trace bytes the inversion will read**. Here the plan is every trace, grouped
+by shot (common-shot gathers, CSG):
 
 ```bash
-sweep-tasks build-plan --config $VIKING_HOME/viking.yaml
+sweep-tasks build-plan --config $SWEEPX/examples/tasks/field/viking/pipeline_config.yaml
 ```
 
 Or all-CLI:
@@ -300,658 +239,236 @@ sweep-tasks build-plan \
     --label    "viking_full_csg"
 ```
 
-### 3 km offset cap (for the RTM in Step 6)
-
-```bash
-sweep-tasks build-plan \
-    --index         $VIKING_HOME/run/viking_index.npz \
-    --grouping      csg \
-    --offset-max-m  3000 \
-    --out           $VIKING_HOME/run/viking_csg_3km.npz \
-    --label         "viking_csg_offset_le_3000m"
-```
-
-**Measured here** (5.2 s and 4.7 s respectively, index load included):
-
-| plan | groups | rows | \|offset\| | rows / group |
-|---|---|---|---|---|
-| full CSG | 1001 | 120,120 | 262 – 3237 m | 120 |
-| 3 km cap | 1001 | **110,110** | 262 – **2987** m | **110** |
-
-The cap drops 10,010 rows — 8.3 % of the survey, ten channels off the tail of
-every shot — and empties no group, which is what you want a filter to do.
-
-Each `build-plan` invocation also writes `<out>_qc.png` next to the
-npz (pass `--no-qc-png` to skip). The PNG shows *what survived your
-filters* in three panels: group-center scatter (with **dropped
-groups underlaid in gray** when an `--index` is supplied), per-row
-offset histogram, and rows-per-group histogram.
-
-![build-plan QC, 3 km cap](figures/02_build_plan_3km_qc.png)
-
-The regular white gaps in the offset histogram are not missing data: the group
-interval is 25 m, so offsets only ever take multiples of 25 m and some
-histogram bins have nothing that can land in them.
-
-#### Inspect programmatically
+The plan holds **1,001 CSG groups (shots) × 120 traces each = 120,120 rows**,
+~8 MB. It carries the source and receiver coordinates of every row and the
+byte offset of its trace, so Step 4 never parses a SEG-Y header again.
+`build-plan` also writes `viking_csg_plan_qc.png` next to the npz (pass
+`--no-qc-png` to skip): group centres, the offset histogram and the
+rows-per-group histogram.
 
 ```bash
 python -c "from sweepx.io.seismic_plan import SeismicPlan; \
            p=SeismicPlan.load('$VIKING_HOME/run/viking_csg_plan.npz'); \
-           print(p.grouping, p.n_groups, p.n_rows); print(p.build_meta)"
+           print(p.grouping, p.n_groups, p.n_rows)"
+# csg 1001 120120
 ```
 
-Real output on Viking (full CSG plan):
-
-```
-csg 1001 120120
-{'build_meta': 'viking_full_csg', 'index_hash': '…', 'filters': {}}
-```
-
-i.e. **1,001 CSG groups (shots) × 120 traces each = 120,120 rows**.
-
-Full Viking CSG ~8 MB; offset-capped variants smaller. The plan
-carries all four things FWI needs — `row_source_xyz`,
-`row_receiver_xyz`, `row_file_id`, `row_trace_offset` — so Steps 3-6
-never touch the raw SEG-Y header again.
+![build-plan QC](figures/02_build_plan_full_qc.png)
 
 ---
 
-## Step 3 — Source wavelet
-
-The wavelet that the FWI / RTM YAMLs reference is produced by a
-**two-stage chain**:
-
-```
-3a. rank-1 robust direct-wave average
-       (per-shot estimate × 1001 shots → polarity-aligned → robust mean)
-              │   average_direct_wavelet.npz
-              ▼
-3b. SIREN LBFGS prefit + sweep wave-equation refinement
-       (SIREN MLP fits 3a, then refines via Acoustic forward solve)
-              │   estimated_wavelet.npz   ← feeds FWI / RTM
-              ▼
-Optional: FarField.dat ASCII → npz (for QC comparison) ; 4-step pipeline plot
-```
-
-All four sub-stages are native `sweep-tasks` subcommands now:
-`analyze-wavelet`, `estimate-wavelet`, `convert-farfield`,
-`plot-wavelet-steps`. Input is the CSG `SeismicPlan` you built in
-Step 2; output `estimated_wavelet.npz` plugs directly into the
-`wavelet:` block of every FWI / RTM YAML in Steps 5 / 6.
-
-### What goes in / what comes out
-
-| Stage | Input | Output | Measured cost on Viking |
-|---|---|---|---|
-| 3a `analyze-wavelet`      | SeismicPlan + SEG-Y                         | `average_direct_wavelet.npz` | CPU, **~15 s** (1001 shots, 8 threads) |
-| 3b `estimate-wavelet`     | SeismicPlan + SEG-Y + 3a's npz              | `estimated_wavelet.npz`      | 1 GPU, ~15-30 min (1001-shot V100 reference) |
-| 3c `convert-farfield`     | `FarField.dat` (ASCII)                      | `farfield_wavelet.npz`       | CPU, **~1 s** |
-| 3d `plot-wavelet-steps`   | the 3a/3b/3c npz files                       | 4-panel comparison PNG       | CPU, **~3 s** |
-
-### 3a — rank-1 robust direct-wave average
-
-For each shot in [1..1001] the algorithm:
-
-1. picks the **4 nearest-offset receivers** from the plan (offset is
-   `|gx - sx|` per row);
-2. reads those four traces from SEG-Y via the plan's row-byte-offsets;
-3. computes predicted **direct-arrival times** `τ = |offset| / 1500 m/s`;
-4. runs **rank-1 alternation** in a `(-0.05 s, +0.30 s)` window around
-   each predicted arrival: alternately solve for one shared wavelet and
-   per-trace amplitudes, ~25 iterations, until a single common wavelet
-   shape explains all four traces in a least-squares sense;
-5. records a **residual-RMS-ratio** per shot (residual ÷ observed within
-   the direct window).
-
-After all 1001 per-shot wavelets are estimated:
-
-6. drop shots with `residual_ratio > 0.5` (noise / bad picks);
-7. polarity-align the survivors against a preliminary median;
-8. drop shots whose **shape correlation to the preliminary mean < 0.95**;
-9. **average** the surviving wavelets; produce a causal version
-   (zero-pad the leading negative-time samples, peak at `t = 0`).
-
-#### Canonical Viking parameters (used in the reference run)
-
-```yaml
-direct_batch:
-  shot_start: 1
-  shot_stop:  1001
-  shot_stride: 1
-  nearest_receivers: 4
-  water_velocity_m_s: 1500
-  rel_t_min_s: -0.05
-  rel_t_max_s: 0.30
-  iterations: 25
-  min_residual_ratio: 0.5
-  min_shape_corr_to_average: 0.95
-```
-
-#### Command
-
-```bash
-sweep-tasks analyze-wavelet --config $VIKING_HOME/viking.yaml
-```
-
-The YAML's `analyze_wavelet:` block carries the canonical Viking
-parameters shown just above. To override one knob (e.g. test on
-fewer shots), pass it on the CLI — overrides win:
-
-```bash
-sweep-tasks analyze-wavelet --config $VIKING_HOME/viking.yaml --shot-stop 50
-```
-
-Full-CLI form (no YAML) for reference:
-
-```bash
-sweep-tasks analyze-wavelet \
-    --plan        $VIKING_HOME/run/viking_csg_plan.npz \
-    --out-dir     $VIKING_HOME/run/wavelet/direct_batch \
-    --shot-start 1 --shot-stop 1001 --shot-stride 1 \
-    --nearest-receivers 4 \
-    --water-velocity-m-s 1500 \
-    --rel-t-min-s -0.05 --rel-t-max-s 0.30 \
-    --iterations 25 \
-    --min-residual-ratio 0.5 --min-shape-corr-to-average 0.95
-```
-
-CPU-only, no GPU needed. **Wall time on Viking 1001 shots: ~15 s
-(measured end-to-end on a login node, 8 CPU threads).**
-
-#### Outputs (`analysis/`, `average/`)
-
-- `analysis/wavelet_overlay_mean_std.png` — every shot in light gray,
-  ±1σ ribbon in blue, the robust average in dark blue. (This is the
-  Visual-tour thumbnail.)
-- `analysis/wavelet_spectra_mean_std.png` — amplitude spectrum of the
-  same overlay.
-- `analysis/wavelet_residual_after_average.png` — per-sample residual
-  RMS after subtracting the average; sanity check that the rank-1
-  average actually explains each shot.
-- `analysis/wavelet_stats.csv` — per-shot residual / shape-corr /
-  used-in-average flag.
-- `average/average_direct_wavelet.npz` — the robust mean. **This is
-  the input to Step 3b.**
-- `summary.json`, `command.txt`.
-
-#### Reference numbers (Viking 1001 shots, verified end-to-end with `sweep-tasks analyze-wavelet`)
-
-| metric | value |
-|---|---|
-| Shots used in robust average | **984 / 1001** |
-| Median per-shot residual-ratio | **8.2 %** |
-| Median shape-correlation to mean | **0.994** |
-
-Console output for the full run (measured end-to-end):
-
-```
-[analyze-wavelet] plan=/…/viking_csg_plan.npz
-[analyze-wavelet] output_dir=/…/wavelet/direct_batch
-  ...estimated 25 per-shot wavelets so far
-  ...estimated 50 per-shot wavelets so far
-  ...
-  ...estimated 1000 per-shot wavelets so far
-per-shot wavelet stack: (1001, 88)
-[analyze-wavelet] average_wavelet_npz: …/average/average_direct_wavelet.npz
-[analyze-wavelet] summary_json:        …/summary.json
-
-real    0m14.665s
-```
-
-The wavelet shows the expected airgun signature — main pulse at
-~0.05 s, bubble pulse at ~0.18 s.
-
-### 3b — SIREN LBFGS prefit + sweep wave-equation refinement
-
-3a gives a good average shape from the *direct arrival only* — it
-ignores reverberation off the sea surface and the deeper section.
-3b refines this in two sub-steps so the wavelet matches the **full
-recorded waveform** in the FWI band:
-
-```
-   average_direct_wavelet.npz (rank-1; from 3a)
-                  │  resample to SIREN time grid
-                  ▼
-   initial_wavelet_target.npz  ← LBFGS target
-                  │  SIREN MLP: coords (-1..1) → wavelet samples
-                  │  LBFGS minimise MSE(SIREN(t), target),  10 iter
-                  ▼
-   prefit_siren_wavelet.npz    ← prefit, matches target to ~1e-9
-                  │  sweep Acoustic forward solve (4-shot batch)
-                  │  filter obs + syn to 3-30 Hz
-                  │  Adam on SIREN params, loss = trace_cosine + 0.05·MSE_prior
-                  │  100 epochs (decreases ~9.3e-2 → ~8.1e-3 in 30 epochs)
-                  ▼
-   estimated_wavelet.npz       ← FEEDS FWI / RTM as wavelet.path
-```
-
-Two design choices worth knowing about:
-
-- **Why SIREN?** A SIREN MLP regularises the wavelet to a smooth
-  parameterisation that can still capture the bubble pulse without
-  fitting noise. Direct sample-space inversion overfits in our
-  experience.
-- **Why a prior?** The wave-equation loss alone has a near-flat
-  direction (an overall time shift in the wavelet trades for a static
-  in the velocity model). The `prior_weight: 0.05` term anchors the
-  refined SIREN to the rank-1 average across the full band, killing
-  that null space without over-constraining the bubble.
-
-#### Canonical Viking parameters
-
-```yaml
-wavelet_inversion:
-  shot_start: 1
-  shot_stop:  1001
-  nearest_receivers: 4              # same selection as 3a, larger N is OK
-  tmax_s: 6.0
-  velocity_m_s: 1500                # background for the 1-D forward grid
-  dx_m: 12.5   dz_m: 12.5
-  x_padding_m: 500  z_padding_m: 500  model_depth_m: 360
-  filter_lowcut_hz: 3.0
-  filter_highcut_hz: 30.0
-  filter_order: 4
-  backend: cuda
-  mode: siren
-  epochs: 100
-  lr: 1.0e-3
-  loss_type: trace_cosine
-  prefit_steps: 10
-  prefit_lr: 1.0e-3
-  initial_wavelet_prior_weight: 0.05
-  inr_hidden_features: 64
-  inr_hidden_layers: 3
-  inr_first_omega0: 30.0
-  inr_hidden_omega0: 30.0
-```
-
-#### Command
-
-```bash
-sweep-tasks estimate-wavelet --config $VIKING_HOME/viking.yaml
-```
-
-The YAML's `estimate_wavelet:` block carries all 20+ parameters
-listed above. CLI flags still work for overrides — useful when
-sweeping one hyperparameter:
-
-```bash
-sweep-tasks estimate-wavelet --config $VIKING_HOME/viking.yaml \
-    --epochs 50 --lr 5e-4
-```
-
-Single GPU. Wall time on one V100: ~15-30 min. Use `--backend eager`
-for a slow but GPU-architecture-independent fallback (CPU-only is also
-viable for tiny `--shot-stop` values).
-
-#### Expected outcome (production reference numbers)
-
-For the full 1001-shot / 100-epoch / CUDA reference run:
-trace-cosine loss falls from `~0.10` to `~0.012`, and the final
-wavelet correlates `0.90` with the 3a rank-1 average at zero lag.
-The output PNGs (`estimated_wavelet.png`, `wiggle_obs_syn_comparison.png`,
-`spectrum_obs_syn_comparison.png`) will be added to the Visual tour
-once we capture a clean V100 reference run with the sweep-tasks
-native CLI (the existing reference is from the legacy
-`fwi_workflow-dev` pipeline; numbers are identical because the
-algorithm is bit-exact, but the figure provenance differs).
-
-
-#### Outputs (`siren_pipeline/`)
-
-- `initial_wavelet_target.npz` — rank-1 average resampled to SIREN time grid.
-- `prefit_siren_wavelet.npz` — SIREN after LBFGS prefit (MSE → ~`1e-9`).
-- `estimated_wavelet.npz` — **final wavelet after the wave-equation main
-  loop.** This is what Step 5 / 6 YAMLs point at via `wavelet.path`.
-- `loss.csv`, `loss_curve.png`
-- `wiggle_obs_syn_comparison.png`, `spectrum_obs_syn_comparison.png` —
-  the 4-shot diagnostic batch used as the inversion target.
-- `final_filtered_records.npz`, `metadata.json`, `command.txt`.
-
-#### Reference numbers (Viking)
-
-- Prefit MSE `1.6e-1 → 4.5e-10` in 10 LBFGS iterations.
-- Wave-equation trace-cosine loss `9.3e-2 → 8.1e-3` in 30 epochs, plateaus.
-
-### 3c — Optional: convert FarField.dat for QC comparison
-
-The SEG dataset includes the **manufacturer-measured** far-field
-signature in `FarField.dat` (ASCII, one sample per line, `dt = 4 ms`).
-You don't need it for FWI — the data-driven 3b output already feeds
-everything — but it's a useful sanity check that the estimated wavelet
-isn't wildly off:
-
-```bash
-sweep-tasks convert-farfield --config $VIKING_HOME/viking.yaml
-```
-
-(Or all-CLI: `sweep-tasks convert-farfield --input $VIKING_HOME/raw/FarField.dat --out $VIKING_HOME/run/wavelet/farfield/farfield_wavelet.npz --dt-s 0.004`.)
-
-Writes `farfield_wavelet.npz` + `.json` metadata + `.png` QC plot
-(time + spectrum; see Visual tour above). CPU-only, runs in ~1 s.
-The PNG's top panel is the raw 4-ms-sampled signature (gray) and
-the post-processed version (black; default identical because no
-taper / zeroing was requested); the bottom panel is the
-corresponding amplitude spectrum.
-
-### 3d — Optional: 4-step pipeline plot
-
-```bash
-sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
-# → <pipeline-dir>/wavelet_pipeline_steps.png         (4-row stack)
-# → <pipeline-dir>/wavelet_pipeline_steps_overlay.png (1-row overlay)
-```
-
-Renders a 4-panel time + frequency comparison: rank-1 average →
-SIREN prefit → raw wave-equation output → post-processed final
-wavelet. Reads three npz files under `<pipeline-dir>`:
-`initial_wavelet_target.npz`, `prefit_siren_wavelet.npz`, and
-`estimated_wavelet.npz`.
-
-#### What it produces
-
-Console output (~3 s wall):
-
-```
-[plot-wavelet-steps] stack   -> …/wavelet_pipeline_steps.png
-[plot-wavelet-steps] overlay -> …/wavelet_pipeline_steps_overlay.png
-```
-
-- **1-row overlay** (`wavelet_pipeline_steps_overlay.png`) — all four
-  pipeline outputs (rank-1 target → SIREN prefit → raw wave-equation
-  output → post-processed final) superimposed in time and frequency
-  so you can spot where each step actually changed the wavelet.
-- **4-row stack** (`wavelet_pipeline_steps.png`) — one row per
-  pipeline step at the same y-axis range, useful for measuring
-  small amplitude shifts step-by-step.
-
-Both PNGs will be added to the Visual tour once a clean production
-3b reference is captured with `sweep-tasks estimate-wavelet`.
-
-### Where the wavelet is (and is not) consumed
-
-**Step 5's frequency-selection inversion consumes NO wavelet at all** — its
-misfit is invariant to the source spectrum, which is a large part of why it is
-the default path below. The wavelet from this step remains what you QC the data
-with, and what any conventional (non-encoded) FWI or the Step 6 RTM references
-via:
-
-```yaml
-wavelet:
-  kind: siren_pipeline_npz
-  path: /absolute/path/to/estimated_wavelet.npz
-  scale: 1.0
-```
-
-Edit the `path:` to point at wherever 3b wrote it on your machine —
-`$VIKING_HOME/run/wavelet/siren_pipeline/` if you followed the
-examples above.
-
----
-
-## Step 4 — Initial velocity model (built in memory)
-
-No tool, no legacy bridge, no file on disk: a marine FWI cold start is a water
-layer over a 1-D gradient, and `init_model.linear_gradient` builds exactly that
-inside the task YAML from four numbers:
+## Step 3 — Starting model (downloaded)
+
+`viking_initial_vp_12.5m.npy` is a (320, 2285) float64 array of vp in m/s on
+the 12.5 m model grid: 4.0 km deep and 28.56 km along the line. It is built
+from three pieces:
+
+* **0-1.2 km**: a smoothed first-arrival traveltime tomogram (50 m grid,
+  upsampled), from 78,955 first-break picks over all 1001 shots;
+* **below 1.7 km**: a smoothed velocity trend from the two wells on the line;
+* **1.2-1.7 km**: a cosine taper between the two;
+* **rows 0-27** (the top 350 m): water at 1485.6 m/s, the velocity measured
+  from the direct arrival.
+
+The first-break picks are not part of the public release, so the model cannot
+be regenerated from `seismic.segy` alone; that is why it is distributed as a
+file. The task YAML reads it with
 
 ```yaml
 init_model:
   name: vp
-  shape: [320, 2285]          # 4.0 km x 28.56 km at dh = 12.5 m
-  linear_gradient:
-    vmin: 1996.0              # first sediment velocity
-    vmax: 4416.0              # bottom of the model
-    water_rows: 28            # 350 m of water, constant along the line
-    water_vp: 1485.6          # measured from the direct arrival (Step 3a), not 1500
+  path: $VIKING_HOME/raw/viking_initial_vp_12.5m.npy
 ```
 
-The top `water_rows` rows are stamped to exactly `water_vp`, and the ramp spans
-the rows *below* the water, so the gradient's range is not eaten by it. No
-lateral structure at all: nothing about the answer is smuggled into the start.
-These rows only build the start; what the inversion holds fixed is the task's
-`water:` block, here a flat seabed at the same depth (`water: {seabed: 350.0,
-velocity: 1485.6}` holds rows 0-27). The flat 350 m is within 1-3 cells of the
-real seabed, measured 343-372 m from the seabed reflection; a per-trace seabed
-`.npz` (`sweepx.tasks.bathymetry`) would follow it instead.
+and each stage of Step 5 resamples it to its own grid.
 
 ---
 
-## Step 5 — FWI with frequency-selection source encoding
+## Step 4 — Extract the observed coefficients
 
-The default inversion path for this example, and the reason it needs neither
-Step 3's wavelet nor any amplitude calibration:
-
-* **No wavelet enters the inversion.** Every node in the active pool radiates
-  its own comb frequency continuously, and the misfit is per-node
-  complex-cosine coherence `J = 1 - |<u,d>| / (|u| |d|)` on a steady-window
-  DFT — invariant to any per-node complex scale, so the airgun spectrum, the
-  excitation delay and the sensor coupling all cancel.
-* **One forward per iteration for the whole pool**, instead of one per shot:
-
-| | wavefield steps / iteration | 8 bands x 30 iter | measured |
-|---|---|---|---|
-| conventional (96-168 shots x 6000 steps) | 576,000 | 190 M | ~4.5 h |
-| frequency selection (one encoded pool)   | 52,500  | 8.9 M | **10 min** |
-
-The encoded forward is ~9x longer than a single shot (ring-up + analysis
-window), so below ~9 shots conventional wins. Viking has 1001.
-
-### 5a — Extract the observed coefficients
-
-The obs side is a DTFT of gathers that already exist — no solver involved,
-~20 s per band. A plan's groups become the *nodes*: CSG makes the 1001 shots
-the nodes (their 120 receivers each are the traces), CRG
-(`--grouping crg --receiver-quantize-m 25`) makes the 1131 receiver cells the
-nodes. **Either works** — nodes carry their own receiver masks, so a moving
-streamer spread is as valid as a fixed OBN patch, and on this line the two
-give the same answer (51 % shallow two-init convergence either way).
+Frequency selection replaces the shot gathers with the **coefficients** of a
+handful of exact frequencies per shot. Every shot (a *node*) is assigned its
+own comb of frequencies; the inversion fires all nodes at once, each radiating
+only its comb, and compares the steady-state response with these coefficients.
+The obs side is a discrete-time Fourier transform of the gathers that already
+exist — no solver involved:
 
 ```bash
 mkdir -p $VIKING_HOME/run/shards
-sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
-    --dh-m 12.5 --dt 0.001 --min-fold 1 --node-stride 1 \
-    --n-p 32000 --k-lo 96 --k-hi 192 \
-    -o $VIKING_HOME/run/shards/coeff_3_6hz.npz
+#  lo hi  dh     dt      n_p    k_lo k_hi
+while read lo hi dh dt n_p klo khi; do
+  sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
+      --dh-m $dh --dt $dt --min-fold 1 --node-stride 1 \
+      --n-p $n_p --k-lo $klo --k-hi $khi \
+      -o $VIKING_HOME/run/shards/coeff_${lo}_${hi}hz.npz
+done <<'BANDS'
+3 7  25    0.002  125000 750 1750
+3 8  25    0.002  100000 600 1600
+3 10 25    0.002  71450  429 1429
+3 12 25    0.002  55584  334 1334
+3 14 18.75 0.0015 60620  273 1273
+3 16 18.75 0.0015 51292  231 1231
+BANDS
 ```
 
-`--dt` is the **solver** dt — it defines the comb, `f = k/(n_p*dt)`. The plan's
-own 4 ms record dt is read from the plan and handled; the two are allowed to
-differ. Repeat for the eight bands of the ladder:
+`--dh-m` and `--dt` are the **solver** grid and time step of the stage that
+reads the shard (the plan's own 4 ms record is read from the plan and handled);
+`--n-p` is the length of the steady-state analysis window in solver steps, and
+the comb is the DFT bins `f = k / (n_p · dt)` for `k_lo <= k <= k_hi`:
 
-| band | `--n-p` | window | `--k-lo` | `--k-hi` | bins | nodes/iter | pools |
+| band | stage grid | `--n-p` | window | `--k-lo` | `--k-hi` | bins | bin spacing |
 |---|---|---|---|---|---|---|---|
-| 3-6 Hz | 32000 | 32 s | 96 | 192 | 97 | 96 | 11 |
-| 3-8    | 20000 | 20 s | 60 | 160 | 101 | 96 | 10 |
-| 3-10   | 18000 | 18 s | 54 | 180 | 127 | 120 | 8 |
-| 3-12   | 14000 | 14 s | 42 | 168 | 127 | 120 | 8 |
-| 3-14   | 14000 | 14 s | 42 | 196 | 155 | 144 | 7 |
-| 3-16   | 12000 | 12 s | 36 | 192 | 157 | 144 | 7 |
-| 3-18   | 12000 | 12 s | 36 | 216 | 181 | 168 | 6 |
-| 2-20   | 10000 | 10 s | 20 | 200 | 181 | 168 | 6 |
+| 3-7 Hz  | 25 m, 2 ms     | 125000 | 250.0 s | 750 | 1750 | 1001 | 0.0040 Hz |
+| 3-8 Hz  | 25 m, 2 ms     | 100000 | 200.0 s | 600 | 1600 | 1001 | 0.0050 Hz |
+| 3-10 Hz | 25 m, 2 ms     | 71450  | 142.9 s | 429 | 1429 | 1001 | 0.0070 Hz |
+| 3-12 Hz | 25 m, 2 ms     | 55584  | 111.2 s | 334 | 1334 | 1001 | 0.0090 Hz |
+| 3-14 Hz | 18.75 m, 1.5 ms | 60620 | 90.9 s  | 273 | 1273 | 1001 | 0.0110 Hz |
+| 3-16 Hz | 18.75 m, 1.5 ms | 51292 | 76.9 s  | 231 | 1231 | 1001 | 0.0130 Hz |
 
 How those numbers are derived — **bins are the currency**:
 
 ```
-bins = bandwidth x (n_p * dt)         pool size <= bins   (hard constraint)
+bins = bandwidth x window = bandwidth x (n_p * dt)        nodes per pool <= bins
 ```
 
-Pick the per-band pool size first (the batch size — 96-168 here, following the
-survey's conventional-FWI schedule), then `n_p >= pool / bandwidth / dt`. The
-window *shortens* as the ladder climbs, because a wider band reaches the same
-bin count in less time: the lowest band is the expensive one. `n_p` does NOT
-need to fit the 6 s record — the obs DTFT integrates whatever the record has;
-`n_p` sizes the *synthetic* steady window whose exact DFT bins the encoded
-sources must occupy. Each shard holds **all 120,120 traces** regardless of the
-pool size — pools exist because 1001 nodes cannot each take an exclusive
-frequency out of 97 bins, and `random_batch` redraws the subset every
-iteration, exactly like shot mini-batching.
+This example gives **every one of the 1001 shots its own bin** ("all
+teeth"): one pool holds the whole survey, and every iteration sees all
+120,120 traces with no crosstalk between shots and no random batching. So each
+band's window is `(k_hi - k_lo) / bandwidth = 1000 / bandwidth`: 250 s for the
+4 Hz-wide lowest band, shrinking as the bands widen. `n_p` does not need to fit the 6 s record — the
+obs transform integrates whatever the record has; `n_p` sizes the *synthetic*
+window whose exact DFT bins the encoded sources occupy. With fewer bins than
+nodes you would split the shots into pools (`n_pools`), which the inversion
+visits in turn, or draw a random subset of nodes per iteration
+(`random_batch`), much like shot mini-batching.
 
-### 5b — Run it
+A shard is cut for one stage; the commands above give each stage exactly the
+shard it asks for. The inversion rejects a shard whose `--dt` differs from the
+stage's `dt_s`, or whose window and bins cannot supply the stage's comb. A
+shard cut with a longer window (`--n-p` an integer multiple of
+`probe_samples`) or a wider bin range is accepted and decimated, with a
+`comb decimation` line in the log. `--dh-m` is not recorded in the shard, so
+keep it equal to the stage's `dh_m` by hand: the shard stores source and
+receiver positions as indices on that grid.
+
+---
+
+## Step 5 — Run the inversion
 
 ```bash
-cp ${SWEEPX}/examples/tasks/field/viking/viking_freqsel_8band.yaml \
-   $VIKING_HOME/run/viking_freqsel.yaml
-sweep-tasks run $VIKING_HOME/run/viking_freqsel.yaml
+sweep-tasks run $SWEEPX/examples/tasks/field/viking/viking_freqsel_allteeth.yaml
 ```
 
-**10 minutes** on one RTX 6000 Ada for 8 bands x 30 iterations, peak 6.1 GB.
-Two parameters in that YAML are worth understanding before editing anything:
+The YAML takes every path from `$VIKING_HOME`, so it runs as it is; copy it
+somewhere else first if you want to edit it. It writes to
+`$VIKING_HOME/run/freqsel/viking_freqsel_allteeth/`.
 
-* `steady_samples: 20000` — the continuous sources must ring up before the
-  analysis window opens: model width / slowest velocity = 28.6 km / 1485.6 m/s
-  = 19.2 s. The schema default (2500) leaves a transient in the window here.
-* `abcn: 50` — the PML is sized by the LOWEST rung (2 Hz -> 743 m = 59 cells),
-  because a continuous-wave field in a leaky box builds standing waves that do
-  not cancel between a transient obs and a steady-state syn.
+This 2-D frequency-selection run uses one GPU: all 1001 shots already share
+one forward, and spreading a run over several GPUs needs domain
+decomposition, which is 3-D only. (`--nproc-per-node N` would start N
+identical inversions writing the same run directory.)
 
-> **Repeat every key in every stage's `frequency:` block.** A stage block
-> *replaces* the global one wholesale — it is not merged — so an omitted key
-> silently reverts to the schema default (`random_batch` -> None turns random
-> node batching back into deterministic rotation; `steady_samples` -> 2500
-> truncates the ring-up). The runner prints a warning naming each dropped key.
+What it does:
+
+* **No wavelet enters the inversion.** The misfit is the per-node
+  complex-cosine coherence `J = 1 - |<u,d>| / (|u| |d|)` on the steady-window
+  DFT (`loss.kind: steady_gcn`), which is invariant to any per-node complex
+  scale, so the airgun spectrum, the excitation delay and the sensor coupling
+  all cancel.
+* **One forward per iteration for all 1001 shots**, instead of one per shot.
+  Each forward is long — a 20 s ring-up, 0.5 s of slack and the analysis
+  window, e.g. 135,250 steps for the 3-7 Hz band — but it replaces 1001
+  conventional forwards.
+* **Six bands, 30 iterations each**, on a 25 m grid up to 3-12 Hz and an
+  18.75 m grid for 3-14 and 3-16 Hz. The time step keeps the CFL number at
+  0.44 for 5500 m/s. The grid stays at or below 25 m so the 6 m source and the
+  10 m streamer remain in the top cell.
+* **The model is a hash-encoded coordinate network** (`reparam:`): the network
+  predicts a perturbation of the starting model with a 500 m/s scale, and its
+  learning rate drops from 1.0 to 0.42 of `reparam.lr` across the bands
+  (`inr_lr_scale`).
+* **The water column is inverted too** (`water: false`), and vp is not
+  bounded. To hold the water at 1485.6 m/s instead, replace `water: false`
+  with `water: { seabed: 350.0, velocity: 1485.6 }`.
+
+Three settings are worth understanding before editing anything:
+
+* `steady_samples` (20 s in each stage's dt) — the continuous sources must
+  ring up across the whole line before the analysis window opens:
+  28.6 km / 1485.6 m/s = 19.2 s. The schema default (2500 steps) leaves a
+  transient in the window here.
+* `abcn: 50` — 1250 m of absorbing boundary on the 25 m grid and 937 m on the
+  18.75 m grid, both above the 495 m wavelength at 3 Hz. A continuous wave in
+  a leaky box builds standing waves that would not cancel between the
+  transient obs and the steady-state synthetic.
+* **Repeat every key in every stage's `frequency:` block.** A stage block
+  *replaces* the global one wholesale — it is not merged — so an omitted key
+  reverts to the schema default. The runner warns about a key the global block
+  sets to a non-default value that a stage block leaves out; that covers every
+  key in this YAML.
 
 ### What "good" looks like
 
-```
-[freqsel] stage 0: 1001 nodes, 120120 items, 1131 union cells, 11 pools, ...
-[freqsel][rank0] stage 0 steady-state two-window check: median rel diff = 1.7e-05
-```
+Measured on one V100 (32 GB), running the
+[sbatch template](#running-on-a-cluster-optional) as it is: the whole job took
+**54 min** — index, plan and the six shards 2 min, the inversion 52 min
+(16.7 s per iteration on average: 25.5 s in the 3-7 Hz band, 11.7 s in
+3-12 Hz). Peak GPU memory was **9.7 GB**, in the first band. The shards take
+5.8 GB on disk and the run directory 0.6 GB. Each band's setup runs partly on
+the CPU before its first iteration; that took under a minute per band on this
+node, while on a busier V100 node the first band alone took 12 min, so allow
+for some spread.
 
-* **two-window check** `<= 1e-2` (measured 1.6e-5..3.3e-5 across the ladder) —
-  the runner extracts the coefficients twice, `slack_samples` apart; if this
-  fails, raise `steady_samples`.
-* **items = the survey's trace count** (120,120): every (node, trace) pair is
-  in the misfit. `union cells` is the deduplicated receiver table — 120,120
-  pairs need only 1131 recording positions, with no loss of data.
-* **water column pinned exactly**: `max |vp[:28] - 1485.6| = 0`.
-* per-band `mean(1-GCN)` falls within every stage — reference run
-  `0.569 -> 0.467` on the first band, `0.322 -> 0.298` on the last.
-
-![freqsel inverted](figures/05_freqsel_inverted.png)
-
-### How far down to trust it
-
-Run the same YAML **from two different starting models** and compare: where
-the data constrains the answer the results converge, where it does not each
-keeps its own start. Against the survey's own initial model (373 m/s RMSE from
-the linear start):
-
-| depth | difference between the two results | convergence |
-|---|---|---|
-| 350-1000 m  | 104 m/s | **51 %** |
-| 1000-2000 m | 449 | 3 % |
-| 2000-3000 m | 461 | -1 % |
-| 3000-4000 m | 344 | -6 % |
-
-![freqsel two inits](figures/05_freqsel_two_inits.png)
-
-Only the top ~650 m of section is genuinely resolved by this 3.2 km-offset
-streamer dataset; structure below ~1000 m is inherited from the start, not an
-inversion result. That boundary survived a different hash geometry and 67 %
-more iterations unchanged — it is an illumination limit, not a tuning problem.
-
-Known gaps of the reference run, left as exercises: `model_bounds` was not
-enabled (vp reaches 1254 m/s in spots, below water velocity — set
-`model_bounds: {vp: {min: 1450, max: 5500}}`); the water layer is a flat 28
-rows rather than the measured 343-372 m bathymetry (point `water.seabed` at a
-per-trace seabed file); and 30 iterations/band demonstrates the workflow rather
-than converging it.
-
----
-
-## Step 6 — RTM with `sweep-tasks run`
-
-Post-FWI imaging on the inverted vp at 12.5 m / 1 ms, 3-25 Hz band,
-illumination-normalised stack. Generate the annotated RTM template:
-
-```bash
-sweep-tasks init rtm -o $VIKING_HOME/run/viking_rtm.yaml
-```
-
-(Or copy the in-repo Viking-specific example
-`${SWEEPX}/examples/tasks/field/viking/viking_rtm_legacy_match.yaml`.)
-
-Point its `velocity_model.path` at your Step 5 output:
-
-```yaml
-velocity_model:
-  name: vp
-  path: $VIKING_HOME/run/freqsel/viking_freqsel_8band/inverted_vp.npy
-geometry:
-  kind: from_plan
-  plan_path: $VIKING_HOME/run/viking_csg_3km.npz     # 3 km plan from Step 2
-obs:
-  plan:
-    plan_path: $VIKING_HOME/run/viking_csg_3km.npz
-output_dir: $VIKING_HOME/run/viking_rtm
-```
-
-Run it:
-
-```bash
-sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
-```
-
-Wall time: ~45 min on one V100 (1001 shots × one forward + one
-backward each, illumination-normalised stack).
-
-**Outputs** (under `$VIKING_HOME/run/viking_rtm/<task_id>/output/`):
+The log should show, for every band, all 1001 shots in one pool and every
+trace in the misfit:
 
 ```
-rtm_image.npy                          fwi_gradient_image.npy
-rtm_image_normalised.npy               fwi_gradient_image_normalised.npy
-rtm_image_per_shot_normalised.npy      fwi_gradient_image_per_shot_normalised.npy
-rtm_result.npz                         (grid metadata + summary stats)
+[freqsel] stage 0: 1001 nodes, 120120 items, 1131 union cells, 1 pools, comb 3.0000-7.0000 Hz, nt=135250, dh=25.0, dt=0.002
+[freqsel][rank0] stage 0 steady-state two-window check: median rel diff = 2.455e-06
+[freqsel] s0 it    0 pool  0  mean(1-GCN)=0.48363  iter_s=25.7  peak_gb=9.72
+...
+[freqsel] s5 it   29 pool  0  mean(1-GCN)=0.18809  iter_s=12.8  peak_gb=5.63
 ```
 
-Preview figure to follow once a clean RTM reference run on the
-sweep-tasks CLI is captured.
+* **items = 120,120**, the survey's trace count, in every band: every
+  (shot, trace) pair is in the misfit. `union cells` is the deduplicated
+  receiver table — the 120,120 traces need only 1131 recording positions.
+* **two-window check** `<= 1e-2` — the runner extracts the synthetic
+  coefficients twice, `slack_samples` apart; if they differ, the sources have
+  not reached steady state and `steady_samples` must grow. Measured 2.5e-6 in
+  the 3-7 Hz band and 0.9e-4 to 1.2e-4 in the others.
+* **the misfit falls within every band.** `mean(1-GCN)` per band, first and
+  last iteration:
 
----
+  | band | 3-7 Hz | 3-8 Hz | 3-10 Hz | 3-12 Hz | 3-14 Hz | 3-16 Hz |
+  |---|---|---|---|---|---|---|
+  | first | 0.484 | 0.317 | 0.241 | 0.241 | 0.224 | 0.216 |
+  | last  | 0.315 | 0.263 | 0.209 | 0.196 | 0.189 | 0.188 |
 
-## Step 7 — Depth-tapered z-axis low-cut (post-filter)
+  A new band starts from the previous band's model but measures the misfit
+  over a wider set of frequencies, so the value at a band boundary is not
+  continuous. On another GPU the digits will differ (floating-point reduction
+  order); the curve should stay within about 1 %.
 
-Standard fix for shallow drift in the RTM image. Two equivalent
-routes:
+![freqsel misfit](figures/05_freqsel_allteeth_misfit.png)
 
-### Route A — standalone CLI (iterate on filter params, no GPU)
+The result is written to `inverted_vp.npy` in the run directory, on the last
+band's 18.75 m grid (214 × 1524). Below, (a) is the starting model, (b) the
+inverted model and (c) their difference, with the starting model resampled to
+the 18.75 m grid:
 
-```bash
-sweep-tasks filter-image \
-    $VIKING_HOME/run/viking_rtm/viking_rtm_v1/output/rtm_image_per_shot_normalised.npy \
-    --wavelength-m 300 --depth-m 600 --taper-m 400
-# → rtm_image_per_shot_normalised_shallow_zlowcut.npy          (cleaned)
-# → rtm_image_per_shot_normalised_shallow_zlowcut_removed.npy  (subtracted drift)
-# → rtm_image_per_shot_normalised_shallow_zlowcut_*.png        (QC panels)
-```
+![freqsel inverted](figures/05_freqsel_allteeth_vp.png)
 
-`--dz-m` is auto-read from the sibling `rtm_result.npz`; for non-sweep
-inputs, pass it explicitly.
+The water column is inverted too. In this run its median velocity stays
+between about 1480 and 1555 m/s down to about 190 m and decreases below that,
+reaching 1249 m/s at 319 m (minimum 1177 m/s), a slow band roughly 100 m thick
+above the 350 m seabed of the starting model. To hold the water at
+1485.6 m/s instead, replace `water: false` with
+`water: { seabed: 350.0, velocity: 1485.6 }`.
 
-### Route B — bake into the RTM YAML
-
-```yaml
-imaging:
-  shots_per_batch: 1
-  filter_lowcut_hz: 3.0
-  filter_highcut_hz: 25.0
-  filter_target: syn
-  normalize_by_illumination: true
-  save_per_shot: false
-  post_filter:
-    enabled: true
-    wavelength_m: 300.0
-    depth_m: 600.0
-    taper_m: 400.0
-    targets: all
-    save_png: true
-```
-
-One `sweep-tasks run viking_rtm.yaml` produces raw + filtered products
-together. Full knob surface in
-[`docs/tasks/cli_workflow.md`](../../cli_workflow.md).
+This run does not test how deep the data constrain the model. One way to find
+out is to run the same YAML from a different starting model and see where the
+two results agree.
 
 ---
 
@@ -959,147 +476,97 @@ together. Full knob surface in
 
 ```bash
 # === one-time setup ========================================================
-export VIKING_HOME=$HOME/viking
-mkdir -p $VIKING_HOME/{raw,run}
+git clone https://github.com/DeepWave-KAUST/sweepx.git $HOME/sweepx
+pip install -e "$HOME/sweepx[segy]"
+export SWEEPX=$HOME/sweepx VIKING_HOME=$HOME/viking
+mkdir -p $VIKING_HOME/{raw,run/shards}
 
-# === Step 0: download (~750 MB) ============================================
+# === Step 0: download (~760 MB) ============================================
 cd $VIKING_HOME/raw
 ZENODO=https://zenodo.org/records/23481108/files      # doi:10.5281/zenodo.23481108
 HF=https://huggingface.co/datasets/shaowinw/seismic-benchmark-models/resolve/main/viking_graben_line12
-for f in seismic.segy FarField.dat; do curl -fL -O $ZENODO/$f || curl -fL -O $HF/$f; done
+for f in seismic.segy viking_initial_vp_12.5m.npy; do
+  curl -fL -O $ZENODO/$f || curl -fL -O $HF/$f
+done
 
-# === one-time config =======================================================
-sweep-tasks init -o $VIKING_HOME/viking.yaml
+# === Steps 1-2: index and plan =============================================
+CFG=$SWEEPX/examples/tasks/field/viking/pipeline_config.yaml
+sweep-tasks build-index --config $CFG
+sweep-tasks build-plan  --config $CFG
 
-# === Steps 1-3d ============================================================
-sweep-tasks build-index        --config $VIKING_HOME/viking.yaml
-sweep-tasks build-plan         --config $VIKING_HOME/viking.yaml
-sweep-tasks analyze-wavelet    --config $VIKING_HOME/viking.yaml
-sweep-tasks estimate-wavelet   --config $VIKING_HOME/viking.yaml
-sweep-tasks convert-farfield   --config $VIKING_HOME/viking.yaml
-sweep-tasks plot-wavelet-steps --config $VIKING_HOME/viking.yaml
+# === Step 3: starting model — downloaded in Step 0 =========================
 
-# === Step 4: initial model — nothing to run ================================
-# (built in memory by init_model.linear_gradient inside the Step 5 YAML)
-
-# === Step 5: freqsel FWI on one GPU (8 bands, ~10 min) =====================
-SWEEPX=$(python -c "import sweepx, pathlib; print(pathlib.Path(sweepx.__file__).parents[2])")   # the sweepx checkout
-mkdir -p $VIKING_HOME/run/shards
-while read lo hi n_p klo khi; do
+# === Step 4: coefficient shards ============================================
+while read lo hi dh dt n_p klo khi; do
   sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
-      --dh-m 12.5 --dt 0.001 --n-p $n_p --k-lo $klo --k-hi $khi \
+      --dh-m $dh --dt $dt --min-fold 1 --node-stride 1 \
+      --n-p $n_p --k-lo $klo --k-hi $khi \
       -o $VIKING_HOME/run/shards/coeff_${lo}_${hi}hz.npz
 done <<'BANDS'
-3 6 32000 96 192
-3 8 20000 60 160
-3 10 18000 54 180
-3 12 14000 42 168
-3 14 14000 42 196
-3 16 12000 36 192
-3 18 12000 36 216
-2 20 10000 20 200
+3 7  25    0.002  125000 750 1750
+3 8  25    0.002  100000 600 1600
+3 10 25    0.002  71450  429 1429
+3 12 25    0.002  55584  334 1334
+3 14 18.75 0.0015 60620  273 1273
+3 16 18.75 0.0015 51292  231 1231
 BANDS
-cp ${SWEEPX}/examples/tasks/field/viking/viking_freqsel_8band.yaml $VIKING_HOME/run/viking_freqsel.yaml
-sweep-tasks run $VIKING_HOME/run/viking_freqsel.yaml
-# (multi-GPU on the same box: append --nproc-per-node N)
 
-# === Step 6: RTM ===========================================================
-cp ${SWEEPX}/examples/tasks/field/viking/viking_rtm_legacy_match.yaml $VIKING_HOME/run/viking_rtm.yaml
-# …edit velocity_model.path + plan_path, then:
-sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
-
-# === Step 7: post-filter ===================================================
-sweep-tasks filter-image \
-    $VIKING_HOME/run/viking_rtm/viking_rtm_v1/output/rtm_image_per_shot_normalised.npy \
-    --wavelength-m 300 --depth-m 600 --taper-m 400
+# === Step 5: FWI (6 bands x 30 iterations) =================================
+sweep-tasks run $SWEEPX/examples/tasks/field/viking/viking_freqsel_allteeth.yaml
+# one GPU: 2-D frequency selection does not run across several GPUs
 ```
 
 ---
 
 ## Running on a cluster (optional)
 
-For SLURM / ibex-style clusters the repo ships matching sbatch
-templates under `examples/tasks/sbatch/`. They reference a
-small set of environment roots — `SWEEP_USER_ROOT`,
-`SWEEP_REPOS_ROOT`, `SWEEP_RUNS_ROOT`,
-`SWEEP_CONDA_ROOT`, `PROJECT_DATA_ROOT` — that you set in your login
-shell rc before `sbatch`-ing. A working KAUST / ibex layout:
+[`examples/tasks/sbatch/viking_freqsel.sbatch`](https://github.com/DeepWave-KAUST/sweepx/blob/main/examples/tasks/sbatch/viking_freqsel.sbatch)
+runs Steps 1-5 in one SLURM job on one GPU. On a resubmit it skips Steps 1-4
+when their output exists and does not repeat a finished inversion; an
+unfinished inversion restarts from the first band. Do Step 0 first, activate the
+environment that has sweepx (sbatch passes your shell's environment on to the
+job), and export the two paths:
 
 ```bash
-export SWEEP_USER_ROOT=/ibex/user/${USER}
-export SWEEP_REPOS_ROOT=${SWEEP_USER_ROOT}/repo           # holds the sweepx checkout
-export SWEEP_RUNS_ROOT=${SWEEP_USER_ROOT}/runs
-export SWEEP_CONDA_ROOT=${SWEEP_USER_ROOT}/miniconda3
-export PROJECT_DATA_ROOT=/ibex/project/<your-allocation>   # holds the raw SEG-Y
+export VIKING_HOME=$HOME/viking SWEEPX=$HOME/sweepx
+sbatch $SWEEPX/examples/tasks/sbatch/viking_freqsel.sbatch
 ```
 
-Then:
-
-```bash
-# 4× V100 production FWI (6 stages, ~1 h 16 min wall)
-sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_6stage_30hz.sbatch
-# 1× V100 RTM
-sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_rtm.sbatch
-```
-
-If you don't have or need SLURM, just stay with the `sweep-tasks run`
-commands from Step 5 / 6 — that's what the sbatch scripts call
-inside the allocation anyway.
+The log goes to `viking_freqsel-<jobid>.out` in the directory you submit from.
+Partition, account and GPU type are cluster-specific: pass them on the sbatch
+command line (for example `--partition=…`, or `--gres=gpu:<type>:1` on clusters
+that name GPU types).
 
 ---
 
-## Roadmap
+## Other `sweep-tasks` tools for field data
 
-What's in `sweep-tasks` today (sufficient for the entire Viking
-workflow, end to end):
+This example uses four subcommands: `build-index`, `build-plan`,
+`extract-coeff` and `run`. The CLI has more that a conventional (time-domain,
+wavelet-based) workflow on the same plan would use; `sweep-tasks <command>
+--help` documents each:
 
-| Step | Subcommand | Notes |
-| --- | --- | --- |
-| 1 | `sweep-tasks build-index`         | scan SEG-Y → SEGYIndex npz |
-| 2 | `sweep-tasks build-plan`          | SEGYIndex + filters → SeismicPlan npz |
-| 3a | `sweep-tasks analyze-wavelet`     | rank-1 robust direct-wave average (CPU) |
-| 3b | `sweep-tasks estimate-wavelet`    | SIREN LBFGS prefit + sweep wave-equation refinement (1 GPU) |
-| 3c | `sweep-tasks convert-farfield`    | ASCII FarField → npz adapter (CPU) |
-| 3d | `sweep-tasks plot-wavelet-steps`  | 4-panel pipeline QC plot (CPU) |
-| 4 | `init_model.linear_gradient`      | in-memory water-layer + 1-D gradient (no tool needed) |
-| 5a | `sweep-tasks extract-coeff --plan` | field gathers → freqsel coefficient shards (CPU) |
-| 5/6 | `sweep-tasks run`                | YAML-driven FWI (freqsel or conventional) / RTM |
-| 7 | `sweep-tasks filter-image`        | depth-tapered z-low-cut on RTM images |
-
-No legacy bridge remains: Step 4 is four numbers in the task YAML and
-Step 5's misfit needs no wavelet, so `sweep-tasks` is self-contained
-for Viking. Remaining nice-to-haves:
-
-| Item | Notes |
+| Subcommand | What it does |
 | --- | --- |
-| bathymetry-aware water mask | flat `water_rows` is 1-3 cells off the real seabed here; `water.seabed` takes a per-trace seabed file, a picker CLI does not exist |
-| truncated freqsel backward | the adjoint source lives only in the probe window — backward could stop ~40-67 % early and the boundary store shrink to the tail; design noted, unimplemented |
+| `analyze-wavelet`    | rank-1 robust average of the direct arrival across shots |
+| `estimate-wavelet`   | wavelet estimation by wave-equation fitting of the direct arrival |
+| `convert-farfield`   | ASCII far-field signature (e.g. `FarField.dat`) → npz |
+| `plot-wavelet-steps` | QC plot of the wavelet-estimation chain |
+| `filter-image`       | depth-tapered z-axis low-cut for RTM images |
 
-### CSG-index / SeismicPlan field mapping (for reference)
-
-The wavelet port replaced the legacy `csg_index_v2` npz reader with
-`sweepx.io.SeismicPlan` + `PlanReader`. If you're reading the legacy
-scripts and trying to map field names:
-
-| Legacy `csg_index_v2` field | `SeismicPlan` equivalent |
-| --- | --- |
-| `shot_ids[i]`, `shot_start[i]`, `shot_count[i]` | `plan.group_id[i]`, `plan.group_offsets[i]`, `plan.group_row_count(i)` |
-| `source_x_2d[row]`, `receiver_x_2d[row]` | `plan.row_source_xyz[row, 0]`, `plan.row_receiver_xyz[row, 0]` |
-| `source_depth_m[row]`, `receiver_depth_m[row]` | `plan.row_source_xyz[row, 2]`, `plan.row_receiver_xyz[row, 2]` |
-| `trace_offset[row]` | `plan.row_trace_offset[row]` |
-| `offset[row]` (signed) | computed: `sign(rx - sx) * hypot(rx - sx, ry - sy)` |
-| `read_traces_by_offset(segy_path, trace_offsets)` | `PlanReader(plan).read_rows(row_idx)` |
+[`docs/tasks/cli_workflow.md`](../../cli_workflow.md) covers `build-index`,
+`build-plan`, `run` with `from_plan`, `extract-coeff` and `filter-image` for
+any dataset.
 
 ---
 
 ## See also
 
 - [`docs/tasks/cli_workflow.md`](../../cli_workflow.md) — generic build-index /
-  build-plan / run reference (covers all datasets).
-- [`examples/tasks/field/viking/*.yaml`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/field/viking) — every
-  Viking task YAML, including the 6-stage and 8-stage FWI ladders
-  and the legacy-matching RTM.
-- [`examples/tasks/sbatch/viking_*.sbatch`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/sbatch) —
-  matching ibex sbatch templates (cluster users only).
-- `fwi_workflow-dev/docs/datasets/viking/README.md` — legacy reference
-  (number-for-number equivalent through Step 6).
+  build-plan / run / extract-coeff reference (covers all datasets).
+- [`examples/tasks/field/viking/`](https://github.com/DeepWave-KAUST/sweepx/tree/main/examples/tasks/field/viking) —
+  the pipeline config and the task YAML used above.
+- [`examples/tasks/sbatch/viking_freqsel.sbatch`](https://github.com/DeepWave-KAUST/sweepx/blob/main/examples/tasks/sbatch/viking_freqsel.sbatch) —
+  the SLURM template.
+- Tromp, J., and Bachmann, E. (2019), Source encoding for adjoint tomography,
+  *Geophysical Journal International*, 218(3), 2019-2044.

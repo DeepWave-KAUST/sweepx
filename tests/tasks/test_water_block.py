@@ -802,7 +802,6 @@ _REPO = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
     ("examples/tasks/synthetic/03_fwi_marmousi_multiscale.yaml", "rows:37"),
     ("examples/tasks/synthetic/05_lsrtm_marmousi.yaml", "rows:10"),
     ("examples/tasks/synthetic/12_fwi_marmousi_freqsel.yaml", "value:1500.0"),
-    ("examples/tasks/field/viking/viking_freqsel_8band.yaml", "value:1485.6"),
 ])
 def test_examples_hold_exactly_what_they_held_before(rel, old_rule):
     """The example YAMLs moved to `water:` without changing what they hold:

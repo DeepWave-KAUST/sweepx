@@ -1,0 +1,207 @@
+# Viking 2-D — frequency-selection FWI (Tromp & Bachmann 2019 comb encoding)
+# with a hash-INR reparameterisation, six bands from 3-7 Hz up to 3-16 Hz.
+#
+# ALL TEETH: every one of the 1001 CSG nodes owns its own comb bin (each
+# shard has >= 1001 bins), so one pool holds the whole survey and every
+# iteration sees all 120,120 traces with no crosstalk and no random batching.
+#
+# NO WAVELET anywhere: the GCN coherence misfit is invariant to a per-node
+# complex scale, so the airgun spectrum, excitation delay and sensor coupling
+# all cancel. Obs is the six coefficient shards written by extract-coeff from
+# the CSG plan (Step 4 of docs/tasks/datasets/viking/README.md):
+#
+#   #  lo hi  dh     dt      n_p    k_lo k_hi
+#   while read lo hi dh dt n_p klo khi; do
+#     sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
+#         --dh-m $dh --dt $dt --min-fold 1 --node-stride 1 \
+#         --n-p $n_p --k-lo $klo --k-hi $khi \
+#         -o $VIKING_HOME/run/shards/coeff_${lo}_${hi}hz.npz
+#   done <<'BANDS'
+#   3 7  25    0.002  125000 750 1750
+#   3 8  25    0.002  100000 600 1600
+#   3 10 25    0.002  71450  429 1429
+#   3 12 25    0.002  55584  334 1334
+#   3 14 18.75 0.0015 60620  273 1273
+#   3 16 18.75 0.0015 51292  231 1231
+#   BANDS
+#
+# Each shard is cut for its stage: --dh-m / --dt / --n-p / --k-lo / --k-hi
+# equal that stage's dh_m / dt_s / probe_samples / k_lo / k_hi below. The
+# runner rejects a shard whose dt differs or whose bins cannot supply the
+# stage's comb; dh is not recorded in the shard (it stores grid indices), so
+# keep --dh-m and dh_m in step by hand.
+#
+# Starting model: the downloaded viking_initial_vp_12.5m.npy (Step 3 of the
+# doc), a first-arrival traveltime tomogram above 1.2 km blended into a
+# smoothed two-well trend below 1.7 km, water rows 0-27 at 1485.6 m/s.
+#
+# The water is NOT pinned here (`water: false`) and vp is not bounded, so the
+# data move the water column too: in the reference run its median stays
+# between about 1480 and 1555 m/s down to ~190 m and slows in a band ~100 m thick
+# above the seabed (1249 m/s at 319 m). To hold the water
+# at 1485.6 m/s instead, replace `water: false` with
+#   water: { seabed: 350.0, velocity: 1485.6 }
+#
+# Reference (V100 32 GB, run as written): 52 min (16.7 s per iteration),
+# peak GPU memory 9.7 GB, mean(1-GCN) 0.484 -> 0.188. The doc's "What good
+# looks like" has the per-band numbers and the figures.
+
+task_type: fwi
+output_dir: $VIKING_HOME/run/freqsel
+task_id: viking_freqsel_allteeth
+seed: 19491001
+
+grid: { dh: 12.5 }            # the starting model's grid; each stage regrids
+time: { dt: 0.001, nt: 270500 }   # not used by this mode: each stage's length
+                              # is steady + slack + probe at its own dt_s
+
+physics:
+  equation: Acoustic
+  spatial_order: 8
+  abcn: 50                    # 1250 m at 25 m, 937 m at 18.75 m (>= 495 m, lambda at 3 Hz)
+  free_surface: true
+  source_type: [h1]
+  receiver_type: [h1]
+
+backend:
+  impl: c
+  cuda_options:
+    memory:
+      strategy: boundary
+      boundary: { storage: gpu }
+
+init_model:
+  name: vp
+  path: $VIKING_HOME/raw/viking_initial_vp_12.5m.npy   # (320, 2285), 12.5 m
+
+water: false                  # invert the water column too (see the header)
+
+reparam:
+  kind: velocity_inr
+  hidden_features: 128
+  hidden_layers: 2
+  first_omega0: 30.0
+  hidden_omega0: 30.0
+  use_bias: false             # hash INR: coords in [0,1], MLP without bias
+  coord_min: 0.0
+  coord_max: 1.0
+  vp_mean: 0.0
+  vp_std: 500.0
+  save_net: true
+  lr: 1.0e-4
+  hash:
+    enabled: true
+    levels: 16
+    features_per_level: 1
+    log2_size: 18
+    base_resolution: 16
+    finest_resolution: 512
+
+source_encoding:
+  enabled: true
+  mode: frequency_selection
+  frequency:                  # stage 0's block, repeated globally for the schema
+    coeff_shards: $VIKING_HOME/run/shards/coeff_3_7hz.npz
+    probe_samples: 125000
+    k_lo: 750
+    k_hi: 1750
+    steady_samples: 10000
+    slack_samples: 250
+    ramp_s: 0.5
+    n_pools: 1
+
+optimizer: { kind: adam, lr: 1.0e-4 }   # under reparam the network trains at
+                              # reparam.lr x the stage's inr_lr_scale; this lr is unused
+loss: { kind: steady_gcn }    # this mode's only misfit (GCN coherence)
+
+epochs: 180                   # required: the sum of the stage epochs (checked)
+batchsize: 1                  # ignored: the pool IS the batch
+
+# Per-band grid: 25 m up to 12 Hz, 18.75 m for 14-16 Hz; dt keeps the CFL
+# number at 0.44 for 5500 m/s. The grid stays <= 25 m so the 6 m source and
+# the 10 m streamer stay in the top cell (a coarser cell moves the ghost
+# depth and breaks the per-node scale cancellation).
+#
+# EVERY stage repeats the full frequency block: a stage's `frequency:`
+# REPLACES the global one wholesale, so an omitted key silently reverts to the
+# schema default. steady / slack are 20 s / 0.5 s in that stage's dt
+# (20 s > 28.6 km / 1485.6 m/s, the ring-up across the line).
+stages:
+  - epochs: 30                # 3-7 Hz, 135250 steps
+    dh_m: 25.0
+    dt_s: 0.002
+    inr_lr_scale: 1.0
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_7hz.npz
+      probe_samples: 125000   # MUST equal the shard's --n-p
+      k_lo: 750
+      k_hi: 1750
+      steady_samples: 10000
+      slack_samples: 250
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 30                # 3-8 Hz, 110250 steps
+    dh_m: 25.0
+    dt_s: 0.002
+    inr_lr_scale: 0.85
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_8hz.npz
+      probe_samples: 100000
+      k_lo: 600
+      k_hi: 1600
+      steady_samples: 10000
+      slack_samples: 250
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 30                # 3-10 Hz, 81700 steps
+    dh_m: 25.0
+    dt_s: 0.002
+    inr_lr_scale: 0.7
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_10hz.npz
+      probe_samples: 71450
+      k_lo: 429
+      k_hi: 1429
+      steady_samples: 10000
+      slack_samples: 250
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 30                # 3-12 Hz, 65834 steps
+    dh_m: 25.0
+    dt_s: 0.002
+    inr_lr_scale: 0.6
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_12hz.npz
+      probe_samples: 55584
+      k_lo: 334
+      k_hi: 1334
+      steady_samples: 10000
+      slack_samples: 250
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 30                # 3-14 Hz, 74286 steps
+    dh_m: 18.75
+    dt_s: 0.0015
+    inr_lr_scale: 0.5
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_14hz.npz
+      probe_samples: 60620
+      k_lo: 273
+      k_hi: 1273
+      steady_samples: 13333
+      slack_samples: 333
+      ramp_s: 0.5
+      n_pools: 1
+  - epochs: 30                # 3-16 Hz, 64958 steps
+    dh_m: 18.75
+    dt_s: 0.0015
+    inr_lr_scale: 0.42
+    frequency:
+      coeff_shards: $VIKING_HOME/run/shards/coeff_3_16hz.npz
+      probe_samples: 51292
+      k_lo: 231
+      k_hi: 1231
+      steady_samples: 13333
+      slack_samples: 333
+      ramp_s: 0.5
+      n_pools: 1

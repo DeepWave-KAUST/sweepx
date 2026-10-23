@@ -239,7 +239,7 @@ obs:
 
 wavelet:    {kind: siren_pipeline_npz, path: ..., scale: 1.0}
 init_model: {name: vp, path: /path/to/vp_init.npy}
-# ...physics, backend, optimizer, loss, reparam, stages... (see benchmark YAML)
+# ...physics, backend, optimizer, loss, reparam, stages...
 ```
 
 Without `obs.plan.sampling` the dataset is materialised from the plan once, so
@@ -303,62 +303,53 @@ why) where it is not.
 ## End-to-end example (Viking 2-D)
 
 Quick summary below assuming **one local GPU, no SLURM**. The full
-walkthrough — including the download URLs, SEG-Y header
-specs, the legacy wavelet / initial-model bridge, the post-filter
-recipe, and an optional appendix on SLURM / ibex sbatch entry points —
-lives in [`docs/tasks/datasets/viking/README.md`](datasets/viking/README.md).
+walkthrough — download URLs and checksums, SEG-Y header facts, how the
+frequency bands are sized, what a good run looks like, and a SLURM
+template — lives in [`docs/tasks/datasets/viking/README.md`](datasets/viking/README.md).
 
 ```bash
-# Pick a writable work folder (any local path).
-export VIKING_HOME=$HOME/viking
-mkdir -p $VIKING_HOME/{raw,run}
+# Pick a writable work folder (any local path) and a checkout of this repo.
+export VIKING_HOME=$HOME/viking SWEEPX=$HOME/sweepx
+mkdir -p $VIKING_HOME/{raw,run/shards}
 
-# Step 0: one-time download of seismic.segy + FarField.dat (~750 MB).
-# Full URLs in docs/tasks/datasets/viking/README.md § Step 0.
+# Step 0: one-time download of seismic.segy + the starting model (~760 MB).
+# URLs and checksums in docs/tasks/datasets/viking/README.md § Step 0.
 
-# Step 1: scan SEG-Y → index (~10 s for Viking 1001 shots)
-sweep-tasks build-index \
-    --segy-root $VIKING_HOME/raw \
-    --glob 'seismic.segy' \
-    --out $VIKING_HOME/run/viking_index.npz \
-    --num-workers 8 --progress \
-    --source-depth-m 6.0 --receiver-depth-m 10.0
+# Steps 1-2: scan SEG-Y → index, then group every trace by shot → CSG plan.
+CFG=$SWEEPX/examples/tasks/field/viking/pipeline_config.yaml
+sweep-tasks build-index --config $CFG
+sweep-tasks build-plan  --config $CFG
 
-# Step 2: build CSG plan with no filter (= use all 1001 shots × 120 receivers)
-sweep-tasks build-plan \
-    --index $VIKING_HOME/run/viking_index.npz \
-    --grouping csg \
-    --out $VIKING_HOME/run/viking_csg_plan.npz \
-    --label "viking_full_csg"
+# Step 4: one coefficient shard per frequency band; Step 5 reads all six.
+while read lo hi dh dt n_p klo khi; do
+  sweep-tasks extract-coeff --plan $VIKING_HOME/run/viking_csg_plan.npz \
+      --dh-m $dh --dt $dt --min-fold 1 --node-stride 1 \
+      --n-p $n_p --k-lo $klo --k-hi $khi \
+      -o $VIKING_HOME/run/shards/coeff_${lo}_${hi}hz.npz
+done <<'BANDS'
+3 7  25    0.002  125000 750 1750
+3 8  25    0.002  100000 600 1600
+3 10 25    0.002  71450  429 1429
+3 12 25    0.002  55584  334 1334
+3 14 18.75 0.0015 60620  273 1273
+3 16 18.75 0.0015 51292  231 1231
+BANDS
 
-# Step 3 (legacy bridge, until ported): produce the SIREN-pipeline
-# wavelet and the 12.5 m initial vp via fwi_workflow-dev.
-#   fwi analyze-wavelet -d viking
-#   fwi estimate-wavelet -d viking
-#   fwi build-initial-model -d viking
-
-# Step 4 — single-GPU FWI (6-stage production, ~1 h on one V100).
-# Copy the example YAML and edit the wavelet / plan / init_model paths in it.
-sweep-tasks run $VIKING_HOME/run/viking_6stage.yaml
-# (multi-GPU on the same box: append --nproc-per-node N)
-
-# Step 5 — RTM + depth-tapered z-low-cut on the inverted vp.
-sweep-tasks run $VIKING_HOME/run/viking_rtm.yaml
-sweep-tasks filter-image \
-    $VIKING_HOME/run/viking_rtm/viking_rtm_v1/output/rtm_image_per_shot_normalised.npy \
-    --wavelength-m 300 --depth-m 600 --taper-m 400
+# Step 5: frequency-selection FWI, 6 bands x 30 iterations on one GPU.
+sweep-tasks run $SWEEPX/examples/tasks/field/viking/viking_freqsel_allteeth.yaml
 ```
 
-`sweep-tasks run` defaults to one local rank (in-process). For
-multi-GPU on the same box pass `--nproc-per-node N`; sweep-tasks
-re-execs itself under `torchrun --standalone --nproc_per_node=N`
-automatically when needed.
+This 2-D frequency-selection run uses one GPU: all 1001 shots already share
+one forward, and spreading a run over several GPUs needs domain
+decomposition, which is 3-D only. (`--nproc-per-node N` would start N
+identical inversions writing the same run directory.) For the plan-based
+time-domain path of Step 3, `sweep-tasks run --nproc-per-node N` splits the
+shots over N GPUs on one machine; sweep-tasks re-execs itself under
+`torchrun --standalone --nproc_per_node=N` automatically.
 
-For SLURM / ibex submission, see
+For SLURM, see
 [§ "Running on a cluster"](datasets/viking/README.md#running-on-a-cluster-optional)
-in the Viking walkthrough — same `sweep-tasks run` invocations,
-just wrapped in `sbatch` templates that consume `SWEEP_*_ROOT` /
-`PROJECT_DATA_ROOT` environment variables.
+in the Viking walkthrough: one sbatch template runs Steps 1-5.
 
 ## Branch — frequency-selection encoding (no per-iteration I/O)
 
@@ -378,8 +369,23 @@ The positional argument is a directory holding `output/record.npy`,
 leaves behind, with the NODES as its sources (reciprocity). `--dt` defaults to
 `time.dt` read out of that run's `config_resolved.yaml`.
 
-For real data, skip the CLI and call the library directly with your own arrays,
-which is the same code path:
+For field data, point it at a `SeismicPlan` from Step 2 instead; the plan's
+groups become the nodes (shots for a CSG plan, receivers for a CRG plan):
+
+```bash
+sweep-tasks extract-coeff --plan csg_plan.npz \
+    --dh-m 25 --dt 0.002 --min-fold 1 --node-stride 1 \
+    --n-p 125000 --k-lo 750 --k-hi 1750 -o coeff_3_7hz.npz
+```
+
+`--dh-m` is the grid the inversion stage runs on (positions are stored as grid
+indices on it) and `--dt` the solver time step, which defines the comb; the
+plan's own record sample interval is read from the plan. `--min-fold` drops
+nodes with fewer traces and `--node-stride` keeps every n-th node. The Viking
+walkthrough uses this form for all six of its bands.
+
+For arrays you already hold in memory, call the library directly, which is
+the same code path:
 
 ```python
 from sweepx.tasks.freqsel import FrequencyComb, extract_shard
@@ -412,9 +418,13 @@ climbs, because a wider band reaches the same bin count in less time. The
 expensive rung is the lowest one.
 
 Extraction is a DTFT of a record that already exists, so **one recording feeds
-an entire ladder** — extract once per rung, which costs seconds. The `--n-p`
-given here MUST equal `frequency.probe_samples` in the FWI YAML; the runner
-rejects a shard whose `n_p`, `dt` or `ks` disagree with the stage reading it.
+an entire ladder** — extract once per rung, which costs seconds. Cut each shard
+for the stage that reads it: `--n-p` = `frequency.probe_samples`, `--k-lo` /
+`--k-hi` = `k_lo` / `k_hi`, `--dt` = the stage's time step. The runner rejects a
+shard whose `dt` differs or whose window and bins cannot supply the stage's
+comb; a shard with a longer window (an integer multiple of `probe_samples`) or
+a wider bin range is accepted and decimated, with a `comb decimation` line in
+the log.
 
 #### Output
 
