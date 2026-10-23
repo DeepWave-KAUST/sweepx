@@ -110,5 +110,14 @@ annotated template rather than by copying an example:
 ```bash
 sweep-tasks init --list                       # every template
 sweep-tasks init fwi -o my_fwi.yaml           # annotated FWI reference
-sweep-tasks run my_fwi.yaml
+sweep-tasks run my_fwi.yaml                   # runs as written
 ```
+
+Every task template (`introspect`, `forward`, `wavefield`, `fwi`, `rtm`,
+`lsrtm`) runs as it comes out of `init`: a small Marmousi case built from
+`sweep.datasets`, nothing to download and no variable to set. Each documents
+every key inline, the field-data alternatives (`from_plan` geometry,
+`obs.plan`, an estimated wavelet) included. On one V100 the `fwi` template
+(a three-stage multiscale run) takes about 5 minutes, `lsrtm` 4, `rtm` 2 and
+the others under a minute. `viking` is not a task: it is the pipeline config
+for `build-index` / `build-plan` and the wavelet tools.

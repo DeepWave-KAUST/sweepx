@@ -4,68 +4,90 @@
 # Run with:         sweep-tasks run my_rtm.yaml
 # Multi-GPU:        sweep-tasks run my_rtm.yaml --nproc-per-node 4
 #
+# The active example, run as written on one V100 32 GB: 1.7 min for 57 shots.
+# Images: <output_dir>/marmousi_rtm/output/rtm_image*.npy, PNGs under qc/.
+#
 # RTM = reverse-time migration (one-pass imaging). Per shot: forward-model
 # with the wavelet through vp, backpropagate bandpass-filtered obs, apply the
 # imaging condition (cross-correlation ± illumination). Stack = the RTM image.
 #
 # ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
-# │ • UNCOMMENTED = active example (Viking RTM: 3 km offset, 3–25 Hz,       │
-# │   illumination-normalized, depth-tapered post-filter).                  │
-# │ • `#`-COMMENTED blocks = ALTERNATIVE modes / OPTIONAL features.         │
+# │ • UNCOMMENTED = active example: Marmousi 2-D RTM of synthetic obs in    │
+# │   the smoothed model, 3–20 Hz, illumination-normalized, depth-tapered   │
+# │   post-filter. Runs as-is: the models come from `sweep.datasets`.       │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes / OPTIONAL features, among   │
+# │   them the field-data path (`from_plan` geometry + `obs.plan`, an       │
+# │   estimated wavelet, the FWI result as the migration velocity).         │
 # │ • Schema is `extra="forbid"` — a mistyped key fails loudly at load.     │
+# │ • `$VAR` / `${VAR}` in any string value expands against the             │
+# │   environment; an unset variable is refused at load.                    │
 # └────────────────────────────────────────────────────────────────────────┘
 
 # ═══ Identity ════════════════════════════════════════════════════════════════
 
 task_type: rtm
-output_dir: ${VIKING_HOME}/run/viking_rtm
-task_id: viking_rtm_v1
+output_dir: ./sweep_runs            # run dir = <output_dir>/<task_id>/; a relative
+                                    # path is relative to THIS file
+task_id: marmousi_rtm
 seed: 0
-device: auto
+device: auto                        # "auto" | "<cuda index>" | "cpu"
 
-# ═══ Grid + time axis (match the FWI grid that made velocity_model) ═══════════
+# ═══ Grid + time axis (the grid of velocity_model) ════════════════════════════
 
 grid:
   dh: 12.5
-  # shape inferred from velocity_model.path npy header when omitted.
-  # shape: [401, 2305]
+  # shape inferred from velocity_model when omitted (Marmousi: [281, 1361]).
+  # Set it only to state it: a shape other than the model's is refused.
+  # shape: [281, 1361]
 
 time:
   dt: 0.001
-  nt: 6000                          # 6.0 s — cover the deepest reflectors
+  nt: 8000                          # 8.0 s — cover the deepest reflectors
 
 # ═══ Source wavelet ═══════════════════════════════════════════════════════════
 # Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
 
 wavelet:
-  kind: siren_pipeline_npz          # same wavelet as FWI is standard
-  path: ${VIKING_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
+  kind: ricker                      # analytic Ricker (synthetic)
+  fm: 8.0                           # peak frequency [Hz]  (required)
+  delay: 0.15                       # time shift [s] (~1.2/fm keeps it causal)
   scale: 1.0
 # ── ALTERNATIVES ──
-# wavelet: {kind: ricker, fm: 8.0, delay: 0.125, scale: 1.0}
-# wavelet: {kind: from_npy, path: /path/w.npy, scale: 1.0}
+# wavelet:                          # field data: the same wavelet as the FWI
+#   kind: siren_pipeline_npz        # (npz from `sweep-tasks estimate-wavelet`)
+#   path: ${SURVEY_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
+#   scale: 1.0
+# wavelet: {kind: from_npy, path: /path/w.npy, scale: 1.0}   # length == time.nt
 
 # ═══ Acquisition geometry + observed data ════════════════════════════════════
-# RTM usually uses a NARROWER-offset plan than FWI (far offsets pollute the
-# image). geometry.kind: line | explicit | from_file | from_segy_headers |
-#                        from_segy_index | from_plan
+# geometry.kind: line | explicit | from_file | from_segy_headers |
+#                from_segy_index | from_plan  (all six shown in fwi.yaml)
 
 geometry:
-  kind: from_plan
-  plan_path: ${VIKING_HOME}/run/viking_csg_3km.npz
-  dedupe: true
-  dedup_method: nearest             # "nearest" | "first"
-# ── ALTERNATIVES: same six kinds as FWI (see fwi.yaml) ──
+  kind: line                        # regular synthetic line, in GRID CELLS (x, z)
+  sources:   {step: 24, depth: 2}   # 57 shots every 300 m, 25 m deep
+  receivers: {step: 2,  depth: 18}  # every 25 m, 225 m deep (start=0, stop=nx)
+# ── ALTERNATIVES ──
+# geometry:                         # field data: a SeismicPlan from `build-plan`.
+#   kind: from_plan                 # RTM usually takes a NARROWER-offset plan
+#   plan_path: ${SURVEY_HOME}/run/csg_3km_plan.npz   # than FWI (far offsets
+#   dedupe: true                    #  pollute the image); a relative path is
+#   dedup_method: nearest           #  relative to the working dir. nearest|first
 # geometry: {kind: from_segy_index, index_path: /p/index.npz}
 
 # Observed data — pick EXACTLY ONE source; must match `geometry`.
 obs:
-  plan:
-    plan_path: ${VIKING_HOME}/run/viking_csg_3km.npz
-    cache_all: true                 # 2-D fits RAM; false = per-iter read (3-D)
-    # n_receivers_per_shot: null    # cap receivers/shot
-    # receiver_select: nearest      # "nearest" | "random" | "all"
+  synthetic_from:                   # model the "observed" data from a true model
+    name: vp
+    dataset: marmousi:2d-demo
+    preset: vp_true
 # ── ALTERNATIVES ──
+# obs:
+#   plan:                           # field data, pairs with geometry from_plan
+#     plan_path: ${SURVEY_HOME}/run/csg_3km_plan.npz
+#     cache_all: true               # 2-D fits RAM; false = per-batch read (3-D)
+#     # n_receivers_per_shot: null  # cap receivers/shot
+#     # receiver_select: nearest    # "nearest" | "random" | "all"
 # obs: {npy_path: /path/obs.npy}
 # obs: {segy: {path: /path/obs.segy, byte_map: {sx: 73, gx: 81}}}
 # obs: {segy_index: {index_path: /path/index.npz, lazy: true}}
@@ -74,9 +96,9 @@ obs:
 
 physics:
   equation: Acoustic
-  spatial_order: 6
-  abcn: 20
-  free_surface: true
+  spatial_order: 8                  # FD order 2/4/6/8
+  abcn: 20                          # PML thickness [cells]
+  free_surface: false               # true for marine field data
   source_type: ["h1"]
   receiver_type: ["h1"]
 
@@ -95,12 +117,16 @@ backend:
     # memory: {strategy: ckpt, ckpt: {mode: chunk, chunks: 100, storage: gpu}}
 
 # ═══ Velocity model to image with ════════════════════════════════════════════
-# The final FWI vp (or any trusted vp). Imaging the INITIAL vp instead gives
-# a useful baseline-vs-inverted QC pair.
+# Smooth enough to carry the kinematics without imprinting reflectors of its
+# own on the image — here the smoothed Marmousi, deliberately NOT the true one.
+# On field data: the final FWI vp (imaging the INITIAL vp as well gives a
+# baseline-vs-inverted QC pair).
 
 velocity_model:
   name: vp
-  path: ${VIKING_HOME}/run/viking_fwi/viking_fwi_6stage_v1/output/inverted_vp.npy
+  dataset: marmousi:2d-demo         # embedded in the sweep package, no download
+  preset: vp_smooth
+  # path: /path/to/run/output/inverted_vp.npy   # OR an .npy (e.g. an FWI result)
 
 # ═══ Loss / imaging-condition gradient form ══════════════════════════════════
 # kind: mse | l1 | huber | trace_cosine  (mse = classical cross-correlation)
@@ -118,21 +144,23 @@ model_bounds:
     max: 5500.0
 
 # ═══ Per-shot local-window (recommended for long streamer lines) ═════════════
+# Each shot is migrated on a window around its own sources + receivers plus a
+# halo. Off here: this fixed spread puts receivers over the whole model.
 
-local_model_window:
-  enabled: true
-  padding_x_m: 1500.0
-  padding_z_m: 0.0
-  full_depth: true
-  min_width_m: 0.0
+# local_model_window:
+#   enabled: true
+#   padding_x_m: 1500.0
+#   padding_z_m: 0.0
+#   full_depth: true
+#   min_width_m: 0.0
 
 # ═══ Imaging condition + filters ═════════════════════════════════════════════
 
 imaging:
-  shots_per_batch: 1                # shots forward-modeled per minibatch
+  shots_per_batch: 4                # shots forward-modeled per minibatch
   # ---- bandpass: sets the image frequency band ----
-  filter_lowcut_hz: 3.0
-  filter_highcut_hz: 25.0
+  filter_lowcut_hz: 3.0             # below ~3 Hz there is no reflectivity to
+  filter_highcut_hz: 20.0           # image, only a smooth low-wavenumber backdrop
   filter_order: 4
   filter_padtype: odd               # "odd" | "even" | "constant" | "none"
   filter_target: syn                # "syn" (filter obs+syn) | "wavelet" (~2× faster)

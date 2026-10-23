@@ -1,19 +1,27 @@
 """YAML <-> TaskSpec round-trip and `new_template` factory.
 
-Relative paths inside the YAML are resolved against the YAML file's parent
-directory at load time. ``$VAR`` / ``${VAR}`` inside path-like values is
-expanded against the current process environment first (so a portable
-template can be authored with ``path: ${DATA_ROOT}/vp_true.npy``).
+``$VAR`` / ``${VAR}`` in any string value of the YAML is expanded against the
+current process environment at load time (so a portable task can be authored
+with ``path: ${DATA_ROOT}/vp_true.npy`` or ``plan_path: $SURVEY/plan.npz``).
+A variable that is not set is an error when a task is loaded: left in place it
+would become a literal ``${VAR}`` directory or a missing file much later.
+
+Then the path keys of :data:`RESOLVED_PATH_KEYS` that are still relative are
+resolved against the YAML file's parent directory. Every other path-like value
+(``plan_path``, ``index_path``, ...) is only expanded, not re-based: a relative
+one is read relative to the working directory of the process that runs it.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from pydantic_core import PydanticCustomError
 
 from sweepx.tasks.schemas import TaskSpec
 
@@ -23,7 +31,9 @@ _task_adapter: TypeAdapter[TaskSpec] = TypeAdapter(TaskSpec)
 # depth. Matched by KEY NAME, not by schema field: every other path-like field
 # (``loss.data_mask_path``, ``physics.topography``, ``geometry.plan_path``, ...)
 # is read relative to the working directory of the process that runs the task,
-# except the files of a ``water:`` block (RESOLVED_WATER_PATH_KEYS).
+# except the files of a ``water:`` block (RESOLVED_WATER_PATH_KEYS). ``$VAR`` is
+# expanded in those too, as in every string value; only the re-basing is limited
+# to these keys.
 RESOLVED_PATH_KEYS: frozenset[str] = frozenset({
     "path", "npy_path", "disk_dir", "output_dir",
     "sources_file", "receivers_file", "coeff_shards",
@@ -34,16 +44,21 @@ RESOLVED_PATH_KEYS: frozenset[str] = frozenset({
 # ordinary words elsewhere. A numeric ``seabed`` (flat depth) stays a number.
 RESOLVED_WATER_PATH_KEYS: frozenset[str] = frozenset({"seabed", "mask"})
 
+# A ``$NAME`` / ``${NAME}`` reference as ``os.path.expandvars`` reads it; one that
+# survives expansion names a variable that is not set.
+_ENV_REF = re.compile(r"\$(\w+|\{[^}]*\})")
+
 
 def resolve_paths(raw: dict, base_dir: str | Path) -> dict:
     """Return a copy of a raw task dict with its path keys made absolute.
 
     The exact rule :func:`load_task` / :func:`load_task_from_dict` apply before
-    validation: for every key in :data:`RESOLVED_PATH_KEYS`, and for every key
-    in :data:`RESOLVED_WATER_PATH_KEYS` inside a ``water:`` mapping, a string
-    value has ``$VAR`` / ``${VAR}`` expanded and, if still relative, is joined
-    to ``base_dir`` and resolved. Nothing else is touched; ``raw`` is not
-    modified.
+    validation: every string value has ``$VAR`` / ``${VAR}`` expanded; then for
+    every key in :data:`RESOLVED_PATH_KEYS`, and for every key in
+    :data:`RESOLVED_WATER_PATH_KEYS` inside a ``water:`` mapping, a string value
+    that is still relative is joined to ``base_dir`` and resolved. Nothing else
+    is touched; ``raw`` is not modified. A variable that is not set is left as
+    written here (the loaders refuse it, see :func:`load_task_from_dict`).
     """
     if not isinstance(raw, dict):
         raise ValueError(
@@ -54,13 +69,14 @@ def resolve_paths(raw: dict, base_dir: str | Path) -> dict:
 
 
 def _resolve_paths(value: Any, base: Path) -> Any:
-    """Recursively resolve any string that looks like a path key to absolute.
+    """Recursively expand ``$VAR`` in every string; make path keys absolute.
 
     We can't know which strings are paths without inspecting the schema, so
     instead we walk the raw dict before validation and treat any key in
     :data:`RESOLVED_PATH_KEYS` whose value is a non-absolute string as
     relative to `base`. ``$VAR`` / ``${VAR}`` is expanded against the
-    environment before relative-to-absolute resolution.
+    environment in every string value, and before relative-to-absolute
+    resolution in the path keys.
 
     ``coeff_shards`` is a glob rather than a single path, but it belongs in the
     same set: it is resolved by ``glob.glob`` deep inside the runner, so
@@ -81,6 +97,19 @@ def _resolve_paths(value: Any, base: Path) -> Any:
         }
     if isinstance(value, list):
         return [_resolve_paths(v, base) for v in value]
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    return value
+
+
+def _expand_env(value: Any) -> Any:
+    """``$VAR`` expanded in every string of ``value``; nothing re-based."""
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(v) for v in value]
     return value
 
 
@@ -91,19 +120,21 @@ def _resolve_water(v: Any, base: Path) -> Any:
     Resolved here rather than by key name everywhere: ``mask`` and ``seabed``
     are ordinary words, and only inside ``water:`` are they files."""
     if not isinstance(v, dict):
-        return v
-    return {k: (_resolve_one(x, base) if k in RESOLVED_WATER_PATH_KEYS else x)
+        return _expand_env(v)
+    return {k: (_resolve_one(x, base) if k in RESOLVED_WATER_PATH_KEYS
+                else _expand_env(x))
             for k, x in v.items()}
 
 
 def _resolve_one(v: Any, base: Path) -> Any:
     if not isinstance(v, str):
-        return v
+        return _expand_env(v)
     # Expand $VAR / ${VAR} against the current environment first so templates
     # like ``${DATA_ROOT}/vp_true.npy`` work without pre-`envsubst`.
-    # Unset variables are left as-is (matches expandvars semantics) — they
-    # then fall through to the relative-path branch, which gives a clear
-    # FileNotFoundError downstream rather than silently dropping the prefix.
+    # Unset variables are left as-is (matches expandvars semantics) and then
+    # fall through to the relative-path branch; the loaders refuse them
+    # before anything is run (_refuse_unset_env), so no literal ``${VAR}``
+    # directory is ever created.
     v = os.path.expandvars(v)
     p = Path(v)
     if p.is_absolute():
@@ -114,7 +145,8 @@ def _resolve_one(v: Any, base: Path) -> Any:
 def load_task(path: str | Path) -> TaskSpec:
     """Load and validate a task spec from a YAML file.
 
-    Raises pydantic.ValidationError on schema errors.
+    Raises pydantic.ValidationError on schema errors, and on a ``$VAR`` whose
+    variable is not set (see :func:`load_task_from_dict`).
     """
 
     path = Path(path).resolve()
@@ -133,6 +165,11 @@ def load_task_from_dict(raw: dict, *, base_dir: Path | str | None = None) -> Tas
     :func:`sweepx.tasks.runtime.config.apply_overrides`, then this function does
     path resolution + pydantic validation against the same base_dir the
     YAML lived in.
+
+    Path resolution is :func:`resolve_paths`. A ``$VAR`` / ``${VAR}`` it leaves
+    behind (the variable is not set) raises a pydantic.ValidationError, one
+    entry per value, before any schema check: nothing downstream would read
+    it as anything but a literal path component.
     """
     if not isinstance(raw, dict):
         raise ValueError(
@@ -141,7 +178,43 @@ def load_task_from_dict(raw: dict, *, base_dir: Path | str | None = None) -> Tas
         )
     base = Path(base_dir).resolve() if base_dir is not None else Path.cwd()
     resolved = _resolve_paths(raw, base)
+    _refuse_unset_env(resolved)
     return _task_adapter.validate_python(resolved)
+
+
+def _unset_env_refs(value: Any, loc: tuple = ()):
+    """``(loc, reference, string)`` for every ``$VAR`` left in a resolved dict."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _unset_env_refs(v, (*loc, k))
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            yield from _unset_env_refs(v, (*loc, i))
+    elif isinstance(value, str):
+        for m in _ENV_REF.finditer(value):
+            yield loc, m.group(0), value
+
+
+def _refuse_unset_env(resolved: dict) -> None:
+    """Raise a ValidationError naming every ``$VAR`` that expansion left.
+
+    ``os.path.expandvars`` leaves an unset variable as written, so a task
+    loaded with ``output_dir: ${VIKING_HOME}/run`` and no ``VIKING_HOME`` used
+    to run into ``<yaml dir>/${VIKING_HOME}/run``: a directory created under
+    that literal name before the first missing input surfaced. A
+    ValidationError, so callers that report schema errors report this too.
+    """
+    errors = [
+        {"type": PydanticCustomError(
+            "env_var_not_set",
+            "{ref} is not set in the environment (in '{value}'): export it "
+            "or write the value out",
+            {"ref": ref, "value": text}),
+         "loc": loc, "input": text}
+        for loc, ref, text in _unset_env_refs(resolved)
+    ]
+    if errors:
+        raise ValidationError.from_exception_data("TaskSpec", errors)
 
 
 def dump_task(spec: TaskSpec, path: str | Path) -> Path:

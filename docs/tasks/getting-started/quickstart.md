@@ -77,4 +77,11 @@ Prefer to start from an annotated template?
 
 ```bash
 sweep-tasks init fwi -o my_fwi.yaml     # every key commented
+sweep-tasks run my_fwi.yaml             # runs as written
 ```
+
+The template is itself a working task: a three-stage multiscale FWI of the
+same Marmousi model (about 5 minutes on one V100), with the alternatives to
+every block — field data, other optimizers, a network instead of the grid —
+written out in comments. `sweep-tasks init --list` shows the others; each
+task type has one.

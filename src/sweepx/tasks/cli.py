@@ -303,13 +303,14 @@ def _cmd_init(args) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text)
         print(f"[init] wrote {template!r} template -> {out_path}")
-        # Tailored "next steps" hint per template type.
-        if template in ("fwi", "rtm"):
-            print(
-                f"[init] next: edit paths inside the file, then run:\n"
-                f"       sweep-tasks run {out_path}\n"
-                f"       # multi-GPU: append --nproc-per-node N"
-            )
+        # Tailored "next steps" hint: a task template is one `run`; the viking
+        # file is a pipeline --config read by several subcommands.
+        from sweepx.tasks.yaml_io import _FILE_TEMPLATES
+
+        if template in _FILE_TEMPLATES:
+            print(f"[init] next: sweep-tasks run {out_path}")
+            if template in ("forward", "fwi", "rtm", "lsrtm"):
+                print("       # multi-GPU: append --nproc-per-node N")
         else:
             print(
                 f"[init] next: edit paths inside (especially $VIKING_HOME / "

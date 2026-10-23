@@ -24,21 +24,25 @@ annotated template rather than by copying an example:
 ```bash
 sweep-tasks init --list                       # every template
 sweep-tasks init fwi -o my_fwi.yaml           # annotated FWI reference
-sweep-tasks run my_fwi.yaml
+sweep-tasks run my_fwi.yaml                   # runs as written
 ```
 
-There is a template for every task type, and each one documents every key
-inline — what it does, what the alternatives are, what the default means:
+There is a template for every task type. Each one runs as it comes out of
+`init` — a small Marmousi case built from `sweep.datasets`, so there is nothing
+to download and no variable to set — and documents every key inline: what it
+does, what the alternatives are (the field-data ones among them: `from_plan`
+geometry, `obs.plan`, an estimated wavelet), what the default means. `init`
+prints the `sweep-tasks run` line to use next.
 
-| `sweep-tasks init <name>` | what you get |
-|---|---|
-| `introspect` | ask the build what equations/models/backends it has. Run this first on a new machine. |
-| `forward` | synthesise a shot record |
-| `wavefield` | forward + pressure-field snapshots |
-| `fwi` | full waveform inversion — the largest template, covers stages, reparam, QC |
-| `rtm` | reverse-time migration |
-| `lsrtm` | least-squares RTM |
-| `viking` | *not* a task spec — the pipeline config for `build-index` / `build-plan` |
+| `sweep-tasks init <name>` | what you get | run time, one V100 |
+|---|---|---|
+| `introspect` | ask the build what equations/models/backends it has. Run this first on a new machine. | seconds |
+| `forward` | Marmousi shot records | 30 s |
+| `wavefield` | forward + pressure-field snapshots | 30 s |
+| `fwi` | full waveform inversion, three-stage multiscale — the largest template: reparam, source encoding, local windows and the field-data inputs are documented alongside | 5 min |
+| `rtm` | reverse-time migration in the smoothed model | 2 min |
+| `lsrtm` | least-squares RTM | 4 min |
+| `viking` | *not* a task spec — the pipeline config for `build-index` / `build-plan` and the wavelet tools, each run as `sweep-tasks <cmd> --config <file>` | — |
 
 `sweep-tasks init` and `sweep-tasks new` read the same files, so the two can
 never drift apart.

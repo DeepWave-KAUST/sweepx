@@ -1,6 +1,6 @@
 # Viking 2-D end-to-end config — one file drives every sweep-tasks step
 # in the wavelet-estimation pipeline. Pair with the README at
-# `sweep-tasks/docs/datasets/viking/README.md`.
+# `docs/tasks/datasets/viking/README.md`.
 #
 # Generate with:
 #   sweep-tasks init -o $VIKING_HOME/viking.yaml
@@ -111,7 +111,10 @@ analyze_wavelet:
 # ═══════════════════════════════════════════════════════════════════════
 # Step 3b — `sweep-tasks estimate-wavelet`
 # SIREN LBFGS prefit to the rank-1 average + sweep wave-equation
-# refinement. 1 GPU production: ~15–30 min on V100.
+# refinement, 1 GPU. All selected shots are modeled in ONE solve over the
+# whole line, with GPU boundary storage, so the memory grows with the shot
+# count. shot_stop 500 (below): ~18 min, 24.1 GiB peak on one V100 32 GB.
+# shot_stop 1001 (every shot) runs out of memory on that card.
 # ═══════════════════════════════════════════════════════════════════════
 estimate_wavelet:
   # Output directory (will contain estimated_wavelet.npz + 4 QC PNGs).
@@ -119,10 +122,10 @@ estimate_wavelet:
   # Step 3a output — used as the LBFGS prefit target AND the optional
   # prior anchor in the wave-equation main loop.
   initial_wavelet:             ${VIKING_HOME}/run/wavelet/direct_batch/average/average_direct_wavelet.npz
-  # Same shot range / receiver count as 3a; the inversion uses these as
-  # its diagnostic batch.
+  # Shot range / receiver count of the inversion batch (3a uses all 1001
+  # shots; here the first 500, which fit a 32 GB GPU — see above).
   shot_start:                  1
-  shot_stop:                   1001
+  shot_stop:                   500
   nearest_receivers:           4
   # Forward-model duration (s). Must be ≥ the deepest reflector you
   # want to honor in the wavelet match.
@@ -157,7 +160,7 @@ estimate_wavelet:
   prefit_steps:                10
   prefit_lr:                   1.0e-3
   # Weight on the MSE prior anchoring SIREN to initial_wavelet during the
-  # main loop. 0.05 = light anchor (production with 1001 shots). For
+  # main loop. 0.05 = light anchor (hundreds of shots, as here). For
   # small batches (≤ 20 shots) raise to 1–5 to prevent Adam from cycle-
   # skipping into a non-physical time-shift basin.
   initial_wavelet_prior_weight: 0.05

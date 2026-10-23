@@ -37,6 +37,8 @@ nor the engine (checked in CI with import-linter).
 
 ```bash
 sweep-tasks run examples/tasks/synthetic/09_forward_constant_box.yaml   # or: sweepx tasks run …
+sweep-tasks init fwi -o my_fwi.yaml    # an annotated FWI template (any task type) ...
+sweep-tasks run my_fwi.yaml            # ... that runs as written: Marmousi, nothing to download
 ```
 
 ```python
