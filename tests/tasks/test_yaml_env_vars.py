@@ -112,3 +112,35 @@ def test_a_set_variable_runs_into_its_directory(tmp_path, monkeypatch):
                                     "task_id": "env_ok", "action": "list_equations"}))
     assert cli_main(["run", str(task)]) == 0
     assert (tmp_path / "runs_here" / "env_ok" / "status.json").is_file()
+
+
+def test_config_with_an_unset_variable_is_refused(tmp_path, monkeypatch, capsys):
+    """`--config` pipeline files (`build-index`, `build-plan`, ...) follow the
+    same rule: `out: ${VAR}/index.npz` with VAR unset used to write under a
+    literal `${VAR}` directory."""
+    monkeypatch.delenv(_UNSET, raising=False)
+    cfg = tmp_path / "pipeline.yaml"
+    cfg.write_text(yaml.safe_dump({"build_index": {
+        "segy_root": f"${{{_UNSET}}}/raw", "out": f"${{{_UNSET}}}/run/index.npz"}}))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["build-index", "--config", str(cfg)])
+    assert exc.value.code == 2
+    assert _UNSET in capsys.readouterr().out
+    assert not any("$" in p.name for p in tmp_path.rglob("*"))
+
+
+def test_config_expands_a_set_variable(tmp_path, monkeypatch):
+    import argparse
+
+    from sweepx.tasks.cli import _merge_yaml_into_args
+
+    monkeypatch.setenv("SX_HOME", str(tmp_path))
+    cfg = tmp_path / "pipeline.yaml"
+    cfg.write_text(yaml.safe_dump({"step": {"out": "${SX_HOME}/run/index.npz"}}))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config")
+    parser.add_argument("--out")
+    args = parser.parse_args(["--config", str(cfg)])
+    _merge_yaml_into_args(args, parser, "step")
+    assert args.out == f"{tmp_path}/run/index.npz"

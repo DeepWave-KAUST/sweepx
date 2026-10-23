@@ -22,7 +22,7 @@
 #   sweep-tasks analyze-wavelet --config viking.yaml --shot-stop 50
 #
 # `$VAR` / `${VAR}` in string values is expanded against the current
-# environment at load time.
+# environment at load time; a variable that is not set is an error.
 
 # ═══════════════════════════════════════════════════════════════════════
 # Step 1 — `sweep-tasks build-index`
