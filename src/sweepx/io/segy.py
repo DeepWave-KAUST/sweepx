@@ -470,14 +470,17 @@ def read_segy(
     with segyio.open(str(path), "r", iline=iline, xline=xline, strict=strict) as f:
         dt = segyio.dt(f) / 1e6
         n_samples = f.samples.size
-        try:
+        if f.unstructured:
+            # Pre-stack gathers / no inline-xline headers: flat (n_traces, ns).
+            # ``f.trace[:]`` yields two reused buffers, so stacking it returns
+            # copies of the last two traces; ``trace.raw`` reads a fresh array.
+            data = f.trace.raw[:]
+            ilines = np.array([])
+            xlines = np.array([])
+        else:
             data = segyio.tools.cube(f)
             ilines = np.asarray(f.ilines)
             xlines = np.asarray(f.xlines)
-        except Exception:
-            data = np.stack([np.asarray(tr) for tr in f.trace[:]], axis=0)
-            ilines = np.array([])
-            xlines = np.array([])
     return data, {
         "dt": dt,
         "n_samples": int(n_samples),

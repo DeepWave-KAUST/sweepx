@@ -185,3 +185,32 @@ def test_multifile_reader_rejects_mismatched_files(tmp_path):
 def test_multifile_reader_needs_at_least_one_path():
     with pytest.raises(ValueError):
         MultiFileSEGYReader([])
+
+
+# ------------------------------------------------- read_segy (segyio path)
+@pytest.mark.parametrize("writer", ["write_segy", "write_segy_minimal"])
+def test_read_segy_unstructured_roundtrip(tmp_path, writer):
+    # Pre-stack style file (no inline/xline headers). >2 traces: segyio's
+    # trace generator reuses two buffers, so a bad read only shows from 3 on.
+    pytest.importorskip("segyio")
+    from sweepx.io import segy as sx_segy
+
+    d = np.random.default_rng(1).standard_normal((7, 50)).astype("float32")
+    p = tmp_path / "pre.segy"
+    getattr(sx_segy, writer)(p, d, dt=0.002)
+    back, meta = sx_segy.read_segy(p)
+    np.testing.assert_array_equal(back, d)
+    assert meta["dt"] == pytest.approx(0.002)
+    assert meta["ilines"].size == 0
+
+
+def test_read_segy_structured_cube(tmp_path):
+    segyio = pytest.importorskip("segyio")
+    from sweepx.io.segy import read_segy
+
+    cube = np.random.default_rng(2).standard_normal((3, 4, 20)).astype("float32")
+    p = tmp_path / "post.segy"
+    segyio.tools.from_array3D(str(p), cube, dt=4000)
+    back, meta = read_segy(p)
+    np.testing.assert_array_equal(back, cube)
+    assert meta["ilines"].size == 3 and meta["xlines"].size == 4
