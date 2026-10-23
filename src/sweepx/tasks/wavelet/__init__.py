@@ -1,7 +1,8 @@
 """Wavelet analysis + inversion utilities for sweep-tasks.
 
-Ported from ``fwi_workflow-dev`` (see
-``docs/datasets/viking/README.md`` Step 3 for the call chain). Reads
+Ported from ``fwi_workflow-dev``; the CLI entry points are
+``sweep-tasks analyze-wavelet`` / ``estimate-wavelet`` / ``convert-farfield``
+/ ``plot-wavelet-steps`` (``--help`` on each). Reads
 :class:`sweepx.io.seismic_plan.SeismicPlan` plans built by
 ``sweep-tasks build-plan`` instead of the legacy ``csg_index_v2`` npz.
 

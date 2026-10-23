@@ -75,5 +75,5 @@ The four geometry kinds, and when each earns its place:
 | `from_file` | the same arrays as `.npy` | layouts a script generated |
 
 `from_segy_headers`, `from_segy_index` and `from_plan` read real acquisition
-geometry out of field data; the [Viking](../datasets/viking/README.md) example
-uses those.
+geometry out of field data (a SEG-Y file, a trace index, or a `SeismicPlan`
+from `sweep-tasks build-plan`; see [the CLI workflow](../cli_workflow.md)).

@@ -1,6 +1,8 @@
-# Viking 2-D end-to-end config — one file drives every sweep-tasks step
-# in the wavelet-estimation pipeline. Pair with the README at
-# `docs/tasks/datasets/viking/README.md`.
+# Viking 2-D pipeline config — one file drives the sweep-tasks steps that
+# read the raw SEG-Y. `docs/tasks/datasets/viking/README.md` uses its
+# build_index / build_plan sections (Steps 1-2, before frequency-selection
+# FWI); the wavelet sections below configure the wavelet tools for a
+# conventional, wavelet-based workflow, which that walkthrough does not use.
 #
 # Generate with:
 #   sweep-tasks init -o $VIKING_HOME/viking.yaml
