@@ -58,15 +58,23 @@ def test_compose_chains_preconditioners():
 
 
 def test_depth_weighting_2d_param():
-    """For (nx, nz) shape, weight broadcasts only over the depth axis."""
-    nx, nz = 7, 4
-    grad = torch.ones(nx, nz)
-    param = torch.zeros(nx, nz, requires_grad=True)
-    pc = DepthWeighting(depth_axis=-1, p=1.0)
+    """sweep's (nz, nx) layout: the default weights vary along axis 0 only."""
+    nz, nx = 4, 7
+    grad = torch.ones(nz, nx)
+    param = torch.zeros(nz, nx, requires_grad=True)
+    pc = DepthWeighting(p=1.0)
     pc.update([param])
     out = pc(grad, param)
-    # Every "trace" must look the same.
-    for i in range(nx):
-        assert torch.allclose(out[0], out[i])
-    assert out[0, 0].item() == 0.0
-    assert out[0, -1].item() == 1.0
+    # Every trace (column) must look the same.
+    for ix in range(nx):
+        assert torch.allclose(out[:, 0], out[:, ix])
+    assert torch.allclose(out[:, 0], torch.tensor([0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]))
+
+
+def test_depth_weighting_3d_param_default_axis():
+    """sweep's 3-D (nz, ny, nx) layout: depth is axis 0 as well."""
+    nz, ny, nx = 3, 4, 5
+    param = torch.zeros(nz, ny, nx, requires_grad=True)
+    out = DepthWeighting(p=1.0)(torch.ones(nz, ny, nx), param)
+    assert torch.allclose(out[:, 0, 0], torch.tensor([0.0, 0.5, 1.0]))
+    assert torch.allclose(out, out[:, :1, :1].expand(nz, ny, nx))

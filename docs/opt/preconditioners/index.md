@@ -15,14 +15,18 @@ class Preconditioner:
 This means any preconditioner composes with any optimizer:
 
 ```python
+import sweepx.opt
+
 optimizer = sweepx.opt.optim.LBFGS(
     [inv_vp],
-    preconditioner=sweepx.opt.precond.PseudoHessianPrecond(eps=1e-3),
+    preconditioner=sweepx.opt.precond.PseudoHessianPrecond(eps=1e-5),
 )
 ```
 
 Preconditioners can also be composed with each other (e.g. pseudo-Hessian
-multiplied by depth weighting); see the per-algorithm pages.
+multiplied by depth weighting); see the per-algorithm pages. The
+pseudo-Hessian also needs its illumination maps refreshed during the run:
+see [hooking it into a sweep run](pseudo_hessian.md#hooking-it-into-a-sweep-run).
 
 ## Available preconditioners
 

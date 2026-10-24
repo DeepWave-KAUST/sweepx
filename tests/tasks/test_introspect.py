@@ -335,8 +335,11 @@ def test_load_model_array_validates_the_reference(tmp_path):
 # ----- geometry / wavelet ----------------------------------------------------------
 
 def _forward_template(tmp_path: Path, shape=(40, 160)) -> dict:
+    """The bundled forward template on a small model: its `models:` swapped
+    for the commented path alternative, ``./vp_true.npy``, placed beside it."""
     raw = _bundled_templates()["forward.yaml"]
     np.save(tmp_path / "vp_true.npy", np.full(shape, 2000.0, dtype=np.float32))
+    raw["models"] = [{"name": "vp", "path": "./vp_true.npy"}]
     raw["output_dir"] = str(tmp_path / "runs")
     return raw
 

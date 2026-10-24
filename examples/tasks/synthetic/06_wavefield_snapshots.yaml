@@ -35,12 +35,13 @@
 # `snapshot_times` are TIME-STEP INDICES, not seconds: at dt = 1 ms the four
 # below are 0.4 / 0.9 / 1.5 / 2.4 s.
 #
-# Reference (RTX 6000 Ada, seed 0): 17 s.
+# Reference (RTX 6000 Ada, seed 0): 18 s.
 #
 # `physics.free_surface: true` puts a pressure-release boundary at z=0, so the
 # snapshots show the downgoing wave AND its polarity-flipped surface ghost,
 # plus the surface multiples that follow. Flip it to false and re-run: the
-# ghost and the multiples disappear and only the direct wavefront is left.
+# ghost and the surface multiples disappear, while the direct wave and the
+# reflections and scattering from inside the model remain.
 # That difference is the whole reason marine FWI has to model a free surface.
 
 task_type: wavefield

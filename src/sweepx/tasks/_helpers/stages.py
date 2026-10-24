@@ -582,10 +582,20 @@ def _prepare_stage(
 
     obs_np = _prep_obs_from_pristine()
 
+    # The previous stage's obs is dead from here on (this stage's is rebuilt
+    # from pristine, and nothing reads state["obs"] before it is reassigned
+    # below). Drop it before the new one is uploaded, so the GPU never holds
+    # both, and hand its memory back so the headroom check below sees it.
+    _prev_obs = state.pop("obs", None)
+    if isinstance(_prev_obs, torch.Tensor) and _prev_obs.is_cuda:
+        del _prev_obs
+        torch.cuda.empty_cache()
+    else:
+        del _prev_obs
+
     # Upload obs to the solver device. The per-iter loop does
     # ``obs[chunk].to(dev)`` which becomes a free no-op once obs is on
-    # dev. Full obs is ~1 GB float32 on Marmousi-scale; trivial on a
-    # multi-GB GPU and saves ~9 s of repeated H2D per 100 iters.
+    # dev, and saves the repeated H2D copy every iteration.
     obs_np = np.ascontiguousarray(obs_np.astype(np.float32, copy=False))
     obs_t = torch.from_numpy(obs_np)
     on_cuda = _is_cuda_dev(dev)
@@ -593,7 +603,9 @@ def _prepare_stage(
         # Keep the full obs on GPU only when it fits with headroom. Large
         # field-data obs at fine stages (tens of GB) OOMs the device and can
         # exceed a V100's 32 GB; leave it on CPU and let the per-iter
-        # ``obs[chunk].to(dev)`` stream each chunk on demand.
+        # ``obs[chunk].to(dev)`` stream each chunk on demand. The 6 GiB
+        # headroom also covers the stage bandpass below, whose transient
+        # memory _bandpass_obs_by_shot_chunks bounds by its chunk size.
         _free_b, _ = torch.cuda.mem_get_info(dev)
         if obs_t.nbytes < _free_b - (6 << 30) and os.environ.get("SWEEP_OBS_FORCE_CPU") != "1":
             obs_t = obs_t.to(dev, non_blocking=False)
@@ -612,28 +624,11 @@ def _prepare_stage(
     # CPU fallback: scipy ``sosfiltfilt`` with the configured padtype.
     if stage.bandpass is not None:
         if obs_t.is_cuda:   # obs may be CPU-resident for large field data (see upload above)
-            with torch.no_grad():
-                # Chunk the bandpass over the shot axis (dim 0) so each cuFFT
-                # plan stays under the 2^31-element limit; a full dense-OBN obs
-                # (nshots*nt*nrec) can exceed INT_MAX and trip
-                # CUFFT_INVALID_SIZE. Per-shot spectra are independent, so
-                # filtering shot-chunks in place is exact.
-                _bp_chunk = 64
-                if obs_t.shape[0] > _bp_chunk and time_axis_pristine != 0:
-                    for _b0 in range(0, obs_t.shape[0], _bp_chunk):
-                        _b1 = min(_b0 + _bp_chunk, obs_t.shape[0])
-                        obs_t[_b0:_b1] = _bandpass_torch_fft(
-                            obs_t[_b0:_b1].contiguous(),
-                            lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
-                            dt=new_dt, order=stage.bandpass.order,
-                            axis=time_axis_pristine,
-                        )
-                else:
-                    obs_t = _bandpass_torch_fft(
-                        obs_t, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
-                        dt=new_dt, order=stage.bandpass.order,
-                        axis=time_axis_pristine,
-                    )
+            obs_t = _bandpass_obs_by_shot_chunks(
+                obs_t, lo=stage.bandpass.lo_hz, hi=stage.bandpass.hi_hz,
+                dt=new_dt, order=stage.bandpass.order,
+                time_axis=time_axis_pristine,
+            )
             _flavor = "GPU FFT (sweepx.tasks.preproc.bandpass_torch)"
         else:
             obs_np2 = _bandpass_cpu(
@@ -813,6 +808,41 @@ def _resample_obs_to_solver_dt(obs_t, dt_segy: float, dt_solver: float,
         pad[-1] = (0, nt_solver - cur_nt)
         arr = np.pad(arr, pad)
     return torch.as_tensor(arr, dtype=obs_t.dtype, device=obs_t.device)
+
+
+# Obs bytes one stage-entry bandpass call may span. The FFT bandpass
+# (rfft -> x gain -> irfft) needs about 7x its input in transient GPU memory,
+# so a 512 MiB chunk stays well inside the 6 GiB headroom the obs upload
+# reserves, whatever the obs size. A fixed shot count did not: 64 shots of the
+# Marmousi examples' obs are 3.2 GiB, ~23 GiB transient, an OOM on a 32 GB card.
+_OBS_BANDPASS_CHUNK_BYTES = 512 << 20
+
+
+def _bandpass_obs_by_shot_chunks(obs_t: "torch.Tensor", *, lo: float, hi: float,
+                                 dt: float, order: int, time_axis: int,
+                                 chunk_bytes: int = _OBS_BANDPASS_CHUNK_BYTES,
+                                 ) -> "torch.Tensor":
+    """Zero-phase FFT bandpass of obs along ``time_axis``, a few shots at a time.
+
+    Each shot (dim 0) is filtered on its own time axis, so filtering groups of
+    shots gives the same result as filtering all of them in one call; grouping
+    only bounds the transient memory (and keeps each cuFFT plan under its
+    2^31-element limit). A group holds as many shots as fit in ``chunk_bytes``
+    (at least one). The filtered groups are written back into ``obs_t``, which
+    is returned. With time on dim 0 there is no shot axis to split, and the
+    whole array is filtered in one call.
+    """
+    kw = dict(lo=lo, hi=hi, dt=dt, order=order, axis=time_axis)
+    n = int(obs_t.shape[0])
+    with torch.no_grad():
+        if time_axis % obs_t.ndim == 0 or n == 0:
+            return _bandpass_torch_fft(obs_t, **kw)
+        shot_bytes = max(1, obs_t[0].numel() * obs_t.element_size())
+        step = max(1, int(chunk_bytes) // shot_bytes)
+        for b0 in range(0, n, step):
+            b1 = min(b0 + step, n)
+            obs_t[b0:b1] = _bandpass_torch_fft(obs_t[b0:b1].contiguous(), **kw)
+    return obs_t
 
 
 def _bandpass_syn_torch(syn: "torch.Tensor", lo: float, hi: float, dt: float,

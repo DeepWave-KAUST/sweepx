@@ -1,9 +1,12 @@
 # Marmousi 2-D — the backend / memory knobs, in one place.
 #
-# Teaches:  what `backend:` actually controls. The physics and the gradient are
-#           IDENTICAL across every variant below — only speed and peak memory
-#           change. This file runs the default (fused CUDA + boundary saving);
-#           the alternatives are commented, ready to swap in.
+# Teaches:  what `backend:` actually controls. The `impl: c` variants (A-C)
+#           compute the same gradient — on a V100, B matched A bit for bit
+#           and C stayed within 1e-5 of A's loss — so only speed and peak
+#           memory change. `impl: eager` (D) solves the same equation with a
+#           slightly different absorbing boundary: its loss was 0.3-0.9% off
+#           A's at every epoch. This file runs the default (fused CUDA +
+#           boundary saving); the alternatives are commented, ready to swap in.
 # Needs:    nothing (models from `sweep.datasets`).
 #
 # Run:
@@ -19,7 +22,8 @@
 # Where you keep it is the whole trade:
 #
 #   strategy: full       store every time step.        Fastest, O(nt x N) memory.
-#                        Runs out of GPU well before a production 3-D grid.
+#                        Runs out of GPU well before a production 3-D grid:
+#                        this file's 4-shot batch already asks for 69 GiB.
 #
 #   strategy: boundary   store only the PML-zone slab and RECONSTRUCT the
 #                        interior backwards in time. Exact gradient at
@@ -36,9 +40,11 @@
 # `impl: eager` — pure PyTorch autograd
 # ---------------------------------------------------------------------------
 # No compiled extension needed, runs on CPU, and every intermediate is a
-# regular tensor you can inspect. Roughly 30x slower and far hungrier for
-# memory. Use it to debug, to run without a GPU, or when `torch.compile`
-# fusion is what you want to measure.
+# regular tensor you can inspect. Slower and hungrier for memory: on a V100,
+# variant D as written took 3.7x the wall time of A and peaked at 13.7 GiB
+# against 9.8; with `use_compile: false` it took 36x. Both include the
+# checkpoint recompute. Use it to debug, to run without a GPU, or when
+# `torch.compile` fusion is what you want to measure.
 
 task_type: fwi
 output_dir: ./sweep_runs
@@ -52,8 +58,8 @@ grid:
 
 time:
   dt: 0.001
-  nt: 10000                 # 10 s — a 7 s record cut the 17 km far offsets
-                            # off right after their first arrival (see 01)
+  nt: 10000                 # 10 s — a 7 s record would miss the first
+                            # arrival at the 17 km far offsets (see 01)
 
 wavelet:
   kind: ricker
@@ -109,11 +115,14 @@ backend:
 #         storage: gpu
 
 # ---- variant D: eager autograd, optionally torch.compile ------------------
-# The only variant that runs without a built CUDA extension.
+# The only variant that runs without a built CUDA extension. Keep
+# `use_ckpt: true`: with it off, autograd records all 10,000 steps, and this
+# block ran out of memory on a 32 GB V100 in its first training step.
+# Deleting the line is not enough — the schema default is false.
 #
 # backend:
 #   impl: eager
-#   use_ckpt: false
+#   use_ckpt: true
 #   eager_options:
 #     use_compile: true
 #     compile_mode: default        # default | reduce-overhead | max-autotune

@@ -24,21 +24,25 @@ annotated template rather than by copying an example:
 ```bash
 sweep-tasks init --list                       # every template
 sweep-tasks init fwi -o my_fwi.yaml           # annotated FWI reference
-sweep-tasks run my_fwi.yaml
+sweep-tasks run my_fwi.yaml                   # runs as written
 ```
 
-There is a template for every task type, and each one documents every key
-inline — what it does, what the alternatives are, what the default means:
+There is a template for every task type. Each one runs as it comes out of
+`init` — a small Marmousi case built from `sweep.datasets`, so there is nothing
+to download and no variable to set — and documents every key inline: what it
+does, what the alternatives are (the field-data ones among them: `from_plan`
+geometry, `obs.plan`, an estimated wavelet), what the default means. `init`
+prints the `sweep-tasks run` line to use next.
 
-| `sweep-tasks init <name>` | what you get |
-|---|---|
-| `introspect` | ask the build what equations/models/backends it has. Run this first on a new machine. |
-| `forward` | synthesise a shot record |
-| `wavefield` | forward + pressure-field snapshots |
-| `fwi` | full waveform inversion — the largest template, covers stages, reparam, QC |
-| `rtm` | reverse-time migration |
-| `lsrtm` | least-squares RTM |
-| `viking` | *not* a task spec — the pipeline config for `build-index` / `build-plan` |
+| `sweep-tasks init <name>` | what you get | run time, one V100 |
+|---|---|---|
+| `introspect` | ask the build what equations/models/backends it has. Run this first on a new machine. | seconds |
+| `forward` | Marmousi shot records | 30 s |
+| `wavefield` | forward + pressure-field snapshots | 30 s |
+| `fwi` | full waveform inversion, three-stage multiscale — the largest template: reparam, source encoding, local windows and the field-data inputs are documented alongside | 5 min |
+| `rtm` | reverse-time migration in the smoothed model | 2 min |
+| `lsrtm` | least-squares RTM | 4 min |
+| `viking` | *not* a task spec — the pipeline config for `build-index` / `build-plan` and the wavelet tools, each run as `sweep-tasks <cmd> --config <file>` | — |
 
 `sweep-tasks init` and `sweep-tasks new` read the same files, so the two can
 never drift apart.
@@ -81,12 +85,26 @@ extract-coeff`, then invert. The headers of 11 (2-D) and 13 (3-D) spell out the
 exact commands. In a field project the first command disappears — real node
 gathers replace it and `extract-coeff` reads those instead.
 
-Wall times are not filled in yet; they get measured and written into each YAML
-header once the set has been run on a known GPU.
-
 **No GPU?** The examples default to `backend.impl: c` (fused CUDA kernels).
-Switch to `impl: eager` to run on CPU and expect roughly 30× the wall time —
-08 explains the trade in full.
+On a CPU, replace the whole `backend:` block from the command line:
+
+```bash
+sweep-tasks run examples/tasks/synthetic/05_lsrtm_marmousi.yaml \
+    --override 'backend={impl: eager, use_ckpt: true}'
+```
+
+Overriding only `backend.impl=eager` is refused wherever the file has a
+`cuda_options:` block (02–05, 07, 08, 12, 14), because those options exist
+only for `c`. `use_ckpt: true` makes the eager gradient recompute the forward
+in chunks instead of keeping all of the Marmousi examples' 10,000 steps in
+memory. 04 is the exception: RTM reads the source illumination that only
+`impl: c` computes, so on `eager` every shot batch fails — run 04 on a GPU.
+
+Expect hours, not minutes: on 16 cores of an AMD EPYC 7702, 05 took 3 h 53 min
+(88 min of it synthesising the observed data, then about 5 min per epoch) and
+40 GiB of RAM, against 3 minutes with `c` on a V100. Its loss was 0.6–1.6 %
+away from the `c` run's at every epoch (08 shows where eager and `c` differ).
+06, 09, 10, 16 and 17 already run on `eager` as written.
 
 **Multiple GPUs?** Shot-parallel is a flag, not a different file:
 
@@ -100,12 +118,14 @@ sweep-tasks run examples/tasks/synthetic/02_fwi_marmousi_single.yaml --nproc-per
 
 | example | data |
 |---|---|
-| [`field/viking/`](field/viking/) | Mobil AVO Viking Graben — public, ~1.4 GB SEG-Y. Full walkthrough in [`docs/tasks/datasets/viking/README.md`](../../docs/tasks/datasets/viking/README.md) |
+| [`field/viking/`](field/viking/) | Mobil AVO Viking Graben — public, 750 MB SEG-Y. Frequency-selection FWI of all 1001 shots, wavelet-free. Full walkthrough in [`docs/tasks/datasets/viking/README.md`](../../docs/tasks/datasets/viking/README.md) |
 
-These read paths from environment variables (`$VIKING_HOME`,
-`$SWEEP_RUNS_ROOT`) rather than hardcoding anyone's directory layout.
-`pipeline_config.yaml` is not a task spec — it drives the `build-index` /
-`build-plan` CLI stage that turns raw SEG-Y into a `SeismicPlan`.
+These read paths from `$VIKING_HOME` rather than hardcoding anyone's
+directory layout. `pipeline_config.yaml` is not a task spec — it drives the
+`build-index` / `build-plan` CLI stage that turns raw SEG-Y into a
+`SeismicPlan`; `viking_freqsel_allteeth.yaml` is the inversion.
+[`sbatch/viking_freqsel.sbatch`](sbatch/viking_freqsel.sbatch) runs the
+whole chain as one SLURM job.
 
 ---
 

@@ -72,3 +72,30 @@ def test_steihaug_hits_boundary_when_inner_solution_too_large():
     x, info = steihaug_cg(_matvec(A), b, trust_radius=1.0, tol=1e-10)
     assert info.boundary
     assert abs(float(x.norm()) - 1.0) < 1e-6
+
+
+def _nan_after(A, n_ok):
+    """matvec that returns NaN from call n_ok + 1 on (a blown-up HVP)."""
+    calls = [0]
+
+    def matvec(v):
+        calls[0] += 1
+        out = A @ v
+        return out if calls[0] <= n_ok else out * float("nan")
+    return matvec
+
+
+def test_cg_stops_on_nonfinite_curvature():
+    A = torch.diag(torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float64))
+    b = torch.ones(4, dtype=torch.float64)
+    x, info = cg(_nan_after(A, 1), b, tol=1e-12)
+    assert info.nonfinite and not info.converged and info.iters == 2
+    assert torch.isfinite(x).all() and float(x.norm()) > 0.0
+
+
+def test_steihaug_stops_on_nonfinite_curvature():
+    A = torch.diag(torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float64))
+    b = torch.ones(4, dtype=torch.float64)
+    x, info = steihaug_cg(_nan_after(A, 0), b, trust_radius=10.0)
+    assert info.nonfinite and info.iters == 1
+    assert torch.isfinite(x).all()

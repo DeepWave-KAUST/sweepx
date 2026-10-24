@@ -1,22 +1,24 @@
-# SLURM templates (Viking)
+# SLURM template (Viking)
 
-Reference sbatch scripts for ibex, one per step of the Viking workflow. Each
-runs a YAML from `examples/tasks/field/viking/` in the sweepx checkout:
+[`viking_freqsel.sbatch`](viking_freqsel.sbatch) runs Steps 1-5 of the Viking
+walkthrough ([`docs/tasks/datasets/viking/README.md`](../../../docs/tasks/datasets/viking/README.md))
+in one job on one GPU: `build-index` and `build-plan` with
+[`../field/viking/pipeline_config.yaml`](../field/viking/pipeline_config.yaml),
+`extract-coeff` for the six bands, then `sweep-tasks run` on
+[`../field/viking/viking_freqsel_allteeth.yaml`](../field/viking/viking_freqsel_allteeth.yaml).
+On a resubmit, Steps 1-4 are skipped when their output exists and a finished
+inversion is not repeated; an unfinished inversion restarts from the first
+band.
 
-| Template | YAML |
-|---|---|
-| `viking_6stage_30hz.sbatch` | `viking_siren_hash_6stage_30hz.yaml` |
-| `viking_6stage_30hz_from_plan.sbatch` | `viking_siren_hash_6stage_30hz_from_plan.yaml` |
-| `viking_dump_loss_inputs.sbatch` | `viking_dump_loss_inputs.yaml` |
-| `viking_from_plan_smoke.sbatch` | `viking_from_plan_smoke.yaml` |
-| `viking_rtm.sbatch` | `viking_rtm_finegrid.yaml` |
-| `viking_rtm_legacy_match.sbatch` | `viking_rtm_legacy_match.yaml` |
-
-They read a few environment roots (`SWEEP_USER_ROOT`, `SWEEP_REPOS_ROOT`,
-`SWEEP_RUNS_ROOT`, `SWEEP_CONDA_ROOT`, `PROJECT_DATA_ROOT`) set in your login
-shell; the Viking page (`docs/tasks/datasets/viking/README.md`, "Running on a
-cluster") shows a working ibex layout. Then, for example:
+Do Step 0 of the walkthrough (download) first, activate the environment that
+has sweepx (sbatch passes your shell's environment on to the job), then:
 
 ```bash
-sbatch ${SWEEP_REPOS_ROOT}/sweepx/examples/tasks/sbatch/viking_rtm.sbatch
+export VIKING_HOME=$HOME/viking SWEEPX=$HOME/sweepx   # SWEEPX: a checkout of this repo
+sbatch $SWEEPX/examples/tasks/sbatch/viking_freqsel.sbatch
 ```
+
+The log goes to `viking_freqsel-<jobid>.out` in the directory you submit from.
+Partition, account and GPU type differ between clusters; pass them on the
+sbatch command line (for example `--partition=…`, or `--gres=gpu:<type>:1` on
+clusters that name GPU types).

@@ -233,3 +233,78 @@ def test_rtm_runs_end_to_end_with_synthetic_obs(tmp_path):
     image = np.load(result.task_dir / "output" / "rtm_image.npy")
     assert image.shape == shape
     assert np.all(np.isfinite(image)) and np.abs(image).max() > 0
+
+
+# ---------- failure handling: shape mismatch, failed batches --------------
+
+def _tiny_rtm_dict(tmp_path: Path, *, grid_shape=None, true_path=None) -> dict:
+    """A CPU / eager RTM small enough to set up in a second."""
+    import numpy as np
+
+    shape = (24, 36)
+    vp_path = tmp_path / "vp.npy"
+    np.save(vp_path, np.full(shape, 2000.0, dtype=np.float32))
+    if true_path is None:
+        true_path = tmp_path / "true.npy"
+        true = np.full(shape, 2000.0, dtype=np.float32)
+        true[12:] = 2600.0
+        np.save(true_path, true)
+    grid = {"dh": 10.0}
+    if grid_shape is not None:
+        grid["shape"] = list(grid_shape)
+    return {
+        "task_type": "rtm",
+        "output_dir": str(tmp_path / "runs"),
+        "device": "cpu",
+        "grid": grid,
+        "time": {"dt": 0.001, "nt": 120},
+        "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.06},
+        "geometry": {"kind": "line",
+                     "sources": {"step": 10, "depth": 2, "start": 6, "stop": 32},
+                     "receivers": {"step": 2, "depth": 2}},
+        "physics": {"equation": "Acoustic", "abcn": 8, "free_surface": False},
+        "backend": {"impl": "eager", "use_ckpt": False},
+        "velocity_model": {"name": "vp", "path": str(vp_path)},
+        "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
+        "imaging": {"shots_per_batch": 1},
+    }
+
+
+def test_rtm_refuses_a_grid_shape_that_is_not_the_model_shape(tmp_path):
+    """grid.shape [401, 2305] against a [320, 2285] model used to fail inside
+    every batch (CPML aux tensor mismatch), each failure swallowed. It is now
+    refused before any data is read: the true model here does not even exist."""
+    spec = load_task_from_dict(
+        _tiny_rtm_dict(tmp_path, grid_shape=(30, 36), true_path=tmp_path / "absent.npy"),
+        base_dir=tmp_path)
+    result = TaskRunner().run(spec)
+    assert result.status.state == "failed"
+    assert "ValueError" in result.status.error
+    assert "[30, 36]" in result.status.error and "[24, 36]" in result.status.error
+
+
+def test_rtm_with_every_batch_failing_is_a_failed_run(tmp_path, monkeypatch):
+    def _boom(self, **kw):
+        raise RuntimeError(f"boom in batch {kw['global_batch_index']}")
+
+    monkeypatch.setattr(TaskRunner, "_rtm_process_batch", _boom)
+    result = TaskRunner().run(load_task_from_dict(_tiny_rtm_dict(tmp_path),
+                                                  base_dir=tmp_path))
+    assert result.status.state == "failed"
+    assert "all 3 shot batches failed" in result.status.error
+    assert "boom in batch 0" in result.status.error
+    assert not (result.task_dir / "output" / "rtm_image.npy").exists()
+
+
+def test_rtm_counts_and_reports_a_partial_failure(tmp_path, monkeypatch, capsys):
+    def _first_fails(self, **kw):
+        if kw["global_batch_index"] == 0:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(TaskRunner, "_rtm_process_batch", _first_fails)
+    result = TaskRunner().run(load_task_from_dict(_tiny_rtm_dict(tmp_path),
+                                                  base_dir=tmp_path))
+    assert result.status.state == "success", result.status.error
+    assert result.status.summary["n_failed"] == 1
+    assert result.status.summary["n_batches"] == 3
+    assert "WARNING: 1 of 3 shot batches FAILED" in capsys.readouterr().out

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -96,9 +97,18 @@ def _merge_yaml_into_args(args, parser: argparse.ArgumentParser,
         current = getattr(args, key, defaults[key])
         if current != defaults[key]:
             continue  # CLI wins.
-        # Expand ${ENV} / $ENV in string values for convenience.
+        # Expand ${ENV} / $ENV in string values for convenience. An unset
+        # variable stays as written, and a path like '${VIKING_HOME}/run'
+        # would then be created under that literal name: refuse instead
+        # (the same rule yaml_io applies to task YAMLs).
         if isinstance(raw_val, str):
             raw_val = os.path.expandvars(raw_val)
+            unset = re.search(r"\$(\w+|\{[^}]*\})", raw_val)
+            if unset:
+                print(f"error: --config {cfg_path}: {key}: {unset.group(0)} is "
+                      f"not set in the environment (in {raw_val!r}); export "
+                      "it or write the value out")
+                sys.exit(2)
         setattr(args, key, raw_val)
 
 
@@ -303,13 +313,14 @@ def _cmd_init(args) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text)
         print(f"[init] wrote {template!r} template -> {out_path}")
-        # Tailored "next steps" hint per template type.
-        if template in ("fwi", "rtm"):
-            print(
-                f"[init] next: edit paths inside the file, then run:\n"
-                f"       sweep-tasks run {out_path}\n"
-                f"       # multi-GPU: append --nproc-per-node N"
-            )
+        # Tailored "next steps" hint: a task template is one `run`; the viking
+        # file is a pipeline --config read by several subcommands.
+        from sweepx.tasks.yaml_io import _FILE_TEMPLATES
+
+        if template in _FILE_TEMPLATES:
+            print(f"[init] next: sweep-tasks run {out_path}")
+            if template in ("forward", "fwi", "rtm", "lsrtm"):
+                print("       # multi-GPU: append --nproc-per-node N")
         else:
             print(
                 f"[init] next: edit paths inside (especially $VIKING_HOME / "

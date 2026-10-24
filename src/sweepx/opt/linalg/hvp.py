@@ -56,6 +56,14 @@ def hessian_vector_product(
     grads = torch.autograd.grad(
         loss, params, create_graph=True, allow_unused=False,
     )
+    if not any(g.requires_grad for g in grads):
+        raise RuntimeError(
+            "hessian_vector_product needs a twice-differentiable loss, but its gradient "
+            "came back without an autograd graph. This happens when the loss goes "
+            "through an operation without double-backward support, e.g. sweep's native "
+            "impl='c' propagator: build the solver with impl='eager' and "
+            "eager_options=EagerOptions(use_compile=False)."
+        )
     inner = sum((g * v).sum() for g, v in zip(grads, vec))
     hv = torch.autograd.grad(inner, params, retain_graph=False)
     return list(hv)

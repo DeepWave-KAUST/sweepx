@@ -8,11 +8,14 @@ three FWI-friendly knobs ``torch.optim.LBFGS`` does not expose:
    box constraints. The active-set Byrd-Lu-Nocedal L-BFGS-B variant is
    :class:`sweepx.opt.optim.LBFGSB`.
 2. ``preconditioner`` - an optional preconditioner used as the initial
-   inverse Hessian ``H_0`` inside the two-loop recursion. Pairs naturally
-   with :class:`sweepx.opt.precond.PseudoHessianPrecond`.
+   inverse Hessian ``H_0 = gamma_k P`` inside the two-loop recursion. Pairs
+   naturally with :class:`sweepx.opt.precond.PseudoHessianPrecond`.
 3. ``restart_every`` - hard cold restart every ``N`` iterations (clear the
    stored ``(s, y)`` history). Useful for stochastic / source-encoded FWI
    loops where the curvature pairs become stale faster than the iterate.
+
+``initial_step`` sizes the first line-search trial in parameter units
+whenever there is no curvature history; see :class:`LBFGS`.
 
 References:
     Nocedal, J. (1980). "Updating quasi-Newton matrices with limited storage."
@@ -36,9 +39,12 @@ from sweepx.opt._utils import (
     flat_grads,
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import (
+    check_initial_step,
+    scaled_bracket,
+    wolfe_step,
+)
 
 
 class LBFGS(Optimizer):
@@ -50,14 +56,26 @@ class LBFGS(Optimizer):
         params: iterable of parameter tensors / param-groups.
         history_size: number of ``(s, y)`` pairs to retain (m in N&W). Defaults
             to 10, which matches torch's default.
-        bounds: optional ``(lo, hi)`` box-projection enforced after each step.
-        preconditioner: optional callable ``(grad, param) -> grad`` used as
-            the initial inverse Hessian ``H_0`` inside the two-loop
-            recursion. Defaults to the standard Liu-Nocedal scalar
-            ``gamma_k = s_{k-1} . y_{k-1} / y_{k-1} . y_{k-1}``.
+        bounds: optional ``(lo, hi)`` box; every line-search trial point is
+            projected onto it.
+        preconditioner: optional callable ``(grad, param) -> grad``. Without
+            it ``H_0`` is the standard Liu-Nocedal scalar
+            ``gamma_k = s_{k-1} . y_{k-1} / y_{k-1} . y_{k-1}``; with it
+            ``H_0 = gamma_k P`` with ``gamma_k = s . y / y . P y``, so the
+            preconditioned step keeps the scale the curvature pairs measured.
         line_search: must be ``"strong_wolfe"``.
         c1, c2, alpha_init, alpha_max, max_ls_iter: Wolfe parameters
-            (defaults are the standard quasi-Newton choice).
+            (defaults are the standard quasi-Newton choice). ``alpha``
+            multiplies the search direction ``d = -H_k g``.
+        initial_step: size of the first line-search trial in parameter units
+            (``max |alpha_0 d| = initial_step``), used whenever there is no
+            curvature history: the first step, after a restart, and after a
+            fallback to ``-g``. The search may expand up to
+            ``alpha_max / alpha_init`` times that. Later steps start from
+            ``alpha_init`` (the quasi-Newton step is scaled by then).
+            ``None`` (default) starts every search at ``alpha_init``, i.e. the
+            first trial is ``alpha_init * g`` in size - far too small to move
+            parameters with tiny gradients, such as a velocity model in m/s.
         restart_every: optional periodic cold restart.
         strict_descent: if True (default), reject steps whose initial
             ``phi'(0) >= 0`` and fall back to ``-g`` for that iteration.
@@ -76,6 +94,7 @@ class LBFGS(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
         strict_descent: bool = True,
     ) -> None:
@@ -94,6 +113,7 @@ class LBFGS(Optimizer):
         self.alpha_init = alpha_init
         self.alpha_max = alpha_max
         self.max_ls_iter = max_ls_iter
+        self.initial_step = check_initial_step(initial_step)
         self.restart_every = restart_every
         self.strict_descent = strict_descent
 
@@ -106,23 +126,25 @@ class LBFGS(Optimizer):
         self._prev_g: Optional[Tensor] = None
 
     # ------------------------------------------------------------------ utils
-    def _project(self) -> None:
-        if self.bounds is None:
-            return
-        lo, hi = self.bounds
+    def _precondition(self, q_flat: Tensor) -> Tensor:
+        r = torch.empty_like(q_flat)
+        offset = 0
         for p in iter_params(self.param_groups):
-            p.data.clamp_(lo, hi)
+            n = p.numel()
+            chunk = q_flat[offset : offset + n].view_as(p)
+            r[offset : offset + n] = self.preconditioner(chunk, p).reshape(-1)
+            offset += n
+        return r
 
     def _apply_initial_inv_hessian(self, q_flat: Tensor) -> Tensor:
-        """Return H_0 q. Either the preconditioner or the scalar gamma."""
+        """Return H_0 q: ``gamma_k P q`` with a preconditioner, else ``gamma_k q``."""
         if self.preconditioner is not None:
-            r = torch.empty_like(q_flat)
-            offset = 0
-            for p in iter_params(self.param_groups):
-                n = p.numel()
-                chunk = q_flat[offset : offset + n].view_as(p)
-                r[offset : offset + n] = self.preconditioner(chunk, p).reshape(-1)
-                offset += n
+            r = self._precondition(q_flat)
+            if self._y_hist:
+                y_last = self._y_hist[-1]
+                y_p_y = float(torch.dot(y_last, self._precondition(y_last)))
+                if y_p_y > 0.0:
+                    r = r * ((1.0 / self._rho_hist[-1]) / y_p_y)
             return r
         if not self._y_hist:
             return q_flat
@@ -209,21 +231,21 @@ class LBFGS(Optimizer):
         if init_dphi >= 0.0:
             return loss
 
-        def eval_alpha(alpha: float):
-            write_flat_to_params(self.param_groups, x0 + alpha * d)
+        def evaluate():
             with torch.enable_grad():
                 ll = closure()
-            new_g = flat_grads(self.param_groups)
-            return float(ll.detach()), float(torch.dot(new_g, d))
+            return float(ll.detach()), flat_grads(self.param_groups)
 
-        strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        if self.initial_step is not None and not self._s_hist:
+            alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
+        else:
+            alpha0, alpha_max = self.alpha_init, self.alpha_max
+        wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="LBFGS", step_hints=True, initial_step=self.initial_step,
         )
-        self._project()
 
         # Cache iteration-k state so iteration-(k+1) can form (s_k, y_k).
         self._prev_x = x0

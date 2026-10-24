@@ -84,7 +84,13 @@ class DIPParameterization(Parameterization):
 
     def random_latent(self, scale: float = 0.1, device=None,
                       dtype: torch.dtype = torch.float32) -> Tensor:
-        """Return a randomly-initialised latent of the right shape (leaf tensor)."""
+        """Return a randomly-initialised latent of the right shape (leaf tensor).
+
+        ``device`` defaults to the device of the generator's parameters (CPU
+        for a generator without parameters).
+        """
+        if device is None:
+            device = next((p.device for p in self.generator.parameters()), None)
         z = torch.empty(*self.latent_shape, dtype=dtype, device=device)
         z.normal_(mean=0.0, std=scale)
         z.requires_grad_(True)

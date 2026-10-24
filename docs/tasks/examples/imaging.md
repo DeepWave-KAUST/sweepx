@@ -11,7 +11,7 @@ and ask a different question: **where are the reflectors?**
 | | what it solves | passes | reference (RTX 6000 Ada, seed 0) |
 |---|---|---|---|
 | 04 RTM | nothing — one adjoint pass | 1 | 164 s |
-| 05 LSRTM | reflectivity, linear in the unknown | 20 epochs | 89 s, misfit 1.458e-2 → 1.374e-2 |
+| 05 LSRTM | reflectivity, linear in the unknown | 30 epochs | 89 s, misfit 1.458e-2 → 1.374e-2 |
 
 RTM cross-correlates the source wavefield with the back-propagated residual and
 stacks over shots. It is fast and it is *not* an inversion, so the image carries
@@ -29,10 +29,17 @@ rather than migrating buys.
 ## 04 — what the RTM output directory holds
 
 04 writes its image three ways — raw (`rtm_image.npy`),
-illumination-normalised and per-shot normalised — plus a depth-tapered
-Laplacian post-filter applied to each, with a PNG for each, so you can see what
-each knob does rather than take it on trust. That is why the output directory
-has twenty-odd files for one run.
+illumination-normalised and per-shot normalised — plus a depth-tapered z-axis
+low-cut post-filter applied to each, with a PNG for each, so you can see what
+each knob does rather than take it on trust. The three `fwi_gradient_image*`
+arrays are byte-identical copies of the `rtm_image*` ones under their
+FWI-gradient names, and are filtered too. That is why `output/` holds 45 files
+for one run, with 12 more PNGs under `qc/`.
+
+The post-filter subtracts the image's smooth, long-wavelength part in z
+(`wavelength_m`) at full strength from the surface down to `depth_m`, ramps
+that subtraction out over the next `taper_m`, and leaves everything deeper
+untouched.
 
 ## 05 — LSRTM
 
@@ -45,6 +52,6 @@ to ±0.3. It writes `output/reflectivity.npy`, `loss.npy` + `loss.png`, and a
 reflectivity snapshot every `show_every` epochs under `output/epochs/`.
 
 > **The LSRTM misfit is not monotone**, and that is expected rather than a bug:
-> epochs 0 / 9 / 19 read 1.458e-2 / 1.393e-2 / 1.505e-2 before settling at
-> 1.374e-2. The shot batch is redrawn every step, so consecutive epochs are
-> measured on different data.
+> epochs 0 / 9 / 19 read 1.458e-2 / 1.393e-2 / 1.505e-2, and the last one,
+> epoch 29, ends at 1.374e-2. The shot batch is redrawn every step, so
+> consecutive epochs are measured on different data.

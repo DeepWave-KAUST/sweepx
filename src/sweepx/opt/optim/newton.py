@@ -13,7 +13,9 @@ Unlike the rest of sweepx.opt's optimizers, ``TruncatedNewton.step()`` takes
 a ``loss_fn`` that **must not call backward** - the optimizer needs the
 intact autograd graph to build Hessian-vector products. A standard
 ``zero_grad / forward / backward / return loss`` closure would discard the
-graph too early.
+graph too early. The loss must also be twice differentiable through autograd:
+with sweep that means ``impl='eager'`` without ``torch.compile``; the native
+``impl='c'`` gradient has no graph.
 
 References:
     Nash, S. G. (2000). "A survey of truncated-Newton methods."
@@ -26,6 +28,8 @@ References:
 """
 from __future__ import annotations
 
+import math
+import warnings
 from typing import Callable, Optional, Tuple
 
 import torch
@@ -35,10 +39,18 @@ from torch.optim.optimizer import Optimizer
 from sweepx.opt._utils import (
     flat_params,
     iter_params,
-    write_flat_to_params,
 )
 from sweepx.opt.linalg.cg import cg
-from sweepx.opt.linesearch.wolfe import strong_wolfe
+from sweepx.opt.optim._wolfe_step import wolfe_step
+
+# Raised when create_graph=True returns gradients without an autograd graph.
+NOT_TWICE_DIFFERENTIABLE = (
+    "{owner} needs a twice-differentiable loss, but its gradient came back "
+    "without an autograd graph, so Hessian-vector products cannot be formed. "
+    "This happens when the loss goes through an operation without double-"
+    "backward support, e.g. sweep's native impl='c' propagator: build the "
+    "solver with impl='eager' and eager_options=EagerOptions(use_compile=False)."
+)
 
 
 class TruncatedNewton(Optimizer):
@@ -46,7 +58,8 @@ class TruncatedNewton(Optimizer):
 
     Args:
         params: iterable of parameter tensors / param-groups.
-        bounds: optional ``(lo, hi)`` box-projection enforced after each step.
+        bounds: optional ``(lo, hi)`` box; every line-search trial point is
+            projected onto it.
         preconditioner: optional callable ``(grad, param) -> grad`` used as
             the inner-CG preconditioner. Same contract as in
             :mod:`sweepx.opt.precond`.
@@ -58,7 +71,9 @@ class TruncatedNewton(Optimizer):
     Calling convention:
         ``opt.step(loss_fn)`` where ``loss_fn`` takes no arguments and returns
         the loss as a tensor that requires_grad. **Do not call ``backward``
-        inside ``loss_fn``** - the optimizer needs the graph intact.
+        inside ``loss_fn``** - the optimizer needs the graph intact. The loss
+        must be twice differentiable through autograd (sweep: ``impl='eager'``
+        with ``EagerOptions(use_compile=False)``, not ``impl='c'``).
     """
 
     def __init__(
@@ -95,13 +110,6 @@ class TruncatedNewton(Optimizer):
         self._last_forcing: float = 0.0
 
     # ------------------------------------------------------------------ utils
-    def _project(self) -> None:
-        if self.bounds is None:
-            return
-        lo, hi = self.bounds
-        for p in iter_params(self.param_groups):
-            p.data.clamp_(lo, hi)
-
     def _flatten_list(self, tensors) -> Tensor:
         return torch.cat([t.reshape(-1) for t in tensors])
 
@@ -147,8 +155,14 @@ class TruncatedNewton(Optimizer):
             )
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
         g_norm = float(g_flat.norm())
+        if not (math.isfinite(float(loss.detach())) and math.isfinite(g_norm)):
+            raise RuntimeError(
+                "TruncatedNewton: the loss or its gradient is not finite at the current parameters"
+            )
         if g_norm == 0.0:
             return loss
+        if not any(g.requires_grad for g in grads_list):
+            raise RuntimeError(NOT_TWICE_DIFFERENTIABLE.format(owner="TruncatedNewton"))
 
         # 2. Build matvec for the inner CG: H @ v.
         def matvec(v_flat: Tensor) -> Tensor:
@@ -175,6 +189,11 @@ class TruncatedNewton(Optimizer):
             preconditioner=precond_callable,
         )
         self._last_inner_iters = info.iters
+        if info.nonfinite:
+            warnings.warn(
+                f"TruncatedNewton: inner CG met a non-finite curvature p.Hp at iteration "
+                f"{info.iters}; using the last finite iterate", RuntimeWarning, stacklevel=2,
+            )
 
         if info.negative_curvature and float(d.norm()) == 0.0:
             # Could not produce any descent step at all; bail out.
@@ -194,22 +213,18 @@ class TruncatedNewton(Optimizer):
         # 5. Line search.
         x0 = flat_params(self.param_groups).clone()
 
-        def eval_alpha(alpha: float):
-            write_flat_to_params(self.param_groups, x0 + alpha * d)
+        def evaluate():
             with torch.enable_grad():
                 ll = loss_fn()
                 grads_a = torch.autograd.grad(ll, params)
-            g_a_flat = self._flatten_list([g.detach() for g in grads_a])
-            return float(ll.detach()), float(torch.dot(g_a_flat, d))
+            return float(ll.detach()), self._flatten_list([g.detach() for g in grads_a])
 
-        strong_wolfe(
-            eval_alpha, init_loss, init_dphi,
-            alpha_init=self.alpha_init,
-            alpha_max=self.alpha_max,
-            c1=self.c1, c2=self.c2,
-            max_iter=self.max_ls_iter,
+        wolfe_step(
+            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+            bounds=self.bounds, alpha_init=self.alpha_init, alpha_max=self.alpha_max,
+            c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
+            owner="TruncatedNewton",
         )
-        self._project()
         return loss
 
     # ----------------------------------------------------------- diagnostics

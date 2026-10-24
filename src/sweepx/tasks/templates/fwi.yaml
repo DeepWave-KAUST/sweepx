@@ -4,51 +4,64 @@
 # Run with:         sweep-tasks run my_fwi.yaml
 # Multi-GPU:        sweep-tasks run my_fwi.yaml --nproc-per-node 4
 #
+# The active example, run as written on one V100 32 GB: 4.6 min, RMSE against
+# the true model 357.3 m/s (the vp_smooth start) -> 212.7 m/s. The result is
+# <output_dir>/marmousi_fwi_multiscale/output/inverted_vp.npy, QC under qc/.
+#
 # ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
-# │ • UNCOMMENTED lines = the active example (Viking 2-D 6-stage / 30 Hz    │
-# │   production baseline). It loads + runs as-is once paths point at data. │
-# │ • `#`-COMMENTED blocks = ALTERNATIVE modes or OPTIONAL features. To     │
-# │   switch a mode, comment out the active variant and uncomment the one   │
-# │   you want. Every mode / Literal choice the schema accepts is shown.    │
+# │ • UNCOMMENTED lines = the active example: Marmousi 2-D, synthetic obs,  │
+# │   a three-stage multiscale FWI from the smoothed model. It runs as-is:  │
+# │   the models come from `sweep.datasets`, nothing to download or set.    │
+# │ • `#`-COMMENTED blocks = ALTERNATIVE modes or OPTIONAL features — among │
+# │   them the field-data path (SEG-Y -> `build-plan` -> `from_plan`        │
+# │   geometry + `obs.plan`, estimated wavelet, trace-cosine misfit, INR    │
+# │   reparameterization, per-shot local windows). To switch a mode,        │
+# │   comment out the active variant and uncomment the one you want.        │
 # │ • Unknown keys are REJECTED (schema is `extra="forbid"`), so a typo     │
 # │   fails loudly at load — not silently.                                  │
-# │ • `$VAR` / `${VAR}` in string values expand against the environment.    │
+# │ • `$VAR` / `${VAR}` in any string value expands against the             │
+# │   environment (paths like `${SURVEY}/run/plan.npz`); an unset variable  │
+# │   is refused at load.                                                   │
 # └────────────────────────────────────────────────────────────────────────┘
 
 # ═══ Identity ════════════════════════════════════════════════════════════════
 
 task_type: fwi                      # fixed: selects the FWI runner
-output_dir: ${VIKING_HOME}/run/viking_fwi   # run dir = <output_dir>/<task_id>/
-task_id: viking_fwi_6stage_v1       # subdir name + id in status/logs
-seed: 2026                          # RNG seed (batching, SIREN init, sign draws)
+output_dir: ./sweep_runs            # run dir = <output_dir>/<task_id>/; a relative
+                                    # path is relative to THIS file
+task_id: marmousi_fwi_multiscale    # subdir name + id in status/logs
+seed: 0                             # RNG seed (shot batches, SIREN init, sign draws):
+                                    # the batches are random, so it is what makes a
+                                    # re-run reproduce this one
 device: auto                        # "auto" | "<cuda index>" | "cpu"
 
 # ═══ Grid + time axis ═════════════════════════════════════════════════════════
 
 grid:
   dh: 12.5                          # cell size [m]; ≥4 pts/λ at f_max given v_min
-  # shape (= [nz,nx] 2-D | [nz,ny,nx] 3-D) is INFERRED from init_model's npy
-  # header when omitted. Set explicitly only with no init_model npy, or to
-  # crop/extend the grid vs the model.
-  # shape: [401, 2305]
+  # shape (= [nz,nx] 2-D | [nz,ny,nx] 3-D) is INFERRED from init_model when
+  # omitted (Marmousi: [281, 1361]). Set explicitly only to crop/extend the
+  # grid vs the model.
+  # shape: [281, 1361]
 
 time:
   dt: 0.001                         # [s]; must satisfy CFL dt < dh/(v_max·√ndim)
-  nt: 6000                          # samples; t_max = dt·nt = 6.0 s
+  nt: 8000                          # samples; t_max = dt·nt = 8.0 s
 
 # ═══ Source wavelet ═══════════════════════════════════════════════════════════
 # Discriminated on `kind`: ricker | from_npy | siren_pipeline_npz
 
 wavelet:
-  kind: siren_pipeline_npz          # npz written by `sweep-tasks estimate-wavelet`
-  path: ${VIKING_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
-  # explicit_key: wavelet           # which array in the npz (default auto)
+  kind: ricker                      # analytic Ricker (synthetic / quick start)
+  fm: 8.0                           # peak frequency [Hz]  (required)
+  delay: 0.15                       # time shift [s] (~1.2/fm keeps it causal)
   scale: 1.0                        # multiplicative amplitude scale
 # ── ALTERNATIVES ──
 # wavelet:
-#   kind: ricker                    # analytic Ricker (synthetic / quick start)
-#   fm: 8.0                         # peak frequency [Hz]  (required)
-#   delay: 0.15                     # time shift [s]
+#   kind: siren_pipeline_npz        # field data: npz written by
+#                                   # `sweep-tasks estimate-wavelet`
+#   path: ${SURVEY_HOME}/run/wavelet/siren_pipeline/estimated_wavelet.npz
+#   # explicit_key: wavelet         # which array in the npz (default auto)
 #   scale: 1.0
 # wavelet:
 #   kind: from_npy                  # raw 1-D float .npy, length == time.nt
@@ -60,23 +73,26 @@ wavelet:
 #                          from_segy_index | from_plan
 
 geometry:
-  kind: from_plan                   # sweepx.io SeismicPlan (from `build-plan`)
-  plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
-  dedupe: true                      # snap to grid + drop same-cell duplicates
-  dedup_method: nearest             # "nearest" | "first"
-  # 3-D OBN plan extras (UTM→model-grid rotation, spacing, origin).
-  # dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells are per-axis and
-  # ordered (z, y, x) like the model array, NOT (x, y, z) as the names
-  # suggest. The z pad is not applied: z = 0 stays at the surface.
-  # rotation_metadata: ${SURVEY_HOME}/metadata/rotation_metadata.json
-  # dh_xyz_m: [18.75, 18.75, 18.75]
-  # grid_origin_xyz_m: [0.0, 0.0, 0.0]
-  # auto_origin_pad_cells: [0, 0, 0]
+  kind: line                        # regular synthetic line, in GRID CELLS (x, z)
+  sources:   {step: 24, depth: 2}   # 57 shots every 300 m, 25 m deep
+  receivers: {step: 2,  depth: 18}  # every 25 m, 225 m deep; start=0, stop=nx
+                                    # by default. Multiples of 2 cells, so they
+                                    # stay on grid points of the 25 m stages
 # ── ALTERNATIVES ──
 # geometry:
-#   kind: line                      # regular synthetic line
-#   sources:   {start: 0, stop: 2305, step: 40, depth: 1}
-#   receivers: {start: 0, stop: 2305, step: 1,  depth: 1}
+#   kind: from_plan                 # field data: sweepx.io SeismicPlan (from
+#                                   # `sweep-tasks build-plan`); pair with obs.plan
+#   plan_path: ${SURVEY_HOME}/run/csg_plan.npz   # relative = to the working dir
+#   dedupe: true                    # snap to grid + drop same-cell duplicates
+#   dedup_method: nearest           # "nearest" | "first"
+#   # 3-D OBN plan extras (UTM→model-grid rotation, spacing, origin).
+#   # dh_xyz_m / grid_origin_xyz_m / auto_origin_pad_cells are per-axis and
+#   # ordered (z, y, x) like the model array, NOT (x, y, z) as the names
+#   # suggest. The z pad is not applied: z = 0 stays at the surface.
+#   # rotation_metadata: ${SURVEY_HOME}/metadata/rotation_metadata.json
+#   # dh_xyz_m: [18.75, 18.75, 18.75]
+#   # grid_origin_xyz_m: [0.0, 0.0, 0.0]
+#   # auto_origin_pad_cells: [0, 0, 0]
 # geometry:
 #   kind: explicit                  # hard-coded coordinate lists (tiny cases)
 #   sources:   [[100, 1], [500, 1]]         # [x, z] grid indices per source
@@ -101,41 +117,47 @@ geometry:
 # Pick EXACTLY ONE source. Must be consistent with `geometry`.
 
 obs:
-  plan:                             # unified plan loader (pairs with from_plan)
-    plan_path: ${VIKING_HOME}/run/viking_csg_plan.npz
-    cache_all: true                 # true: all traces to RAM at start (2-D ok);
-                                    # false: per-iter read (3-D OBN)
-    # ---- static-obs receiver selection (CSG path) ----
-    # n_receivers_per_shot: null    # cap receivers/shot (null = all)
-    # receiver_select: nearest      # "nearest" | "random" | "all"
-    # max_shots: null               # cap number of shots
-    # min_receivers: 8              # drop shots with fewer live receivers
-    #
-    # ---- OBN supershot / CRG sampler (see `source_encoding` below) ----
-    # Presence of `sampling:` routes to the plan-streaming supershot loop,
-    # which refuses the keys it never reads: drop local_model_window and
-    # train_shot_batchsize (below) and the static-obs keys above when you
-    # turn it on.
-    # sampling:
-    #   shared_shots_per_iter: null   # at most N shots per node gather and
-    #                                 #  iteration (a random subset when the
-    #                                 #  sampler draws more); null = all it draws
-    #   min_coverage: 0               # drop nodes with < N rows; applied by
-    #                                 #  receiver_first only (refused otherwise)
-    #   source_lines_per_group: 0     # 0 = all source lines per CRG
-    #   max_traces_per_sourceline: 0  # 0 = all traces per source line
-    #   dedup_mode: nearest           # "none" | "first" | "nearest"
-    #   receiver_first: false         # receiver-first sampling (OBN in-window)
-    #   per_crg_independent: false    # true ⇒ each CRG keeps its OWN traces
-    #                                 #  (no shared intersection; needs
-    #                                 #   source_encoding.enabled=false, and
-    #                                 #   draws nodes at random: no receiver_first)
-    #   num_workers: 4                # read pool; one iteration is prefetched
+  synthetic_from:                   # model the "observed" data from a true model
+    name: vp                        # (same wavelet + geometry as the inversion,
+    dataset: marmousi:2d-demo       #  unless modeling_override says otherwise)
+    preset: vp_true
 # ── ALTERNATIVES (other obs sources) ──
 # obs:
-#   synthetic_from_models: [{name: vp, path: /path/true_vp.npy}]  # gen obs from a true model
+#   plan:                           # field data: unified plan loader (pairs with
+#                                   # geometry.kind: from_plan)
+#     plan_path: ${SURVEY_HOME}/run/csg_plan.npz
+#     cache_all: true               # true: all traces to RAM at start (2-D ok);
+#                                   # false: per-iter read (3-D OBN)
+#     # ---- static-obs receiver selection (CSG path) ----
+#     n_receivers_per_shot: null    # cap receivers/shot (null = all)
+#     receiver_select: nearest      # "nearest" | "random" | "all"
+#     max_shots: null               # cap number of shots
+#     min_receivers: 8              # drop shots with fewer live receivers
+#
+#     # ---- OBN supershot / CRG sampler (see `source_encoding` below) ----
+#     # Presence of `sampling:` routes to the plan-streaming supershot loop,
+#     # which refuses the keys it never reads: drop local_model_window and
+#     # train_shot_batchsize (below) and the static-obs keys above when you
+#     # turn it on.
+#     sampling:
+#       shared_shots_per_iter: null   # at most N shots per node gather and
+#                                     #  iteration (a random subset when the
+#                                     #  sampler draws more); null = all it draws
+#       min_coverage: 0               # drop nodes with < N rows; applied by
+#                                     #  receiver_first only (refused otherwise)
+#       source_lines_per_group: 0     # 0 = all source lines per CRG
+#       max_traces_per_sourceline: 0  # 0 = all traces per source line
+#       dedup_mode: nearest           # "none" | "first" | "nearest"
+#       receiver_first: false         # receiver-first sampling (OBN in-window)
+#       per_crg_independent: false    # true ⇒ each CRG keeps its OWN traces
+#                                     #  (no shared intersection; needs
+#                                     #   source_encoding.enabled=false, and
+#                                     #   draws nodes at random: no receiver_first)
+#       num_workers: 4                # read pool; one iteration is prefetched
 # obs:
-#   synthetic_from: {name: vp, path: /path/true_vp.npy}           # single-model form
+#   synthetic_from_models: [{name: vp, path: /path/true_vp.npy}]  # multi-model form
+# obs:
+#   synthetic_from: {name: vp, path: /path/true_vp.npy}           # your own true model
 # obs:
 #   npy_path: /path/obs.npy         # pre-computed (nshot, nrec, nt) array
 # obs:
@@ -147,9 +169,10 @@ obs:
 
 physics:
   equation: Acoustic                # constant-density acoustic (see sweep.equations)
-  spatial_order: 6                  # FD order 2/4/6/8 (6 = sweet spot)
+  spatial_order: 8                  # FD order 2/4/6/8
   abcn: 20                          # PML thickness [cells]
-  free_surface: true                # z=0 free surface (marine)
+  free_surface: false               # true = z=0 free surface: always for marine
+                                    # field data (the ghosts + multiples are in it)
   source_type: ["h1"]               # hydrophone / pressure component
   receiver_type: ["h1"]
   # topography: /path/surface_row.npy   # curvilinear free-surface topo (optional)
@@ -186,8 +209,16 @@ backend:
 
 init_model:
   name: vp
-  path: ${VIKING_HOME}/run/models/viking_initial_model_12.5m.npy
-  # constant: 1500.0               # OR a homogeneous start (no npy); needs shape
+  dataset: marmousi:2d-demo         # embedded in the sweep package, no download
+  preset: vp_smooth                 # the true model low-passed: right depth trend,
+                                    # no cycle-skipping at the first band
+  # ---- exactly ONE source per model; the others: ----
+  # path: ${SURVEY_HOME}/run/models/initial_vp.npy   # (nz, nx) float32 .npy
+  # constant: 1500.0               # homogeneous start; needs shape
+  # linear_gradient: {vmin: 1500.0, vmax: 4000.0, water_rows: 37, water_vp: 1500.0}
+  #                                # 1-D ramp built in memory; needs shape
+  # shape: [281, 1361]
+  # smooth_sigma_cells: 8          # gaussian smooth after loading (any source)
 # init_models:                     # multi-model equations (e.g. elastic vp/vs/rho)
 #   - {name: vp, path: /path/vp.npy}
 #   - {name: vs, path: /path/vs.npy}
@@ -224,8 +255,10 @@ scheduler:
 #       steady_gcn — frequency_selection only, and the only kind it takes
 
 loss:
-  kind: trace_cosine                # per-trace normalized cosine (field-data robust)
-  trace_cosine_demean: true         # subtract per-trace mean (kills DC)
+  kind: mse                         # plain L2: synthetic obs, exact amplitudes
+  # kind: trace_cosine              # field data: per-trace normalized cosine,
+  # trace_cosine_demean: true       #  robust to amplitude calibration; demean
+  #                                 #  subtracts the per-trace mean (kills DC)
   # trace_cosine_eps: 1.0e-8
   # huber_delta: 1.0                # only for kind: huber
   # data_mask_path: /path/mask.npy  # (nshot,nrec[,nt]) multiplicative mask
@@ -241,69 +274,78 @@ loss:
 
 model_bounds:
   vp:
-    enabled: true
-    min: 1450.0
-    max: 5500.0
+    enabled: true                   # false keeps the numbers but skips the clamp
+    min: 1500.0
+    max: 4800.0                     # Marmousi itself peaks at 4700 m/s
 
 # ═══ Water layer ═════════════════════════════════════════════════════════════
 # ONE block for every inversion path (conventional, frequency selection, plan
 # streaming, reparam). Exactly one of seabed / mask; never read off velocities.
 
-# water:
-#   seabed: /path/seabed.npz        # npz key "seabed_depth": metres below z=0,
-#                                   # (nx,) or (ny, nx); or a number = flat seabed
-#   # mask: /path/water.npy         # bool on the starting model's grid, True = water
-#   velocity: 1500.0                # what the water holds
-#   buffer_cells: 0                 # native cells below the seabed held too (depth)
-#   mode: pin                       # pin: held all run | reset_each_stage: reset
-#                                   # at every stage entry, free within the stage
+# Marmousi's seabed is flat at 462.5 m, so a number does: rows 0-36 of the
+# 12.5 m grid (and the cells above 462.5 m on every stage grid) are held at
+# 1500 m/s, their gradient zeroed and their value re-stamped after each step.
 
-# ═══ Neural reparameterization (SIREN + hash INR) — optional, recommended ═════
+water:
+  seabed: 462.5                     # a number = flat seabed [m below z=0]; or an
+                                    # .npz with key "seabed_depth" (metres below
+                                    # z=0, (nx,) or (ny, nx)), e.g. from
+                                    # sweepx.tasks.bathymetry
+  # mask: /path/water.npy           # OR a bool mask on the starting model's grid
+  velocity: 1500.0                  # what the water holds
+  buffer_cells: 0                   # native cells below the seabed held too (depth)
+  mode: pin                         # pin: held all run | reset_each_stage: reset
+                                    # at every stage entry, free within the stage
+
+# ═══ Neural reparameterization (SIREN + hash INR) — optional, off here ═══════
 # Reparameterizes vp(x,z) as an INR (SIREN MLP + multi-res hash). Shrinks the
-# null-space and stabilizes the gradient. Comment the whole block for plain
-# grid-space optimization.
+# null-space and stabilizes the gradient. Uncomment the whole block to invert
+# the network instead of the grid. Under reparam the network's lr is
+# reparam.lr, and a stage scales it by lr_scale x inr_lr_scale: both multiply
+# here, so the stages below run it at x1, x0.7, x0.5. (Only source_encoding
+# mode frequency_selection refuses a stage lr_scale under reparam.)
 
-reparam:
-  kind: velocity_inr
-  # init_from: /path/prev_net.pt    # warm-start from a saved net
-  save_net: false                   # dump the trained net (feedback: prefer true)
-  hidden_features: 128              # SIREN width
-  hidden_layers: 2                  # SIREN depth
-  first_omega0: 10.0                # SIREN input freq (iFWI baseline ~10)
-  hidden_omega0: 10.0
-  use_bias: false
-  vp_mean: 0.0                      # output = vp_mean + vp_std·net  (residual)
-  vp_std: 400.0                     # from-scratch: use true mean/std, not wide
-  direct_velocity: false            # true ⇒ predict absolute vp (not residual)
-  lr: 1.0e-4
-  # backward_mode: two_pass_full | two_pass_chunked | single_step
-  # (plan-streaming: single_step has no velocity gradient, so it refuses
-  #  illumination_precondition / smooth_regularization;
-  #  under DD neither key is read, its tile backward slabs by
-  #  SWEEP_DD_RENDER_CHUNK, and a non-default value is refused)
-  backward_mode: two_pass_full
-  # backward_chunk_rows: 64         # rows/chunk for two_pass_chunked (VRAM knob)
-  # lateral_downsample: 1           # coarsen the render laterally (int or [y,x])
-  # compile_render: false           # torch.compile the INR render (default off)
-  hash:                             # multi-resolution hash encoder (Instant-NGP)
-    enabled: true
-    levels: 16
-    features_per_level: 1
-    log2_size: 18
-    base_resolution: 16             # int, or per-axis list [z,x] / [z,y,x]
-    finest_resolution: 512
-    backend: pytorch                # "pytorch" | "triton" (fused GPU kernels)
-    # c2f:                          # coarse-to-fine level unfreezing (BARF-style)
-    #   enabled: true
-    #   base_levels: 2
-    #   ramp: cosine                # "cosine" | "linear" | "hard"
-    #   warmup: 0.0
-    #   ramp_end: 1.0
-    #   growing: false
-  # fourier:                        # NeRF-style Fourier positional encoding
-  #   enabled: false
-  #   levels: 6
-  #   include_input: true
+# reparam:
+#   kind: velocity_inr
+#   # init_from: /path/prev_net.pt    # warm-start from a saved net
+#   save_net: false                   # dump the trained net (feedback: prefer true)
+#   hidden_features: 128              # SIREN width
+#   hidden_layers: 2                  # SIREN depth
+#   first_omega0: 10.0                # SIREN input freq (iFWI baseline ~10)
+#   hidden_omega0: 10.0
+#   use_bias: false
+#   vp_mean: 0.0                      # output = vp_mean + vp_std·net  (residual)
+#   vp_std: 400.0                     # from-scratch: use true mean/std, not wide
+#   direct_velocity: false            # true ⇒ predict absolute vp (not residual)
+#   lr: 1.0e-4
+#   # backward_mode: two_pass_full | two_pass_chunked | single_step
+#   # (plan-streaming: single_step has no velocity gradient, so it refuses
+#   #  illumination_precondition / smooth_regularization;
+#   #  under DD neither key is read, its tile backward slabs by
+#   #  SWEEP_DD_RENDER_CHUNK, and a non-default value is refused)
+#   backward_mode: two_pass_full
+#   # backward_chunk_rows: 64         # rows/chunk for two_pass_chunked (VRAM knob)
+#   # lateral_downsample: 1           # coarsen the render laterally (int or [y,x])
+#   # compile_render: false           # torch.compile the INR render (default off)
+#   hash:                             # multi-resolution hash encoder (Instant-NGP)
+#     enabled: true
+#     levels: 16
+#     features_per_level: 1
+#     log2_size: 18
+#     base_resolution: 16             # int, or per-axis list [z,x] / [z,y,x]
+#     finest_resolution: 512
+#     backend: pytorch                # "pytorch" | "triton" (fused GPU kernels)
+#     # c2f:                          # coarse-to-fine level unfreezing (BARF-style)
+#     #   enabled: true
+#     #   base_levels: 2
+#     #   ramp: cosine                # "cosine" | "linear" | "hard"
+#     #   warmup: 0.0
+#     #   ramp_end: 1.0
+#     #   growing: false
+#   # fourier:                        # NeRF-style Fourier positional encoding
+#   #   enabled: false
+#   #   levels: 6
+#   #   include_input: true
 
 # ═══ Source encoding — TWO modes (both under this one block) ══════════════════
 # The two "encodings" are switched by `mode`:
@@ -382,45 +424,77 @@ reparam:
 
 # ═══ Obs-synthesis overrides (only when generating synthetic obs) ═════════════
 # modeling_override:                # use a different wavelet/geometry for obs gen
-#   wavelet: {kind: ricker, fm: 10.0}
-#   geometry: {kind: line, sources: {start: 0, stop: 2305, step: 20, depth: 1},
-#              receivers: {start: 0, stop: 2305, step: 1, depth: 1}}
+#   wavelet: {kind: ricker, fm: 10.0, delay: 0.15}
+#   geometry: {kind: line, sources: {step: 12, depth: 2},
+#              receivers: {step: 1, depth: 18}}
 
 # ═══ Per-shot local-window optimization (Engquist-style DD) ═══════════════════
+# Each shot is modeled on a window around its own sources + receivers plus a
+# halo, not on the whole model: for long streamer lines (field data) where a
+# shot sees a few km of a long model. Off here: every receiver of this fixed
+# spread listens to every shot, so the window would be the whole model.
 
-local_model_window:
-  enabled: true
-  padding_x_m: 1500.0               # halo around each shot's src+rec footprint
-  padding_z_m: 0.0
-  # padding_y_m: null               # 3-D only
-  full_depth: true
-  min_width_m: 0.0
+# local_model_window:
+#   enabled: true
+#   padding_x_m: 1500.0             # halo around each shot's src+rec footprint
+#   padding_z_m: 0.0
+#   # padding_y_m: null             # 3-D only
+#   full_depth: true
+#   min_width_m: 0.0
 
 # ═══ Iteration budget (top-level; per-stage `stages:` override these) ═════════
 
-epochs: 300                        # total iters: with stages, their sum (checked)
-batchsize: 48                      # shots per iter (before stage override)
-train_shot_batchsize: 1            # gradient micro-batch per forward solve
-show_every: 10                     # console-log cadence
+epochs: 90                         # total iters: with stages, their sum (checked)
+batchsize: 8                       # shots drawn per iter (a random mini-batch,
+                                   # not a pass over the survey); stages may
+                                   # override it with batch_size
+# train_shot_batchsize: 2          # gradient micro-batch per forward solve
+                                   # (default = batchsize: one solve per iter)
+show_every: 5                      # console-log cadence
 
 # ═══ Multiscale stages (low → high frequency) ════════════════════════════════
 # Each stage runs `epochs` iters on its own (dh_m, dt_s, nt) grid with
-# bandpass-filtered obs. Low-freq / coarse-grid first fights cycle-skip.
+# bandpass-filtered obs. Low-freq / coarse-grid first fights cycle-skip, and
+# a coarse grid is cheap: 2x the dh is 4x fewer cells in 2-D, and its 2x dt
+# halves the time steps.
 # A dh_m grid samples the native model at i*dh_m (where geometry snaps) and
 # spans its whole extent: ceil((n-1)*grid.dh/dh_m)+1 points per axis.
+# A stage INHERITS every grid value it does not set from the stage before it
+# (a new dt_s without nt keeps the record length), so the last stage spells
+# out the native grid again. The obs of every stage is rebuilt from the
+# pristine obs (resampled, then band-passed), so bands never compose.
 # Per-stage keys: epochs, batch_size, dh_m, dt_s, nt, lr_scale, inr_lr_scale
 # (reparam only), optimizer_reset, wavelet, bandpass. frequency and boundary
 # are frequency-selection keys, rejected here. The stages' epochs are the run:
-# the top-level epochs must be their sum.
+# the top-level epochs must be their sum. Omit `stages:` for one band on the
+# native grid for `epochs` iterations.
 
 stages:
-  - {epochs: 50, batch_size: 48,  dh_m: 75.0,  dt_s: 0.004,  nt: 1500, bandpass: {lo_hz: 2.0, hi_hz:  5.0, order: 4, target: syn}}
-  - {epochs: 50, batch_size: 64,  dh_m: 37.5,  dt_s: 0.002,  nt: 3000, bandpass: {lo_hz: 2.0, hi_hz: 10.0, order: 4, target: syn}}
-  - {epochs: 50, batch_size: 80,  dh_m: 25.0,  dt_s: 0.0015, nt: 4000, bandpass: {lo_hz: 2.0, hi_hz: 15.0, order: 4, target: syn}}
-  - {epochs: 50, batch_size: 96,  dh_m: 18.75, dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 20.0, order: 4, target: syn}}
-  - {epochs: 50, batch_size: 112, dh_m: 15.0,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 25.0, order: 4, target: syn}}
-  - {epochs: 50, batch_size: 128, dh_m: 12.5,  dt_s: 0.001,  nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0, order: 4, target: syn}}
-# bandpass.target: "syn" (filter modeled+obs) | "wavelet" (filter the wavelet)
+  - epochs: 30                      # 25 m grid, 2-5 Hz: the long wavelengths
+    dh_m: 25.0
+    dt_s: 0.002
+    nt: 4000                        # 8 s, the same record as the native grid
+    lr_scale: 1.0                   # x optimizer.lr (or reparam.lr), x scheduler
+    bandpass: {lo_hz: 2.0, hi_hz: 5.0, order: 4, target: syn}
+  - epochs: 30                      # same 25 m grid (inherited), 2-9 Hz
+    lr_scale: 0.7
+    bandpass: {lo_hz: 2.0, hi_hz: 9.0, order: 4, target: syn}
+  - epochs: 30                      # native grid again, full band (no bandpass)
+    dh_m: 12.5
+    dt_s: 0.001
+    nt: 8000
+    lr_scale: 0.5
+    # batch_size: 16                # per-stage shots per iter (default: batchsize)
+    # optimizer_reset: false        # true = fresh Adam moments at stage entry
+    # wavelet: {kind: ricker, fm: 10.0, delay: 0.15}   # per-stage source wavelet
+# ── e.g. a field ladder: 2-D streamer, 6 stages up to 30 Hz ──
+#   - {epochs: 50, batch_size: 48,  dh_m: 75.0, dt_s: 0.004, nt: 1500, bandpass: {lo_hz: 2.0, hi_hz:  5.0}}
+#   - {epochs: 50, batch_size: 64,  dh_m: 37.5, dt_s: 0.002, nt: 3000, bandpass: {lo_hz: 2.0, hi_hz: 10.0}}
+#   ...
+#   - {epochs: 50, batch_size: 128, dh_m: 12.5, dt_s: 0.001, nt: 6000, bandpass: {lo_hz: 2.0, hi_hz: 30.0}}
+# bandpass.target: "syn" (filter modeled+obs) | "wavelet" (filter the wavelet
+#   instead of syn: cheaper, but a low lo_hz stretches the filtered wavelet
+#   back before t = 0, so it needs a long wavelet.delay)
 # bandpass.padtype: "odd" | "even" | "constant"
 # The plan-streaming loop (obs.plan.sampling) reads only lo_hz / hi_hz / order:
 # it filters the wavelet at each stage entry and the obs every iteration with

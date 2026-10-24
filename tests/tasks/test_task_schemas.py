@@ -488,8 +488,10 @@ def test_every_task_type_has_an_init_template():
 
 
 @pytest.mark.parametrize("task_type", sorted(_registry_task_types()))
-def test_init_template_validates(task_type, tmp_path, monkeypatch):
-    """Whatever `sweep-tasks init <t>` emits must load straight back in.
+def test_init_template_validates(task_type, tmp_path, monkeypatch, capsys):
+    """Whatever `sweep-tasks init <t>` emits must load straight back in, with
+    no environment variable set: `init <t> -o x.yaml; run x.yaml` is what the
+    README promises. And `init` must say so, not print the Viking pipeline.
 
     Globbed off the registry rather than a hardcoded list, so a new task type
     cannot ship with a template that was never round-tripped.
@@ -499,8 +501,8 @@ def test_init_template_validates(task_type, tmp_path, monkeypatch):
     from sweepx.tasks.cli import main as _cli_main
 
     for var in ("VIKING_HOME", "PROJECT_DATA_ROOT", "SWEEP_RUNS_ROOT",
-                "SWEEP_REPOS_ROOT", "MARMOUSI_HOME"):
-        monkeypatch.setenv(var, "/tmp/sweep-tasks-template-validation")
+                "SWEEP_REPOS_ROOT", "MARMOUSI_HOME", "SURVEY_HOME"):
+        monkeypatch.delenv(var, raising=False)
     out = tmp_path / f"{task_type}.yaml"
     monkeypatch.setattr(sys, "argv",
                         ["sweep-tasks", "init", task_type, "-o", str(out)])
@@ -509,5 +511,45 @@ def test_init_template_validates(task_type, tmp_path, monkeypatch):
     except SystemExit as exc:                       # argparse/CLI exit code 0
         assert not exc.code, f"init {task_type} exited {exc.code}"
     assert out.exists(), f"init {task_type} wrote nothing"
+    hint = capsys.readouterr().out
+    assert f"sweep-tasks run {out.resolve()}" in hint, hint
+    assert "build-index" not in hint and "VIKING_HOME" not in hint, hint
     spec = load_task(out)
     assert spec.task_type == task_type
+
+
+def _file_inputs(value, key=None):
+    """Every non-null value of a key that names an input file, at any depth."""
+    file_keys = {"path", "npy_path", "plan_path", "index_path", "sources_file",
+                 "receivers_file", "coeff_shards", "data_mask_path", "topography",
+                 "diving_window_db", "init_from", "seabed", "mask"}
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from _file_inputs(v, k)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _file_inputs(v, key)
+    elif key in file_keys and isinstance(value, str):
+        yield key, value
+
+
+@pytest.mark.parametrize("task_type", sorted(_registry_task_types()))
+def test_init_templates_need_no_input_file(task_type):
+    """The task templates run as they come out of `init`: every model is a
+    `sweep.datasets` benchmark or built in memory, every obs synthetic. They
+    used to point at ./vp_true.npy (forward, lsrtm) or at a Viking run
+    directory (fwi, rtm) that no reader of the README has."""
+    from sweepx.tasks.yaml_io import _read_bundled_template
+
+    raw = yaml.safe_load(_read_bundled_template(task_type))
+    assert list(_file_inputs(raw)) == []
+
+
+def test_init_viking_still_prints_the_pipeline(tmp_path, capsys):
+    from sweepx.tasks.cli import main as _cli_main
+
+    out = tmp_path / "viking.yaml"
+    assert _cli_main(["init", "viking", "-o", str(out)]) == 0
+    hint = capsys.readouterr().out
+    assert f"sweep-tasks build-index --config {out.resolve()}" in hint
+    assert "sweep-tasks run" not in hint

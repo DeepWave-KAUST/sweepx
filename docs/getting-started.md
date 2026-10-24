@@ -46,16 +46,23 @@ solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=2e-3, devi
 wavelet   = ricker(np.arange(600) * 2e-3 - 0.12, f=10.0).astype(np.float32)
 sources   = np.array([[64, 2]], dtype=np.int64)
 receivers = np.array([[[ix, 4] for ix in range(0, 128, 2)]], dtype=np.int64)
-vp        = torch.full((96, 128), 2000.0, device=dev)
+vp        = torch.full((96, 128), 2000.0, device=dev)   # (nz, nx)
 
 gather = solver(wavelet, sources, receivers, models=[vp])   # (1, nt, nrec, 1)
 ```
 
 ## Your first gradient
 
-Every propagator call is an autograd node, so inversion is ordinary PyTorch:
+Every propagator call is an autograd node, so inversion is ordinary PyTorch.
+Record data for a model with a faster box, then take the gradient of the
+misfit at the constant model:
 
 ```python
+vp_true = vp.clone()
+vp_true[48:58, 32:96] = 2300.0
+with torch.no_grad():
+    obs = solver(wavelet, sources, receivers, models=[vp_true])
+
 vp   = vp.clone().requires_grad_(True)
 pred = solver(wavelet, sources, receivers, models=[vp])
 loss = 0.5 * (pred - obs).pow(2).sum()

@@ -25,15 +25,59 @@ trust boundary doubles the radius (capped at ``max_radius``).
 ## Calling convention
 
 Like `TruncatedNewton` and `TruncatedGaussNewton`, `TrustRegion.step()`
-takes a `loss_fn` returning the loss tensor **without calling backward**:
+takes a `loss_fn` returning the loss tensor **without calling backward**.
+
+The Hessian-vector products are double backward passes through the
+solver, so the solver must be twice differentiable. With sweep that is
+`impl='eager'` with `torch.compile` off; the setup's default solver
+(`impl='c'` on a GPU) returns a gradient without an autograd graph, and the
+compiled eager step does not support a double backward either:
 
 ```python
+from sweep.propagator.options import EagerOptions, Full
+
+# A twice-differentiable solver: the eager backend, all time steps kept in
+# memory, no torch.compile.
+solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=1e-3, device=dev,
+                   impl="eager", memory=Full(), eager_options=EagerOptions(use_compile=False))
+```
+
+With `impl='c'`, `step()` raises a `RuntimeError` that names the solver. It
+cannot catch every case: with a nonlinear parameterization such as
+[`SigmoidBounds`](../parameterization/bounds.md), the gradient keeps a graph
+through the parameterization, the Hessian-vector product runs, and it is
+wrong (on the setup model it pointed nearly orthogonally to the eager one).
+The eager solver is much slower than `impl='c'`: on a V100 the 5-epoch
+examples of the Truncated Newton, Truncated Gauss-Newton and Trust-Region
+pages took 12-14 minutes each, against under a second for the L-BFGS
+example on `impl='c'`.
+
+The trust radius is the Euclidean norm of the step over all parameters, in
+parameter units: a 10 m/s change on each of $10^4$ cells has norm $10^3$.
+With the defaults (`initial_radius=1.0`, `max_radius=100.0`) the first step
+of a model in m/s has a norm of at most 1 m/s over the whole grid, and no
+step ever exceeds 100, so set both:
+
+```python
+import sweepx.opt
+
+vp = init_vp.clone().requires_grad_(True)
+opt = sweepx.opt.optim.TrustRegion(
+    [vp], variant="ttr", bounds=(1500.0, 5500.0),
+    initial_radius=300.0, max_radius=1e4, max_inner_iter=5,
+)
+
 def loss_fn():
     syn = solver(wavelet, sources, receivers, models=[vp])
     return (syn - obs).pow(2).sum()
 
-opt.step(loss_fn)
+for _ in range(cfg["epochs"]):
+    opt.step(loss_fn)
 ```
+
+A trial step whose loss is not finite (e.g. a solver driven past its
+stability limit) is rejected and shrinks the radius; with `bounds`, the trial
+point is projected onto the box before it is evaluated.
 
 ## API
 
@@ -44,7 +88,7 @@ sweepx.opt.optim.TrustRegion(
     variant="ttr",                  # "ttr" | "astr"
     bounds=None,
     preconditioner=None,            # used only by TTR (inside Steihaug-CG)
-    initial_radius=1.0,
+    initial_radius=1.0,             # L2 norm of the step, parameter units
     max_radius=100.0,
     eta_acceptable=0.1,             # accept if rho > this
     eta_increase=0.75,              # grow radius if rho > this and at boundary

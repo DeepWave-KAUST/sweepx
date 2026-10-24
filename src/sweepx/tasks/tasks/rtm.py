@@ -81,12 +81,23 @@ class RTMRunnerMixin:
                 effective_nt = new_nt
 
         vm_ref = spec.velocity_model
+        if vm_ref.constant is not None:
+            vm_shape = tuple(int(v) for v in vm_ref.shape)   # required with constant
+        else:
+            vm_shape = tuple(int(v) for v in _model_array(vm_ref, mmap=True).shape)
         if spec.grid.shape is not None:
             shape = tuple(int(v) for v in spec.grid.shape)
-        elif vm_ref.constant is not None:
-            shape = tuple(int(v) for v in vm_ref.shape)
+            # The image is the gradient w.r.t. this very array on this grid:
+            # a model of another shape fails in every batch (and the loop
+            # below used to swallow that). Refuse it before any data is read.
+            if vm_shape != shape:
+                raise ValueError(
+                    f"[rtm] grid.shape {list(shape)} does not match the "
+                    f"velocity_model shape {list(vm_shape)}; set grid.shape to "
+                    f"{list(vm_shape)} or drop it (it is then taken from the "
+                    "model)")
         else:
-            shape = tuple(_model_array(vm_ref, mmap=True).shape)
+            shape = vm_shape
 
         try:
             if vm_ref.constant is not None:
@@ -275,6 +286,7 @@ class RTMRunnerMixin:
                        n_batches=len(all_batches),
                        world_size=dist_info.world_size)
         n_failed = 0
+        first_failure = None
 
         # ---- 4) Per-batch local-window context (optional) --------------------
         local_window_ctx = None
@@ -414,12 +426,17 @@ class RTMRunnerMixin:
                 )
             except Exception as berr:  # noqa: BLE001
                 # One bad batch (e.g. boundary saving issue at extreme window
-                # shape) should not nuke the whole RTM run. Log + continue.
+                # shape) should not nuke the whole RTM run. Log + continue;
+                # the count goes into the summary, and a run whose batches
+                # all failed is a failed run (checked after the loop).
                 import traceback as _tb
                 print(f"[rtm] batch {global_batch_index} failed: "
                       f"{type(berr).__name__}: {berr}")
                 _tb.print_exc()
                 n_failed += 1
+                if first_failure is None:
+                    first_failure = (f"batch {global_batch_index}: "
+                                     f"{type(berr).__name__}: {berr}")
             progress.event("progress", done=local_idx + 1,
                            total=len(local_batches), unit="batch",
                            failed=n_failed)
@@ -452,6 +469,29 @@ class RTMRunnerMixin:
         # tensor when cache_all=True). Eager path has nothing to close.
         if plan_reader is not None:
             plan_reader.close()
+
+        # ---- 7b) Failed batches ----------------------------------------------
+        # A failed batch adds nothing to the stack. If every batch failed the
+        # image is all zeros: that is a failed run, not an RTM to save. Counted
+        # over all ranks, so every rank takes the same branch.
+        n_batches_total = len(all_batches)
+        n_failed_total = int(n_failed)
+        if dist_info.is_distributed:
+            t = torch.tensor([float(n_failed)], dtype=torch.float32)
+            if dev.type == "cuda":
+                t = t.to(dev)
+            _dist.all_reduce_sum_inplace(t, dist_info)
+            n_failed_total = int(round(float(t.item())))
+        if n_batches_total and n_failed_total >= n_batches_total:
+            raise RuntimeError(
+                f"[rtm] all {n_batches_total} shot batches failed, so there is "
+                f"no image; first failure: {first_failure or 'on another rank'} "
+                "(tracebacks above)")
+        if n_failed_total and dist_info.is_root:
+            print(f"[rtm] WARNING: {n_failed_total} of {n_batches_total} shot "
+                  f"batches FAILED and are missing from the image "
+                  f"(first failure: {first_failure or 'on another rank'}); "
+                  "see the tracebacks above", flush=True)
 
         # ---- 8) All-reduce across ranks --------------------------------------
         if dist_info.is_distributed:
@@ -603,6 +643,7 @@ class RTMRunnerMixin:
         summary = {
             "n_shots": int(nshots),
             "n_batches": int(len(all_batches)),
+            "n_failed": int(n_failed_total),
             "shots_per_batch": int(shots_per_batch),
             "image_abs_max": float(np.abs(rtm_sum).max()),
             "image_per_shot_norm_abs_max": float(np.abs(rtm_per_shot_norm_sum).max()),

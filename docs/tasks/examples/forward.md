@@ -29,10 +29,13 @@ Two properties of this acquisition drive the choices in the FWI examples:
 
 * **obs dominant frequency is 7.10 Hz**, not the source's 8 Hz — propagation
   and geometric spreading shift the peak down. Half a period is 70 ms.
-* **the latest first break lands at 8.59 s** of the 10 s record. A 7 s record
-  (the obvious first guess) cut the far offsets off *right after* their first
-  arrival: 31.7 % of the edge shots' traces kept under 1 s of coda. At 10 s
-  that figure is 0 %.
+* **the latest first break lands at about 8.6 s** of the 10 s record, picking
+  the first sample above 1e-4 of the shot gather's peak (a pick at 1 % of each
+  trace's own peak gives 8.25 s). With the 2 s lead-in, a 7 s record (the
+  obvious first guess) would leave about half of the edge shots' traces — 49 to
+  55 % depending on the pick — with under 1 s of record after their first
+  break, the farthest of them with no first break at all. At 10 s that figure
+  is 0 % with either pick.
 
 ## 09 — the smallest task there is
 
@@ -72,5 +75,5 @@ The four geometry kinds, and when each earns its place:
 | `from_file` | the same arrays as `.npy` | layouts a script generated |
 
 `from_segy_headers`, `from_segy_index` and `from_plan` read real acquisition
-geometry out of field data; the [Viking](../datasets/viking/README.md) example
-uses those.
+geometry out of field data (a SEG-Y file, a trace index, or a `SeismicPlan`
+from `sweep-tasks build-plan`; see [the CLI workflow](../cli_workflow.md)).

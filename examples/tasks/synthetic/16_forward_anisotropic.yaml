@@ -39,16 +39,21 @@
 #                           {"name":"epsilon","constant":0.0,"shape":[200,360]},
 #                           {"name":"delta","constant":0.0,"shape":[200,360]}]'
 #
-# Measured on the far-offset trace (1740 m) of shot 2:
+# Measured on shot index 1 (x = 1.8 km), receiver at x = 3.54 km (1740 m
+# offset), first break = first sample above 5% of the trace maximum:
 #
 #   isotropic  eps = del = 0      first break 787 ms
 #   VTI        eps = 0.20         first break 680 ms      ratio 1.157
 #
-# The horizontal P velocity is vp * sqrt(1 + 2*epsilon) = 1.183 * vp, so 1.157
-# is the right answer rather than a near miss: at 1740 m offset with the source
-# at 40 m and receivers at 80 m the ray is not yet horizontal, so the measured
-# speed-up must come in BELOW the asymptote. Push the spread out and it
-# approaches 1.183.
+# The horizontal P velocity is vp * sqrt(1 + 2*epsilon) = 1.183 * vp. The
+# ratio of first-break TIMES comes in lower because both times carry the same
+# constant of about 91 ms (the 0.15 s wavelet delay, less how early the
+# threshold pick fires), not because of the ray: with the source at 40 m and
+# receivers at 80 m it is within 1.3 degrees of horizontal. Take the constant
+# out and the speed-up is there: a straight-line fit of peak time against
+# distance over offsets >= 800 m gives 2501 m/s isotropic and 2955 m/s VTI, a
+# ratio of 1.181. Farther out the constant matters less — the 2960 m trace of
+# shot index 2 reads 1.167 from first breaks alone.
 #
 # `delta` controls the near-vertical curvature (the NMO velocity,
 # vnmo = vp * sqrt(1 + 2*delta)) rather than the horizontal asymptote. Both

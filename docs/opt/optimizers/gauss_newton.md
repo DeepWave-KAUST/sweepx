@@ -22,13 +22,41 @@ $L = \tfrac{1}{2}\|r\|^2$ and computes both $g$ and the GN matrix-vector
 product internally via JVP / VJP. As with `TruncatedNewton`, **do not
 call `backward` inside `residual_fn`**.
 
+The JVP is a double backward through the residual, so the solver must be
+twice differentiable. With sweep that is `impl='eager'` with `torch.compile`
+off; the setup's default solver (`impl='c'` on a GPU) refuses a second
+backward over the same graph with a `RuntimeError`:
+
 ```python
+from sweep.propagator.options import EagerOptions, Full
+
+# A twice-differentiable solver: the eager backend, all time steps kept in
+# memory, no torch.compile.
+solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=1e-3, device=dev,
+                   impl="eager", memory=Full(), eager_options=EagerOptions(use_compile=False))
+```
+
+The eager solver is much slower than `impl='c'`: on a V100 this 5-epoch
+example took about 14 minutes, against under a second for the L-BFGS example
+on `impl='c'`:
+
+```python
+import sweepx.opt
+
+vp = init_vp.clone().requires_grad_(True)
+opt = sweepx.opt.optim.TruncatedGaussNewton([vp], bounds=(1500.0, 5500.0), max_inner_iter=5)
+
 def residual_fn():
     syn = solver(wavelet, sources, receivers, models=[vp])
     return (syn - obs).reshape(-1)            # 1-D residual
 
-opt.step(residual_fn)
+for _ in range(cfg["epochs"]):
+    opt.step(residual_fn)
 ```
+
+As for Truncated Newton, the inner CG solves for the step, so the line search
+starts at $\alpha = 1$ in parameter units; trials are projected onto
+`bounds` before they are evaluated.
 
 ## API
 

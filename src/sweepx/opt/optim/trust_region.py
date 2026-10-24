@@ -12,8 +12,10 @@ Two flavours share one outer driver:
   on FWI.
 
 Both require Hessian-vector products through autograd (loss_fn must NOT
-call backward), and both adjust the trust radius according to the standard
-``rho = actual / predicted`` recipe (Nocedal & Wright Algorithm 4.1).
+call backward, and the loss must be twice differentiable: with sweep,
+``impl='eager'`` without ``torch.compile``), and both adjust the trust radius
+according to the standard ``rho = actual / predicted`` recipe (Nocedal &
+Wright Algorithm 4.1).
 
 References:
     Steihaug, T. (1983). DOI:10.1137/0720042.
@@ -25,6 +27,8 @@ References:
 """
 from __future__ import annotations
 
+import math
+import warnings
 from typing import Callable, Optional, Tuple
 
 import torch
@@ -37,6 +41,7 @@ from sweepx.opt._utils import (
     write_flat_to_params,
 )
 from sweepx.opt.linalg.cg import steihaug_cg
+from sweepx.opt.optim.newton import NOT_TWICE_DIFFERENTIABLE
 
 
 class TrustRegion(Optimizer):
@@ -45,10 +50,14 @@ class TrustRegion(Optimizer):
     Args:
         params: iterable of parameter tensors / param-groups.
         variant: ``"ttr"`` (Steihaug-CG) or ``"astr"`` (2-D subspace).
-        bounds: optional ``(lo, hi)`` projected box.
+        bounds: optional ``(lo, hi)`` projected box; the trial point is
+            projected before it is evaluated.
         preconditioner: optional callable used inside Steihaug-CG (TTR only).
-        initial_radius: initial trust radius.
-        max_radius: cap on trust radius.
+        initial_radius: initial trust radius: the Euclidean norm of the step
+            over all optimized parameters, in parameter units. It therefore
+            grows with the number of grid points and the units of the model
+            (a 10 m/s change on each of 10^4 cells has norm 10^3).
+        max_radius: cap on trust radius (same units).
         eta_acceptable: rho threshold above which the step is accepted.
         eta_increase: rho threshold above which the radius grows.
         radius_shrink: factor < 1 applied to delta on rejection.
@@ -59,7 +68,9 @@ class TrustRegion(Optimizer):
 
     Calling convention:
         ``opt.step(loss_fn)`` where ``loss_fn`` returns the loss tensor
-        WITHOUT calling backward.
+        WITHOUT calling backward. The loss must be twice differentiable
+        through autograd (sweep: ``impl='eager'`` with
+        ``EagerOptions(use_compile=False)``, not ``impl='c'``).
     """
 
     def __init__(
@@ -101,13 +112,6 @@ class TrustRegion(Optimizer):
         self._last_boundary: bool = False
 
     # ------------------------------------------------------------------ utils
-    def _project(self) -> None:
-        if self.bounds is None:
-            return
-        lo, hi = self.bounds
-        for p in iter_params(self.param_groups):
-            p.data.clamp_(lo, hi)
-
     def _flatten_list(self, tensors) -> Tensor:
         return torch.cat([t.reshape(-1) for t in tensors])
 
@@ -142,6 +146,11 @@ class TrustRegion(Optimizer):
             tol=self.cg_tol, max_iter=self.max_inner_iter,
             preconditioner=precond_callable,
         )
+        if info.nonfinite:
+            warnings.warn(
+                f"TrustRegion: Steihaug-CG met a non-finite curvature p.Hp at iteration "
+                f"{info.iters}; using the last finite iterate", RuntimeWarning, stacklevel=3,
+            )
         self._last_boundary = info.boundary
         return d
 
@@ -206,8 +215,15 @@ class TrustRegion(Optimizer):
             loss = loss_fn()
             grads_list = torch.autograd.grad(loss, params, create_graph=True)
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
-        if float(g_flat.norm()) == 0.0:
+        g_norm = float(g_flat.norm())
+        if not (math.isfinite(float(loss.detach())) and math.isfinite(g_norm)):
+            raise RuntimeError(
+                "TrustRegion: the loss or its gradient is not finite at the current parameters"
+            )
+        if g_norm == 0.0:
             return loss
+        if not any(g.requires_grad for g in grads_list):
+            raise RuntimeError(NOT_TWICE_DIFFERENTIABLE.format(owner="TrustRegion"))
 
         def matvec(v_flat: Tensor) -> Tensor:
             v_list = self._unflatten(v_flat, params)
@@ -229,15 +245,19 @@ class TrustRegion(Optimizer):
         # Drop graph references before evaluating actual reduction.
         del grads_list
 
-        # 3. Trial step.
+        # 3. Trial step, projected onto the box before it is evaluated.
         x0 = flat_params(self.param_groups).clone()
-        write_flat_to_params(self.param_groups, x0 + d)
+        trial = x0 + d
+        if self.bounds is not None:
+            trial.clamp_(self.bounds[0], self.bounds[1])
+        write_flat_to_params(self.param_groups, trial)
         with torch.enable_grad():
             new_loss = loss_fn()
         actual = float(loss.detach()) - float(new_loss.detach())
 
-        # 4. rho and radius update.
-        if predicted <= 0.0:
+        # 4. rho and radius update. A non-finite trial loss (NaN compares
+        # False everywhere) is a failed step: reject and shrink.
+        if not (predicted > 0.0 and math.isfinite(predicted) and math.isfinite(actual)):
             rho = -1.0
         else:
             rho = actual / predicted
@@ -249,8 +269,7 @@ class TrustRegion(Optimizer):
             self.radius = min(self.radius * self.radius_grow, self.max_radius)
 
         if rho > self.eta_acceptable:
-            # Accept the step; current params are at x0 + d.
-            self._project()
+            # Accept the step; current params are at the projected x0 + d.
             self._prev_step = d.clone()
             self._last_accepted = True
             return new_loss

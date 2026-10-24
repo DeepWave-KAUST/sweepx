@@ -75,3 +75,22 @@ def test_gnvp_matches_jt_j_on_linear_residual():
     gnv, = gauss_newton_vector_product(residual, [x], [v])
     expected = M.T @ (M @ v)
     assert torch.allclose(gnv, expected, atol=1e-6)
+
+
+def test_hvp_rejects_gradient_without_graph():
+    import pytest
+
+    class FirstOrderOnly(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x):
+            ctx.save_for_backward(x)
+            return (x * x).sum()
+
+        @staticmethod
+        def backward(ctx, grad):
+            (x,) = ctx.saved_tensors
+            return (2.0 * x * grad).detach()
+
+    x = torch.tensor([1.0, -1.0], requires_grad=True)
+    with pytest.raises(RuntimeError, match="twice-differentiable"):
+        hessian_vector_product(lambda: FirstOrderOnly.apply(x), [x], [torch.ones(2)])

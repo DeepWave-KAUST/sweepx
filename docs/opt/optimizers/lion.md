@@ -32,6 +32,24 @@ sweepx.opt.optim.Lion(
 
 A closure is **optional**.
 
+## Drop-in usage
+
+The update is a sign, so `lr` is the change of every component per step, in
+parameter units (m/s here):
+
+```python
+import sweepx.opt
+
+vp = init_vp.clone().requires_grad_(True)
+opt = sweepx.opt.optim.Lion([vp], lr=2.0, bounds=(1500.0, 5500.0))
+
+for _ in range(cfg["epochs"]):
+    opt.zero_grad()
+    loss = (solver(wavelet, sources, receivers, models=[vp]) - obs).pow(2).sum()
+    loss.backward()
+    opt.step()
+```
+
 ## Notes
 
 - Lion's typical `lr` is ~3-10x smaller than Adam's because the sign
