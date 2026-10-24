@@ -43,6 +43,31 @@ SAMPLES_PER_TRACE = 80
 DT_S = 0.002
 
 
+@pytest.fixture(autouse=True)
+def _outside_slurm(monkeypatch):
+    """Run as on a CI runner. Inside a Slurm job every run's metadata dump asks
+    the real ``scontrol`` for the job (best effort, up to 2 x 10 s, seconds on a
+    busy controller); nothing here reads it, and what it records is checked
+    against a fake ``scontrol`` in test_run_meta_archive.py."""
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+
+def _cheap(spec: dict) -> dict:
+    """The tiny-fixture spec with the solver costs these tests do not read.
+
+    * The eager step uncompiled: sweep's EagerOptions compiles by default, and
+      Inductor compiles anew for every propagator a run builds (C++ on a CPU,
+      seconds each). These tests check the plan-streaming loop around the
+      solver; sweep's test_compiled_stencil_slices compares the compiled step
+      with the uncompiled one, and the stage tests below run uncompiled too.
+    * A 4-cell absorbing boundary, as the stage fixture below, instead of 8: the
+      obs are random noise, so nothing here reads how well it absorbs, and the
+      padded grid has 2.2x fewer cells."""
+    spec["backend"]["eager_options"] = {"use_compile": False}
+    spec["physics"]["abcn"] = 4
+    return spec
+
+
 def _trace_byte_offset(idx: int, samples: int = SAMPLES_PER_TRACE) -> int:
     return (SEGY_TEXT_HEADER_SIZE + SEGY_BIN_HEADER_SIZE
             + idx * (SEGY_TRACE_HEADER_SIZE + samples * 4))
@@ -204,7 +229,7 @@ def _build_plan_streaming_spec(
 
 def test_plan_streaming_fwi_encoded_smoke_runs(tmp_path):
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture))
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "ss.yaml")))
     assert result.status.state == "success", result.status.error
     # final outputs land on disk.
@@ -231,7 +256,7 @@ def test_crg_plan_without_sampling_runs_static_reciprocal_path(tmp_path):
     shots; the default floor of 8 would drop every group.
     """
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture))
     spec["obs"]["plan"].pop("sampling")
     spec["obs"]["plan"]["min_receivers"] = 2
     spec.pop("source_encoding", None)
@@ -251,7 +276,7 @@ def test_crg_plan_geometry_only_rejects_csg_static_loader(tmp_path):
     A CRG plan on that route must fail with a message naming the grouping.
     """
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture))   # builds a solver first
     spec.pop("source_encoding", None)
     spec["obs"] = {"synthetic_from": {"name": "vp",
                                       "path": str(fixture["init_vp"])}}
@@ -271,7 +296,8 @@ def test_plan_streaming_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
     the per-shot-not-implemented gate.
     """
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture)
+    # One epoch: the guard sat at init, before the first per-shot iteration.
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     spec.pop("source_encoding")
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "noenc.yaml")))
     err = (result.status.error or "").lower()
@@ -283,7 +309,7 @@ def test_plan_streaming_fwi_per_shot_path_no_longer_blocked_at_init(tmp_path):
 def test_plan_streaming_fwi_emits_ortho_slice_qc(tmp_path):
     """qc.vp_png with 3-D vp should drop a 1×3 orthogonal-slice PNG."""
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     spec["qc"] = {
         "every_n_epochs": 1,
         "vp_png": True, "vp_diff_png": True, "gradient_png": False,
@@ -315,7 +341,7 @@ def test_plan_streaming_fwi_model_plan_crop_is_origin_aware(tmp_path):
     eligible groups.
     """
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     spec["task_id"] = "crop_origin_aware"
     # The tiny fixture's auto-origin should be slightly negative
     # (pad=2 cells × dh=50 = 100m to the left of bbox.min).
@@ -350,7 +376,7 @@ def test_plan_streaming_fwi_qc_flags_gate_each_product(tmp_path):
     """
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     # Pass 1: all four plan-streaming QC products OFF.
-    spec_off = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    spec_off = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     spec_off["task_id"] = "qc_flags_off"
     spec_off["qc"] = {
         "every_n_epochs": 1,
@@ -369,7 +395,7 @@ def test_plan_streaming_fwi_qc_flags_gate_each_product(tmp_path):
     assert not (qc_off / "loss_curve.png").exists(), "loss_curve.png should be absent"
 
     # Pass 2: all four ON.
-    spec_on = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    spec_on = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     spec_on["task_id"] = "qc_flags_on"
     spec_on["qc"] = {
         "every_n_epochs": 1,
@@ -397,7 +423,7 @@ def test_plan_streaming_fwi_with_smooth_reg_and_water_pin(tmp_path):
     # (cell centres 25 m and 75 m lie above it, 125 m does not).
     sb_path = save_seabed_depth_npz(tmp_path / "seabed_depth.npz",
                                     np.full((16, 24), 100.0))
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=2))
     spec["smooth_regularization"] = {
         "weight": 1.0e-3, "order": "first",
         "x_weight": 1.0, "y_weight": 1.0, "z_weight": 1.0,
@@ -432,9 +458,9 @@ def test_plan_streaming_fwi_data_mask_runs_end_to_end(tmp_path):
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     ones = tmp_path / "ones_mask.npy"
     np.save(ones, np.ones((1,), dtype=np.float32))  # broadcasts over (nshots,nt,nrec[,nchan])
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
         "loss": {"kind": "mse", "data_mask_path": str(ones)},
-    })
+    }))
     result = TaskRunner().run(load_task(_write(spec, tmp_path / "masked.yaml")))
     loss = np.load(result.task_dir / "output" / "loss.npy")
     assert loss.size == 2
@@ -459,7 +485,7 @@ def test_plan_streaming_solver_mode_comes_from_source_shape(tmp_path, monkeypatc
 
     monkeypatch.setattr(PropTorch, "forward", spy)
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1)
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=1))
     if path != "encoded":
         spec.pop("source_encoding")
     if path == "per_crg":
@@ -490,11 +516,10 @@ def test_plan_streaming_stage_grid_spans_the_base_extent(tmp_path, capsys, repar
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
     sb_path = save_seabed_depth_npz(tmp_path / "seabed_depth.npz",
                                     np.full((16, 24), 100.0))
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
+    spec = _cheap(_build_plan_streaming_spec(tmp_path, fixture, epochs=2, extra={
         "stages": [{"epochs": 1, "dh_m": 100.0}, {"epochs": 1, "dh_m": 50.0}],
         "water": {"seabed": str(sb_path), "velocity": 2500.0},
-    })
-    spec["backend"]["eager_options"] = {"use_compile": False}
+    }))
     if reparam:
         spec["reparam"] = {"kind": "velocity_inr", "hidden_features": 8,
                            "hidden_layers": 1, "hash": {"enabled": False},
@@ -523,8 +548,11 @@ _SYN_SHOTS = np.array([[x, y, 100.0] for y in (100.0, 300.0, 500.0)
 _BAND_LO, _BAND_HI = {"lo_hz": 1.0, "hi_hz": 4.0}, {"lo_hz": 1.0, "hi_hz": 8.0}
 
 
-def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> dict:
-    """Spec + on-disk fixture for the stage-change tests (default: CPU, per shot)."""
+def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, *, nt=_SYN_NT,
+                          **extra) -> dict:
+    """Spec + on-disk fixture for the stage-change tests (default: CPU, per shot).
+
+    ``nt`` is the record length of the data and of the run (default ``_SYN_NT``)."""
     import torch
     from sweepx.tasks._helpers.solver_build import _build_solver
     from sweepx.tasks._helpers.wavelet_build import _build_wavelet
@@ -542,7 +570,7 @@ def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> 
     spec = {
         "task_type": "fwi", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
         "grid": {"dh": 50.0, "shape": list(shape)},
-        "time": {"dt": _SYN_DT, "nt": _SYN_NT},
+        "time": {"dt": _SYN_DT, "nt": nt},
         "wavelet": {"kind": "ricker", "fm": 5.0, "delay": 0.2},
         "geometry": {"kind": "from_plan", "plan_path": str(plan_path),
                      "rotation_metadata": str(rot), "dh_xyz_m": [50.0] * 3,
@@ -566,7 +594,7 @@ def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> 
     # One CRG per node: the node fires, the shots record (CRG reciprocity).
     model_spec = load_task_from_dict(spec, base_dir=tmp_path)
     solver = _build_solver(model_spec.physics, model_spec.backend, shape, 50.0,
-                           _SYN_DT, _SYN_NT, torch.device("cpu"))
+                           _SYN_DT, nt, torch.device("cpu"))
     wav = torch.as_tensor(_build_wavelet(model_spec.wavelet, model_spec.time))
     src = np.rint(_SYN_NODES / 50.0).astype(np.int64)
     rec = np.rint(_SYN_SHOTS / 50.0).astype(np.int64)
@@ -575,16 +603,16 @@ def _synthetic_stage_spec(tmp_path: Path, stages, shape=_SYN_SHAPE, **extra) -> 
         syn = solver(wav[None].expand(n_nodes, -1).contiguous(), src,
                      np.broadcast_to(rec[None], (n_nodes, n_shots, 3)).copy(),
                      models=[torch.as_tensor(true_vp, dtype=torch.float32)])
-    traces = syn[..., 0].transpose(1, 2).reshape(n_nodes * n_shots, _SYN_NT)
+    traces = syn[..., 0].transpose(1, 2).reshape(n_nodes * n_shots, nt)
     write_segy_minimal(segy, np.ascontiguousarray(traces.numpy(), dtype=np.float32),
                        dt=_SYN_DT, sample_format=FORMAT_IEEE_FLOAT32)
     n_rows = n_nodes * n_shots
     SeismicPlan(
         grouping="crg", files=[segy],
-        trace_size_per_file=np.asarray([SEGY_TRACE_HEADER_SIZE + _SYN_NT * 4]),
-        sample_format=FORMAT_IEEE_FLOAT32, samples_per_trace=_SYN_NT, dt_s=_SYN_DT,
+        trace_size_per_file=np.asarray([SEGY_TRACE_HEADER_SIZE + nt * 4]),
+        sample_format=FORMAT_IEEE_FLOAT32, samples_per_trace=nt, dt_s=_SYN_DT,
         row_file_id=np.zeros(n_rows, dtype=np.int64),
-        row_trace_offset=np.array([_trace_byte_offset(i, _SYN_NT) for i in range(n_rows)]),
+        row_trace_offset=np.array([_trace_byte_offset(i, nt) for i in range(n_rows)]),
         row_source_xyz=np.tile(_SYN_SHOTS, (n_nodes, 1)),
         row_receiver_xyz=np.repeat(_SYN_NODES, n_shots, axis=0),
         group_id=np.arange(n_nodes, dtype=np.int64) + 10, group_xyz=_SYN_NODES.copy(),
@@ -637,7 +665,10 @@ def test_plan_streaming_stage_dh_keeps_inverting(tmp_path, monkeypatch, path):
     import torch
     from sweepx.tasks._helpers.stage_grid import _resample_to_grid
 
-    E = 3
+    # Two epochs a stage: a model the stage change froze shows from the first
+    # stage-2 step on (calls[E] -> calls[E + 1]), each stage still has a first
+    # and a last loss, and every step of every stage is checked below.
+    E = 2
     extra = {}
     if path == "encoded":
         extra["source_encoding"] = {"enabled": True, "min_coverage": 0, "sign_seed": 7}
@@ -656,9 +687,18 @@ def test_plan_streaming_stage_dh_keeps_inverting(tmp_path, monkeypatch, path):
     assert len(calls) == 2 * E
     assert [tuple(v.shape) for _, v, _ in calls] == [(7, 7, 9)] * E + [_SYN_SHAPE] * E
 
+    # Every step of each stage moves the model. A step that has a next call in
+    # its stage shows there (calls[e - 1] -> calls[e]); a stage's last step shows
+    # in the model saved after it: stage 1's snapshot (on its own grid, before
+    # the switch) and the final model.
     for e in range(1, 2 * E):
-        if e != E:          # every step of each stage moves the model
+        if e != E:
             assert not torch.equal(calls[e][1], calls[e - 1][1]), f"epoch {e}: frozen"
+    s1_final = np.load(result.task_dir / "output" / "epochs" / f"vp_epoch_{E - 1:04d}.npy")
+    final = np.load(result.task_dir / "output" / "inverted_vp.npy")
+    assert s1_final.shape == (7, 7, 9) and final.shape == _SYN_SHAPE
+    assert not np.array_equal(s1_final, calls[E - 1][1].numpy()), "stage 1, last step"
+    assert not np.array_equal(final, calls[-1][1].numpy()), "stage 2, last step"
     if path == "reparam":
         assert len(rec["opts"]) == 1                 # one network, one optimizer
         init = torch.from_numpy(np.load(tmp_path / "init_vp.npy"))
@@ -666,7 +706,6 @@ def test_plan_streaming_stage_dh_keeps_inverting(tmp_path, monkeypatch, path):
     else:
         for e, (t, _, opt) in enumerate(calls):
             assert _holds(opt, t), f"epoch {e}: the optimizer does not hold the model"
-        s1_final = np.load(result.task_dir / "output" / "epochs" / f"vp_epoch_{E - 1:04d}.npy")
         carried = _resample_to_grid(torch.from_numpy(s1_final), 100.0, _SYN_SHAPE, 50.0)
         assert torch.equal(calls[E][1], carried)
     if path != "encoded":   # the encoded misfit changes with every sign draw
@@ -681,7 +720,7 @@ def test_plan_streaming_time_only_stage_keeps_model_and_optimizer(tmp_path, monk
     a fresh leaf in place, resampled from the pristine start model, that the
     optimizer did not hold: the rest of the run was frozen too.
     """
-    E = 3
+    E = 2           # two epochs a stage: stage 2 still steps after its first loss
     spec = _synthetic_stage_spec(tmp_path, [
         {"epochs": E, "bandpass": _BAND_LO},
         {"epochs": E, "dt_s": _SYN_DT / 2, "nt": 2 * _SYN_NT, "bandpass": _BAND_HI}])

@@ -24,14 +24,27 @@ from sweepx.tasks import TaskRunner, load_task
 from test_plan_streaming_schema_guards import _plan_streaming_doc, _validate
 from test_task_fwi_plan_streaming import (
     _SYN_NODES,
+    _SYN_NT,
     _SYN_SHOTS,
     _synthetic_stage_spec,
     _write,
 )
 
 _E = 2
+# Half the stage fixture's record: the node and shot draws checked here never
+# read the time axis, and a test here makes up to 24 solves.
+_NT = _SYN_NT // 2
 _ENCODED = {"enabled": True, "min_coverage": 0, "sign_seed": 7}
 _ALL = {tuple(c) for c in np.rint(_SYN_SHOTS / 50.0).astype(np.int64)}
+
+
+@pytest.fixture(autouse=True)
+def _outside_slurm(monkeypatch):
+    """Run as on a CI runner. Inside a Slurm job every run's metadata dump asks
+    the real ``scontrol`` for the job (best effort, up to 2 x 10 s, seconds on a
+    busy controller); nothing here reads it, and what it records is checked
+    against a fake ``scontrol`` in test_run_meta_archive.py."""
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
 
 
 def _spy_geometry(monkeypatch):
@@ -72,7 +85,7 @@ def test_the_cap_is_the_number_of_shots_per_iteration(tmp_path, monkeypatch, pat
     """5 and 8 of the 12 shared shots, every iteration; the same nodes as with
     no cap, which keeps all 12."""
     extra = {"source_encoding": _ENCODED} if path == "encoded" else {}
-    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}], **extra)
+    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}], nt=_NT, **extra)
     calls = _spy_geometry(monkeypatch)
     seen = {}
     for cap in (5, 8, None):
@@ -91,7 +104,7 @@ def test_the_cap_is_the_number_of_shots_per_iteration(tmp_path, monkeypatch, pat
 def test_the_cap_applies_to_each_crg_node(tmp_path, monkeypatch):
     """per_crg_independent shares no shots: each node's own receivers (one per
     grid cell, here all 12) are capped instead."""
-    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}])
+    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}], nt=_NT)
     spec["obs"]["plan"]["sampling"]["per_crg_independent"] = True
     calls = _spy_geometry(monkeypatch)
     seen = {}
@@ -107,7 +120,7 @@ def test_the_cap_applies_to_each_crg_node(tmp_path, monkeypatch):
 
 def test_a_cap_above_the_shots_drawn_uses_them_all_and_says_so(tmp_path, monkeypatch,
                                                              capsys):
-    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}])
+    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _E}], nt=_NT)
     calls = _spy_geometry(monkeypatch)
     run = _run(tmp_path, spec, "cap50", 50, calls)
     assert [len(_shots(r)) for _, r in run] == [len(_ALL)] * _E
@@ -121,7 +134,7 @@ def test_the_cap_keeps_one_shot_set_across_the_nodes(tmp_path):
     from sweepx.io.seismic_plan import SeismicPlan, sample_shared_shots_from_plan
     from sweepx.tasks.tasks.fwi_plan_streaming import _cap_shared_shots
 
-    spec = _synthetic_stage_spec(tmp_path, [{"epochs": 1}])
+    spec = _synthetic_stage_spec(tmp_path, [{"epochs": 1}], nt=_NT)
     plan = SeismicPlan.load(spec["obs"]["plan"]["plan_path"])
     batch = sample_shared_shots_from_plan(plan, np.random.default_rng(3),
                                           batch_size=len(_SYN_NODES))
