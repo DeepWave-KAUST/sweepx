@@ -553,3 +553,20 @@ def test_init_viking_still_prints_the_pipeline(tmp_path, capsys):
     hint = capsys.readouterr().out
     assert f"sweep-tasks build-index --config {out.resolve()}" in hint
     assert "sweep-tasks run" not in hint
+
+
+def test_eager_options_defaults_are_sweeps():
+    """No eager_options block and an empty one must run the same step: the
+    schema's defaults are sweep's EagerOptions defaults, field by field (the
+    schema used to say use_compile=False while sweep compiled)."""
+    from dataclasses import fields
+
+    from sweep.propagator.options import EagerOptions
+    from sweepx.tasks.schemas import EagerOptionsModel
+
+    sweep_defaults = EagerOptions()
+    model = EagerOptionsModel()
+    mirrored = set(EagerOptionsModel.model_fields)
+    assert mirrored <= {f.name for f in fields(EagerOptions)}
+    for name in mirrored:
+        assert getattr(model, name) == getattr(sweep_defaults, name), name

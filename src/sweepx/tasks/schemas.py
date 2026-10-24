@@ -44,13 +44,18 @@ class _Forbid(BaseModel):
 
 # ----- option mirrors -----------------------------------------------------
 
+# The defaults are sweep's own: a backend block without eager_options and one
+# with an empty eager_options run the same step (compiled, by sweep's default).
+_EAGER_DEFAULTS = EagerOptions()
+
+
 class EagerOptionsModel(_Forbid):
-    use_compile: bool = False
-    compile_mode: str = "default"
-    compile_dynamic: bool = False
-    compile_backend: str | None = None
-    compile_fullgraph: bool = False
-    store_last_wavefield: bool = False
+    use_compile: bool = _EAGER_DEFAULTS.use_compile
+    compile_mode: str = _EAGER_DEFAULTS.compile_mode
+    compile_dynamic: bool = _EAGER_DEFAULTS.compile_dynamic
+    compile_backend: str | None = _EAGER_DEFAULTS.compile_backend
+    compile_fullgraph: bool = _EAGER_DEFAULTS.compile_fullgraph
+    store_last_wavefield: bool = _EAGER_DEFAULTS.store_last_wavefield
 
     def to_dataclass(self) -> EagerOptions:
         return EagerOptions(**self.model_dump())
