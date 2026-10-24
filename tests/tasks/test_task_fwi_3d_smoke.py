@@ -20,6 +20,23 @@ import yaml
 from sweepx.tasks import load_task, TaskRunner
 
 
+def _backend() -> dict:
+    """Uncompiled eager. ``torch.compile`` (Inductor / Triton) would build a
+    fresh step graph for every propagator these runs create -- tens of seconds
+    per test and the bulk of this file's time -- while what is tested here is
+    the runner's 3-D wiring, not the compiler; compiled == uncompiled is
+    pinned by sweep's compiled-stencil tests."""
+    return {"impl": "eager", "use_ckpt": False,
+            "eager_options": {"use_compile": False}}
+
+
+# Absorbing layer of 4 cells (was 8): the padded grid drops from 32x32x40 to
+# 24x24x32 cells, which more than halves every step, while the physical model,
+# the sources and the receivers are unchanged and the misfit curve is the same
+# to within 1 % (0.0605 -> 0.0555 with 8 cells, 0.0600 -> 0.0551 with 4).
+_ABCN = 4
+
+
 def _write(spec_dict, path: Path) -> Path:
     path.write_text(yaml.safe_dump(spec_dict, sort_keys=False))
     return path
@@ -59,19 +76,21 @@ def test_fwi_3d_runs_and_loss_decreases(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 50.0},
-        "time": {"dt": 0.002, "nt": 200},
+        # 0.24 s: the wavelet (peak at 0.1 s) and the direct arrivals at the
+        # near and mid offsets; one Adam step lowers the misfit by ~8 %.
+        "time": {"dt": 0.002, "nt": 120},
         "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.1, "scale": 1.0},
         "geometry": _explicit_3d_geometry(),
         "physics": {
-            "equation": "Acoustic3D", "spatial_order": 4, "abcn": 8,
+            "equation": "Acoustic3D", "spatial_order": 4, "abcn": _ABCN,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        "backend": _backend(),
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 3, "batchsize": 2, "show_every": 1,
+        "epochs": 2, "batchsize": 2, "show_every": 1,
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi3d.yaml")))
     assert result.status.state == "success", result.status.error
@@ -94,22 +113,22 @@ def test_fwi_3d_from_file_geometry(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 50.0},
-        "time": {"dt": 0.002, "nt": 200},
+        "time": {"dt": 0.002, "nt": 100},
         "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.1, "scale": 1.0},
         "geometry": {
             "kind": "from_file",
             "sources_file": str(sf), "receivers_file": str(rf),
         },
         "physics": {
-            "equation": "Acoustic3D", "spatial_order": 4, "abcn": 8,
+            "equation": "Acoustic3D", "spatial_order": 4, "abcn": _ABCN,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        "backend": _backend(),
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 2, "show_every": 1,
+        "epochs": 1, "batchsize": 2, "show_every": 1,
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi3d_ff.yaml")))
     assert result.status.state == "success", result.status.error
@@ -124,19 +143,19 @@ def test_fwi_3d_model_plan_crops(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": dh},
-        "time": {"dt": 0.002, "nt": 200},
+        "time": {"dt": 0.002, "nt": 100},
         "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.1, "scale": 1.0},
         "geometry": _explicit_3d_geometry(),
         "physics": {
-            "equation": "Acoustic3D", "spatial_order": 4, "abcn": 8,
+            "equation": "Acoustic3D", "spatial_order": 4, "abcn": _ABCN,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        "backend": _backend(),
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 2, "show_every": 1,
+        "epochs": 1, "batchsize": 2, "show_every": 1,
         # Crop in y so we keep ~half the volume; sources at y=8 (=400 m) survive.
         "model_plan": {
             "y_window_m": [200.0, (ny - 1) * dh],
@@ -168,21 +187,23 @@ def test_fwi_3d_siren_pipeline_wavelet(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 50.0},
-        "time": {"dt": 0.002, "nt": 200},
+        # 150 steps of 2 ms > the 120 the 1 ms wavelet resamples to: the
+        # zero-pad branch of the length alignment still runs.
+        "time": {"dt": 0.002, "nt": 150},
         "wavelet": {
             "kind": "siren_pipeline_npz", "path": str(wav_path), "scale": 1.0,
         },
         "geometry": _explicit_3d_geometry(),
         "physics": {
-            "equation": "Acoustic3D", "spatial_order": 4, "abcn": 8,
+            "equation": "Acoustic3D", "spatial_order": 4, "abcn": _ABCN,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        "backend": _backend(),
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 2, "show_every": 1,
+        "epochs": 1, "batchsize": 2, "show_every": 1,
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi3d_wav.yaml")))
     assert result.status.state == "success", result.status.error
@@ -207,7 +228,7 @@ def test_fwi_3d_line_geometry_rejected(tmp_path):
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        "backend": _backend(),
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(init_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},

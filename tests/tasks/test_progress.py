@@ -32,6 +32,7 @@ def _write(doc: dict, path: Path) -> Path:
     return path
 
 
+
 # ---------- ProgressLog --------------------------------------------------
 
 
@@ -133,7 +134,9 @@ def _common(tmp_path: Path) -> dict:
         "output_dir": str(tmp_path / "tasks"),
         "device": "cpu",
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 200},
+        # 120 steps: the 15 Hz wavelet (peak at 0.06 s) and its direct arrival
+        # are in every trace, so each epoch has a finite, nonzero loss to log
+        "time": {"dt": 0.001, "nt": 120},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.06, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -143,7 +146,12 @@ def _common(tmp_path: Path) -> dict:
         "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 12,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["h1"]},
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled: sweep's EagerOptions compiles the step by default, and
+        # Inductor builds C++ for every propagator a run makes (seconds each on
+        # a CPU). The log is written around the solver, not by it; the
+        # compiled task path runs in test_task_runner_smoke.py.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
     }
 
 
@@ -275,7 +283,7 @@ def test_freqsel_metrics_match_curves(tmp_path):
     del doc["wavelet"], doc["geometry"]
     doc.update({
         "task_type": "fwi", "task_id": "freqsel_progress",
-        "time": {"dt": 0.001, "nt": 450},
+        "time": {"dt": 0.001, "nt": 350},
         "init_model": {"name": "vp", "shape": list(_SHAPE),
                        "linear_gradient": {"vmin": 2000.0, "vmax": 2500.0}},
         "optimizer": {"kind": "adam", "lr": 10.0},
@@ -284,8 +292,11 @@ def test_freqsel_metrics_match_curves(tmp_path):
                             "frequency": {
                                 "synthesize_from_true": True,
                                 "true_model_path": str(_true_vp(tmp_path)),
+                                # the 10-15 Hz comb of a 200-sample window as
+                                # before, a lead-in as long as the 0.1 s ramp:
+                                # nt = 100 + 50 + 200
                                 "synth_n_nodes": 4, "probe_samples": 200,
-                                "k_lo": 2, "k_hi": 3, "steady_samples": 200,
+                                "k_lo": 2, "k_hi": 3, "steady_samples": 100,
                                 "slack_samples": 50, "ramp_s": 0.1,
                                 "n_pools": 2}},
         "stages": [{"epochs": 1}, {"epochs": 2}],
@@ -318,6 +329,7 @@ def test_plan_streaming_metrics_match_loss_npy(tmp_path):
     doc.update(device="cpu", task_id="plan_progress",
                stages=[{"epochs": 1, "bandpass": {"lo_hz": 2.0, "hi_hz": 8.0}},
                        {"epochs": 2}])
+    doc["backend"]["eager_options"] = {"use_compile": False}   # as in _common
     result = _run(doc, tmp_path, "plan")
     assert result.status.state == "success", result.status.error
     ev = _events(result.task_dir)
@@ -339,7 +351,7 @@ def _forward_doc(tmp_path: Path, task_type: str = "forward") -> dict:
     doc.update({"task_type": task_type, "task_id": task_type,
                 "models": [{"name": "vp", "path": str(_true_vp(tmp_path))}]})
     if task_type == "wavefield":
-        doc.update(snapshot_times=[50, 150], plot=False)
+        doc.update(snapshot_times=[50, 100], plot=False)     # inside nt=120
     return doc
 
 

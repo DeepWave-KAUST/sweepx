@@ -250,22 +250,29 @@ def test_cli_filter_image_smoke(tmp_path: Path):
     assert (tmp_path / "rtm_image_shallow_zlowcut_metadata.json").is_file()
 
 
-def test_cli_filter_image_infers_dh_from_rtm_result(tmp_path: Path):
+def test_cli_filter_image_infers_dh_from_rtm_result(tmp_path: Path, capsys):
+    # In-process ``main(argv)``: the dh fallback is CLI logic, and a fresh
+    # interpreter (~6 s of imports) adds nothing to it -- the subprocess tests
+    # around this one already run ``python -m sweepx.tasks.cli filter-image``
+    # end to end (exit 0 with files written, exit 2 on the missing --dz-m).
+    from sweepx.tasks.cli import main
+
     src = _make_synthetic_npy(tmp_path)
     # Stash a fake rtm_result.npz next to the input with a sentinel dh.
     np.savez_compressed(tmp_path / "rtm_result.npz", dh=np.float32(12.5))
-    cmd = [
-        sys.executable, "-m", "sweepx.tasks.cli", "filter-image",
+    argv = [
+        "filter-image",
         str(src),
         # NOTE: no --dz-m here on purpose.
         "--no-png",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    assert proc.returncode == 0, (
-        f"filter-image CLI failed (rc={proc.returncode})\n"
-        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    returncode = main(argv) or 0          # what ``python -m`` exits with
+    out = capsys.readouterr()
+    assert returncode == 0, (
+        f"filter-image CLI failed (rc={returncode})\n"
+        f"stdout:\n{out.out}\nstderr:\n{out.err}"
     )
-    assert "inferred dz/dx=12.5" in proc.stdout, proc.stdout
+    assert "inferred dz/dx=12.5" in out.out, out.out
     md = json.loads(
         (tmp_path / "rtm_image_shallow_zlowcut_metadata.json").read_text()
     )

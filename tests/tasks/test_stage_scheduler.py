@@ -36,13 +36,18 @@ _GEOM = {"kind": "line",
          "receivers": {"step": 4, "depth": 4, "start": 4, "stop": 44}}
 _BACKEND = {"impl": "eager", "use_ckpt": False,
             "eager_options": {"use_compile": False}}
+# The tests here read the lr of every step and compare runs bit for bit, which
+# needs a nonzero gradient, not a whole wavelet: 60 samples hold the leading
+# lobe of the 10 Hz Ricker (delayed 0.1 s), which reaches the receivers next
+# to each source. The run time is linear in nt.
+_NT = 60
 
 
-def _fwi(tmp_path, scheduler, stages=None, epochs=6, **extra):
+def _fwi(tmp_path, scheduler, stages=None, epochs=6, *, nt=120, **extra):
     _models(tmp_path)
     spec = {
         "task_type": "fwi", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
-        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 120},
+        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": nt},
         "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.1, "scale": 1.0},
         "geometry": _GEOM,
         "physics": {"equation": "Acoustic", "spatial_order": 4, "abcn": 10,
@@ -61,11 +66,11 @@ def _fwi(tmp_path, scheduler, stages=None, epochs=6, **extra):
     return spec
 
 
-def _lsrtm(tmp_path, scheduler, stages=None, epochs=6, **extra):
+def _lsrtm(tmp_path, scheduler, stages=None, epochs=6, *, nt=120, **extra):
     _models(tmp_path)
     spec = {
         "task_type": "lsrtm", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
-        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 120},
+        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": nt},
         "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.1, "scale": 1.0},
         "geometry": _GEOM,
         "physics": {"equation": "AcousticLSRTM", "spatial_order": 4, "abcn": 10,
@@ -121,30 +126,31 @@ def _run(spec, path: Path, monkeypatch=None, stop_after=None):
 _HALVE = {"kind": "step", "step_size": 1, "gamma": 0.5}   # lr(t) = base * 0.5**t
 
 
+# Two epochs per stage: a step inside each stage and one across the boundary.
 @pytest.mark.parametrize("stages, scales", [
     # stage 1 on a coarser grid: a new optimizer at stage 1
-    ([{"epochs": 3}, {"epochs": 3, "dh_m": 20.0}], [1, 1]),
+    ([{"epochs": 2}, {"epochs": 2, "dh_m": 20.0}], [1, 1]),
     # coarse -> native, the usual multiscale ladder: a new optimizer at both entries
-    ([{"epochs": 3, "dh_m": 20.0}, {"epochs": 3, "dh_m": 10.0}], [1, 1]),
+    ([{"epochs": 2, "dh_m": 20.0}, {"epochs": 2, "dh_m": 10.0}], [1, 1]),
     # fixed grid, the same optimizer throughout, stage 1 halves the base lr
-    ([{"epochs": 3}, {"epochs": 3, "lr_scale": 0.5}], [1, 0.5]),
+    ([{"epochs": 2}, {"epochs": 2, "lr_scale": 0.5}], [1, 0.5]),
     # fixed grid, stage 1 drops Adam's moments
-    ([{"epochs": 3}, {"epochs": 3, "optimizer_reset": True}], [1, 1]),
+    ([{"epochs": 2}, {"epochs": 2, "optimizer_reset": True}], [1, 1]),
 ], ids=["grid_change", "coarse_to_fine", "lr_scale", "optimizer_reset"])
 def test_fwi_schedule_spans_stages(tmp_path, stages, scales):
-    _, lrs = _run(_fwi(tmp_path, _HALVE, stages), tmp_path / "fwi.yaml")
-    expected = [8.0 * scales[t // 3] * 0.5 ** t for t in range(6)]
+    _, lrs = _run(_fwi(tmp_path, _HALVE, stages, 4, nt=_NT), tmp_path / "fwi.yaml")
+    expected = [8.0 * scales[t // 2] * 0.5 ** t for t in range(4)]
     assert lrs == expected
 
 
 def test_fwi_cosine_default_anneals_once_over_all_stages(tmp_path):
-    # t_max defaults to all stages' epochs (6): one cosine over the run, on
+    # t_max defaults to all stages' epochs (4): one cosine over the run, on
     # each stage's base lr (8, then 8 * 0.5 on stage 1's new grid).
     sched = {"kind": "cosine", "eta_min": 0.5}
-    stages = [{"epochs": 3}, {"epochs": 3, "dh_m": 20.0, "lr_scale": 0.5}]
-    _, lrs = _run(_fwi(tmp_path, sched, stages), tmp_path / "fwi.yaml")
-    expected = [0.5 + ((8.0 if t < 3 else 4.0) - 0.5) * (1 + math.cos(math.pi * t / 6)) / 2
-                for t in range(6)]
+    stages = [{"epochs": 2}, {"epochs": 2, "dh_m": 20.0, "lr_scale": 0.5}]
+    _, lrs = _run(_fwi(tmp_path, sched, stages, 4, nt=_NT), tmp_path / "fwi.yaml")
+    expected = [0.5 + ((8.0 if t < 2 else 4.0) - 0.5) * (1 + math.cos(math.pi * t / 4)) / 2
+                for t in range(4)]
     assert lrs == pytest.approx(expected, rel=1e-12)
 
 
@@ -152,16 +158,18 @@ _EXP = {"kind": "exp", "gamma": 0.9}
 
 
 @pytest.mark.parametrize("stages, epochs, stop_after, base_at_stop", [
-    # no stages: the resume lands at epoch 6
-    (None, 8, 6, 8.0),
-    # fixed grid: the resume lands inside stage 1 (epochs 3..7, base 8 * 0.5)
-    ([{"epochs": 3}, {"epochs": 5, "lr_scale": 0.5}], 8, 6, 4.0),
-    # stopped on the native grid, continues through stage 1's new grid/optimizer
-    ([{"epochs": 3}, {"epochs": 3, "dh_m": 20.0}], 6, 2, None),
+    # no stages: the resume lands at epoch 4, the first one whose chained lr
+    # (8 x 0.9 x 0.9 ...) is not the closed form
+    (None, 6, 4, 8.0),
+    # fixed grid: the resume lands inside stage 1 (epochs 2..5, base 8 * 0.5)
+    ([{"epochs": 2}, {"epochs": 4, "lr_scale": 0.5}], 6, 4, 4.0),
+    # stopped on the native grid two Adam steps in, continues through stage
+    # 1's new grid/optimizer
+    ([{"epochs": 3}, {"epochs": 2, "dh_m": 20.0}], 5, 2, None),
 ], ids=["single", "fixed_grid", "into_grid_change"])
 def test_fwi_resume_continues_schedule_bit_identically(tmp_path, monkeypatch, stages,
                                                        epochs, stop_after, base_at_stop):
-    cont, lr_cont = _run(_fwi(tmp_path, _EXP, stages, epochs, task_id="cont"),
+    cont, lr_cont = _run(_fwi(tmp_path, _EXP, stages, epochs, task_id="cont", nt=_NT),
                          tmp_path / "cont.yaml")
     if base_at_stop is not None:
         # The chained lr the resume lands on differs from the closed form in
@@ -169,7 +177,7 @@ def test_fwi_resume_continues_schedule_bit_identically(tmp_path, monkeypatch, st
         closed = base_at_stop * _EXP["gamma"] ** stop_after
         assert lr_cont[stop_after] != closed
         assert lr_cont[stop_after] == pytest.approx(closed, rel=1e-12)
-    split = _fwi(tmp_path, _EXP, stages, epochs, task_id="split", resume=True)
+    split = _fwi(tmp_path, _EXP, stages, epochs, task_id="split", resume=True, nt=_NT)
     first, lr_first = _run(split, tmp_path / "split.yaml", monkeypatch, stop_after)
     assert first.status.summary["interrupted"] is True
     second, lr_second = _run(split, tmp_path / "split.yaml")
@@ -183,21 +191,23 @@ def test_fwi_resume_continues_schedule_bit_identically(tmp_path, monkeypatch, st
 
 
 def test_lsrtm_schedule_spans_stages_and_resumes(tmp_path, monkeypatch):
-    stages = [{"epochs": 3}, {"epochs": 3, "lr_scale": 0.5}]
-    _, lr_cont = _run(_lsrtm(tmp_path, _HALVE, stages, task_id="cont"),
+    stages = [{"epochs": 2}, {"epochs": 2, "lr_scale": 0.5}]
+    _, lr_cont = _run(_lsrtm(tmp_path, _HALVE, stages, 4, task_id="cont", nt=_NT),
                       tmp_path / "cont.yaml")
-    assert lr_cont == [0.08 * (1 if t < 3 else 0.5) * 0.5 ** t for t in range(6)]
+    assert lr_cont == [0.08 * (1 if t < 2 else 0.5) * 0.5 ** t for t in range(4)]
 
-    split = _lsrtm(tmp_path, _HALVE, stages, task_id="split", resume=True)
-    _, lr_first = _run(split, tmp_path / "split.yaml", monkeypatch, stop_after=4)
+    # resumes inside stage 1
+    split = _lsrtm(tmp_path, _HALVE, stages, 4, task_id="split", resume=True, nt=_NT)
+    _, lr_first = _run(split, tmp_path / "split.yaml", monkeypatch, stop_after=3)
     _, lr_second = _run(split, tmp_path / "split.yaml")
     assert lr_first + lr_second == lr_cont
 
 
 @pytest.mark.parametrize("sched", [
     {"kind": "exp", "gamma": 0.9},
+    # two decays, at epochs 2 and 4
     {"kind": "step", "step_size": 2, "gamma": 0.7},
-    # t_max < epochs: the chained cosine's restart branch
+    # t_max < epochs: the chained cosine's restart branch (epoch t_max + 1)
     {"kind": "cosine", "eta_min": 0.3, "t_max": 3},
 ], ids=["exp", "step", "cosine_restart"])
 def test_fwi_without_stages_steps_like_a_plain_torch_scheduler(tmp_path, sched):
@@ -205,11 +215,11 @@ def test_fwi_without_stages_steps_like_a_plain_torch_scheduler(tmp_path, sched):
     from sweepx.tasks.runtime.scheduler import build
     from sweepx.tasks.schemas import Scheduler
 
-    _, lrs = _run(_fwi(tmp_path, sched, epochs=7), tmp_path / "fwi.yaml")
+    _, lrs = _run(_fwi(tmp_path, sched, epochs=5, nt=_NT), tmp_path / "fwi.yaml")
     opt = torch.optim.Adam([torch.zeros(1, requires_grad=True)], lr=8.0)
-    plain = build(TypeAdapter(Scheduler).validate_python(sched), opt, 7)
+    plain = build(TypeAdapter(Scheduler).validate_python(sched), opt, 5)
     expected = []
-    for _ in range(7):
+    for _ in range(5):
         expected.append(opt.param_groups[0]["lr"])
         opt.step()
         plain.step()

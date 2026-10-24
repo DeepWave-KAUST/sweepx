@@ -12,11 +12,14 @@ rank 0 saves and a dh_m stage resamples is fresh everywhere.
 
 Every run here is a real torchrun job on CPU (gloo). DD uses
 ``_plan_stream_ranks.FakeModelParallel``, which keeps ModelParallel's gradient
-contract without GPUs.
+contract without GPUs. A test launches its one-rank reference and its
+multi-rank run together: most of each is process start-up (imports, the
+torchrun launch), which then overlaps.
 """
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -35,14 +38,21 @@ from test_task_fwi_plan_streaming import (
 ROOT = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 DRIVER = Path(__file__).resolve().parent / "_plan_stream_ranks.py"
 _E = 2                                            # epochs per stage
+# DDP runs: three steps. The prefetcher draws iteration e+1's shot seed when
+# iteration e starts, so a draw only some ranks make while iteration e runs
+# first changes the shots of iteration e+2: three is the fewest epochs that
+# catches ranks whose generators part during iteration 0 (the shot-cap cases).
+# Steps 1 and 2 also solve and log from a model every rank stepped, where an
+# empty rank's stray gradient shows.
+_DDP_EPOCHS = 3
 _ENCODED = {"enabled": True, "min_coverage": 0, "sign_seed": 7}
 _INR = {"kind": "velocity_inr", "hidden_features": 16, "hidden_layers": 2,
         "hash": {"enabled": False}, "lr": 1.0e-3, "vp_std": 100.0}
 
 
-def _run(tmp_path, tag, spec, nproc, dd=False, gpu=False):
-    """Run ``spec`` on ``nproc`` ranks (CPU and gloo, or a GPU each and NCCL);
-    return the per-rank npz + rank 0's dumps."""
+def _start(tmp_path, tag, spec, nproc, dd=False, gpu=False):
+    """Launch ``spec`` on ``nproc`` ranks (CPU and gloo, or a GPU each and
+    NCCL), its stdout / stderr to ``<tag>.stdout`` / ``<tag>.stderr``."""
     spec = dict(spec, task_id=tag)
     path = tmp_path / f"{tag}.yaml"
     path.write_text(yaml.safe_dump(spec, sort_keys=False))
@@ -64,8 +74,19 @@ def _run(tmp_path, tag, spec, nproc, dd=False, gpu=False):
                     "--standalone"]
     if dd:
         cmd.append("--fake-dd")
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
-    assert proc.returncode == 0, f"{tag}\n{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
+    with open(tmp_path / f"{tag}.stdout", "w") as so, \
+            open(tmp_path / f"{tag}.stderr", "w") as se:
+        # its own process group, so a run left behind can be killed with its ranks
+        proc = subprocess.Popen(cmd, env=env, stdout=so, stderr=se,
+                                start_new_session=True)
+    return tag, proc, out, nproc
+
+
+def _finish(tmp_path, tag, proc, out, nproc):
+    """Wait for a :func:`_start` ed run; return the per-rank npz + rank 0's dumps."""
+    rc = proc.wait(timeout=900)
+    log = {s: (tmp_path / f"{tag}.{s}").read_text()[-4000:] for s in ("stdout", "stderr")}
+    assert rc == 0, f"{tag}\n{log['stdout']}\n{log['stderr']}"
     ranks = [dict(np.load(out / f"rank{r}.npz")) for r in range(nproc)]
     assert all(str(ROOT / "src") in str(r["tree"]) for r in ranks), ranks[0]["tree"]
     task = Path(str(ranks[0]["task_dir"]))
@@ -77,6 +98,32 @@ def _run(tmp_path, tag, spec, nproc, dd=False, gpu=False):
         dump = out / f"{name}.npy"
         ranks[0][name] = np.load(dump) if dump.exists() else None
     return ranks
+
+
+def _run_together(tmp_path, spec, *runs, gpu=False):
+    """Run ``spec`` once per ``(tag, nproc, dd)`` in ``runs``, all launched at
+    once; return each run's :func:`_finish`. The runs share only read-only
+    inputs (plan, SEG-Y, initial model) and each writes its own directories, so
+    running side by side changes nothing they compute."""
+    started = []
+    try:
+        for tag, nproc, dd in runs:
+            started.append(_start(tmp_path, tag, spec, nproc, dd=dd, gpu=gpu))
+        return [_finish(tmp_path, *s) for s in started]
+    finally:                                     # one failed: stop the others
+        for _, proc, _, _ in started:
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+
+
+def _run(tmp_path, tag, spec, nproc, dd=False, gpu=False):
+    """Run ``spec`` on ``nproc`` ranks (CPU and gloo, or a GPU each and NCCL);
+    return the per-rank npz + rank 0's dumps."""
+    return _run_together(tmp_path, spec, (tag, nproc, dd), gpu=gpu)[0]
 
 
 def _rel(a, b):
@@ -108,13 +155,13 @@ def test_ddp_gives_the_one_rank_gradient_and_loss(tmp_path, case):
     extra = dict(extra)
     per_crg = extra.pop("per_crg", False)
     cap = extra.pop("cap", len(_SYN_SHOTS))
-    spec = _synthetic_stage_spec(tmp_path, [{"epochs": 2 * _E}], **extra)
+    spec = _synthetic_stage_spec(tmp_path, [{"epochs": _DDP_EPOCHS}], **extra)
     spec["optimizer"] = {"kind": "sgd", "lr": 3.0e6, "momentum": 0.0}
     spec["obs"]["plan"]["sampling"]["shared_shots_per_iter"] = cap
     if per_crg:
         spec["obs"]["plan"]["sampling"]["per_crg_independent"] = True
-    one = _run(tmp_path, "one", spec, 1)[0]
-    ranks = _run(tmp_path, "many", spec, nproc)
+    (one,), ranks = _run_together(tmp_path, spec, ("one", 1, False),
+                                  ("many", nproc, False))
     for r in ranks[1:]:                         # every rank steps the same model
         np.testing.assert_array_equal(r["model"], ranks[0]["model"])
     many = ranks[0]
@@ -143,9 +190,8 @@ def test_dd_ranks_step_the_whole_model(tmp_path, reparam):
     # DD grids are the one-rank grids (no edge pad).
     spec = _synthetic_stage_spec(tmp_path, stages, shape=(12, 12, 18), **extra)
     spec["show_every"] = 1
-    one = _run(tmp_path, "one", spec, 1)
-    tiles = _run(tmp_path, "tiles", spec, 2, dd=True)
-    one, r0, r1 = one[0], tiles[0], tiles[1]
+    (one,), (r0, r1) = _run_together(tmp_path, spec, ("one", 1, False),
+                                     ("tiles", 2, True))
     init = np.load(tmp_path / "init_vp.npy")
     np.testing.assert_array_equal(r0["model"], r1["model"])
     if reparam:

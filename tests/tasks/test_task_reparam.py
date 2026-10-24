@@ -31,7 +31,9 @@ def _base_fwi_spec(tmp_path, init_path, true_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 300},
+        # 0.15 s: the 15 Hz wavelet (peak at 0.08 s) and the direct
+        # arrivals at the near and mid offsets are in the window.
+        "time": {"dt": 0.001, "nt": 150},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -43,7 +45,11 @@ def _base_fwi_spec(tmp_path, init_path, true_path):
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled eager: Inductor would compile a new step graph per
+        # propagator, which costs far more than these small runs; what is
+        # tested here does not depend on it.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "model_bounds": {"vp": {"min": 1500.0, "max": 4500.0}},
@@ -55,7 +61,7 @@ def test_fwi_reparam_runs_single_stage(tmp_path):
     spec = _base_fwi_spec(tmp_path, init_path, true_path)
     spec.update({
         "optimizer": {"kind": "adam", "lr": 25.0, "eps": 1.0e-22},  # ignored
-        "epochs": 3, "batchsize": 3, "show_every": 1,
+        "epochs": 2, "batchsize": 3, "show_every": 1,
         "task_id": "fwi_reparam_single",
         "reparam": {
             "kind": "velocity_inr",
@@ -88,7 +94,7 @@ def test_fwi_reparam_no_hash(tmp_path):
     spec = _base_fwi_spec(tmp_path, init_path, true_path)
     spec.update({
         "optimizer": {"kind": "adam", "lr": 25.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 3, "show_every": 1,
+        "epochs": 1, "batchsize": 3, "show_every": 1,
         "task_id": "fwi_reparam_no_hash",
         "reparam": {
             "kind": "velocity_inr",

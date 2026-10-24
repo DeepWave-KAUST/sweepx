@@ -13,7 +13,9 @@ default stops the run the same way.
 
 The refusals emulate DD in this process through the environment, as the rank
 tests do; the run that has to work under DD is a real two-rank job on CPU with
-``_plan_stream_ranks.FakeModelParallel``.
+``_plan_stream_ranks.FakeModelParallel``. The runs that check a setting goes
+through without DD use the eager step uncompiled: what they check is the
+guard around the loop, not the compiled stencil.
 """
 from __future__ import annotations
 
@@ -33,6 +35,14 @@ from test_task_fwi_plan_streaming import (
 _SKIPPED = ["illumination_precondition", "smooth_regularization"]
 
 
+
+def _uncompiled(spec):
+    """``spec`` with the eager step uncompiled (sweep's EagerOptions compiles
+    by default: Inductor builds C++ on a CPU, seconds per propagator)."""
+    spec["backend"]["eager_options"] = {"use_compile": False}
+    return spec
+
+
 def _asking(key, tmp_path):
     """A setting of ``key`` that asks for the feature."""
     if key == "illumination_precondition":
@@ -50,8 +60,8 @@ def test_dd_refuses_what_its_loop_skips(tmp_path, monkeypatch, key):
     monkeypatch.setattr(SeismicPlan, "load", classmethod(
         lambda cls, path: loaded.append(path) or load(cls, path)))
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(tmp_path, fixture, epochs=1,
-                                      extra={key: _asking(key, tmp_path)})
+    spec = _uncompiled(_build_plan_streaming_spec(
+        tmp_path, fixture, epochs=1, extra={key: _asking(key, tmp_path)}))
     path = _write(spec, tmp_path / f"{key}.yaml")
 
     for var, val in (("SWEEP_DD_ENABLE", "1"), ("SWEEP_DD_PY", "1"),
@@ -114,8 +124,8 @@ def test_dd_refuses_reparam_backward_options_it_never_reads(tmp_path, monkeypatc
     monkeypatch.setattr(SeismicPlan, "load", classmethod(
         lambda cls, path: loaded.append(path) or load(cls, path)))
     fixture = _build_tiny_plan_streaming_fixture(tmp_path)
-    spec = _build_plan_streaming_spec(
-        tmp_path, fixture, epochs=1, extra={"reparam": dict(_TINY_INR, **_UNREAD[named])})
+    spec = _uncompiled(_build_plan_streaming_spec(
+        tmp_path, fixture, epochs=1, extra={"reparam": dict(_TINY_INR, **_UNREAD[named])}))
     path = _write(spec, tmp_path / "unread.yaml")
 
     for var, val in (("SWEEP_DD_ENABLE", "1"), ("SWEEP_DD_PY", "1"),

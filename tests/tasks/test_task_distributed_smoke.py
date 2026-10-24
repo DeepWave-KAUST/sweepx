@@ -24,6 +24,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 
 
+def _launch_env(env: dict) -> None:
+    """One OpenMP thread per rank, torchrun's own default when the variable is
+    unset: an inherited OMP_NUM_THREADS sized for the whole allocation gives
+    each of the two ranks that many threads on the same cores."""
+    env["OMP_NUM_THREADS"] = "1"
+
+
 def _write_tiny_models(tmp_path: Path) -> tuple[Path, Path]:
     shape = (32, 32)
     true_vp = (2200 + 600 * np.linspace(0, 1, shape[0])[:, None] * np.ones(shape)).astype(np.float32)
@@ -58,7 +65,12 @@ def _write_dist_yaml(tmp_path: Path, true_path: Path, init_path: Path) -> Path:
             "source_type": ["h1"],
             "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # uncompiled step: each rank compiling it with torch.compile (Inductor
+        # building C++ on CPU) was most of the run; the shot split, the
+        # gradient all-reduce and the rank-0 bookkeeping this test is about all
+        # happen outside the step
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
@@ -84,6 +96,7 @@ def test_torchrun_two_ranks_gloo_fwi(tmp_path):
     env["SWEEP_DIST_BACKEND"] = "gloo"
     # Force CPU even when CUDA is present, so we can run 2 ranks on a single GPU host.
     env["CUDA_VISIBLE_DEVICES"] = ""
+    _launch_env(env)
 
     cmd = [
         "torchrun",
@@ -124,6 +137,7 @@ def test_torchrun_blocks_lbfgs(tmp_path):
     env["PYTHONPATH"] = (extra + os.pathsep + env["PYTHONPATH"]) if env.get("PYTHONPATH") else extra
     env["SWEEP_DIST_BACKEND"] = "gloo"
     env["CUDA_VISIBLE_DEVICES"] = ""
+    _launch_env(env)
 
     cmd = [
         "torchrun",

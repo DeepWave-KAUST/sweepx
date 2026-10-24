@@ -19,6 +19,14 @@ from sweepx.tasks import TaskRunner, load_task
 from sweepx.tasks._helpers import metadata as M
 
 
+def _outside_slurm(monkeypatch):
+    """Run as on a CI runner. Inside a Slurm job the dump asks the real
+    ``scontrol`` for the job (best effort, up to 2 x 10 s, often ~10 s on a busy
+    controller); the run tests below do not read it, and what it records is
+    checked against a fake ``scontrol`` in test_the_slurm_job_and_its_batch_script."""
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+
 def test_labels_and_the_environment_of_interest():
     env = {"SWEEP_LABEL_LINE": "exp_line_a", "SWEEP_LABEL_PROJECT": "demo_project",
            "SWEEP_LABEL_": "nameless", "SWEEP_DD_ENABLE": "1", "PYTHONPATH": "/a:/b", "HOME": "/h",
@@ -142,6 +150,7 @@ def test_a_run_keeps_its_source_logs_labels_and_manifest(tmp_path, monkeypatch):
 
     monkeypatch.setattr(TaskRunner, "_run_introspect", fake_introspect)
     monkeypatch.setenv("SWEEP_LABEL_LINE", "demo_line")
+    _outside_slurm(monkeypatch)
     task_yaml = tmp_path / "t.yaml"
     text = "# the demo task (this comment is kept)\n" + yaml.safe_dump(
         {"task_type": "introspect", "action": "list_equations", "output_dir": str(tmp_path / "tasks"),
@@ -174,6 +183,7 @@ def test_run_logs_can_be_turned_off(tmp_path, monkeypatch):
     monkeypatch.setattr(TaskRunner, "_run_introspect",
                         lambda self, spec, task_dir: (print("quiet") or [], {}))
     monkeypatch.setenv("SWEEP_RUN_LOG", "0")
+    _outside_slurm(monkeypatch)
     task_yaml = tmp_path / "t.yaml"
     task_yaml.write_text(yaml.safe_dump({"task_type": "introspect", "action": "list_equations",
                                          "output_dir": str(tmp_path / "tasks")}))

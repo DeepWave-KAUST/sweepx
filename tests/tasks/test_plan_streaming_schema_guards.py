@@ -6,6 +6,7 @@ what config_resolved.yaml spells out for every key a run did not set -- has
 to keep loading, and the check stays off every other path.
 """
 import copy
+import json
 import re
 
 import pytest
@@ -36,12 +37,24 @@ def _plan_streaming_doc(**extra):
     return doc
 
 
+
+_RESOLVED_TEXT: dict[str, str] = {}
+
+
 def _resolved(tmp_path, **extra):
-    """config_resolved.yaml of a plan-streaming run, as a dict."""
+    """config_resolved.yaml of a plan-streaming run, as a fresh dict.
+
+    The file depends on ``extra`` alone, but the dump that writes it also records
+    the code that ran (git calls, seconds on a network file system), so each
+    distinct ``extra`` is dumped once and its text kept; every call parses its
+    own dict, free to change."""
     from sweepx.tasks._helpers.metadata import _dump_run_metadata
 
-    _dump_run_metadata(_validate(_plan_streaming_doc(**extra)), tmp_path)
-    return yaml.safe_load((tmp_path / "config_resolved.yaml").read_text())
+    key = json.dumps(extra, sort_keys=True)
+    if key not in _RESOLVED_TEXT:
+        _dump_run_metadata(_validate(_plan_streaming_doc(**extra)), tmp_path)
+        _RESOLVED_TEXT[key] = (tmp_path / "config_resolved.yaml").read_text()
+    return yaml.safe_load(_RESOLVED_TEXT[key])
 
 
 # (key, a value the path would ignore, values that ask for nothing: the

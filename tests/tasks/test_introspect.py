@@ -369,6 +369,10 @@ def test_geometry_equals_what_a_forward_run_writes(tmp_path):
     raw = _forward_template(tmp_path, shape=(30, 120))
     raw["time"] = {"dt": 0.002, "nt": 60}
     raw["device"] = "cpu"
+    # Uncompiled: torch.compile of the step (Inductor building C++ on CPU) is
+    # most of this run's cost, and the geometry the runner writes does not
+    # depend on it.
+    raw["backend"] = {**raw["backend"], "eager_options": {"use_compile": False}}
     spec = load_task_from_dict(raw, base_dir=tmp_path)
     result = TaskRunner().run(spec)
     assert result.status.state == "success", result.status.error

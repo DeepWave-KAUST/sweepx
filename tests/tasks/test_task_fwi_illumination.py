@@ -40,7 +40,9 @@ def _baseline_fwi_spec(tmp_path: Path) -> dict:
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 250},
+        # 0.125 s: the 12 Hz wavelet (peak at 0.08 s) and the near-offset
+        # direct arrivals are in the window.
+        "time": {"dt": 0.001, "nt": 125},
         "wavelet": {"kind": "ricker", "fm": 12.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -52,7 +54,11 @@ def _baseline_fwi_spec(tmp_path: Path) -> dict:
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled eager: Inductor would compile a new step graph per
+        # propagator, which costs far more than these small runs; what is
+        # tested here does not depend on it.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
@@ -62,6 +68,7 @@ def _baseline_fwi_spec(tmp_path: Path) -> dict:
 
 def test_illumination_precondition_grid_mode_runs(tmp_path):
     spec_dict = _baseline_fwi_spec(tmp_path)
+    spec_dict["epochs"] = 1   # the precondition runs in every train step
     spec_dict["illumination_precondition"] = {
         "enabled": True, "epsilon": 1.0e-6, "exponent": 0.5,
     }
@@ -71,6 +78,7 @@ def test_illumination_precondition_grid_mode_runs(tmp_path):
 
 def test_illumination_precondition_reparam_two_pass_runs(tmp_path):
     spec_dict = _baseline_fwi_spec(tmp_path)
+    spec_dict["epochs"] = 1   # the precondition runs in every train step
     spec_dict["illumination_precondition"] = {
         "enabled": True, "epsilon": 1.0e-6, "exponent": 0.5,
     }

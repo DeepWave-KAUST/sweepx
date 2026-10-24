@@ -19,6 +19,11 @@ def _ricker(t, t0, fc=15.0):
     return (1.0 - 2.0 * x) * np.exp(-x)
 
 
+def _mute(x, t, t0, half_width):
+    """Set the samples more than ``half_width`` from ``t0`` to exactly 0."""
+    return np.where(np.abs(t - t0) <= half_width, x, 0.0)
+
+
 def test_debiased_zero_for_identical():
     nt, dt = 128, 1e-3
     t = np.arange(nt) * dt
@@ -73,11 +78,23 @@ def test_grows_with_shift():
 def test_sinkhorn_approaches_w2_squared_for_small_epsilon():
     """As epsilon -> 0, the debiased Sinkhorn divergence with cost
     C(t,t') = (t - t')^2 approaches the 2-Wasserstein W2^2."""
-    nt, dt = 512, 5e-4
+    # Same pulses, dt and epsilon as a 512-sample trace with the pulses at
+    # 0.13 s / 0.16 s, cut to the samples that carry mass: the cost depends
+    # only on t - t', and the squared pulses are < e^-36 of their peak
+    # 0.03 s from their centres, so the divergence agrees with the 512-sample
+    # one to round-off (2e-16 relative) at 1/7 of the O(nt^2) cost.
+    # The exact zeros are deliberate: each pulse is muted more than 0.045 s
+    # (9 sigma) from its centre, like a muted or zero-padded trace, so the
+    # solver's log(0) guard is exercised (in the 512-sample trace, 48 samples
+    # underflowed to 0). The muted samples hold < 1e-36 of the mass, below the
+    # solver's 1e-30 floor, so the value does not change.
+    nt, dt = 192, 5e-4
     t = np.arange(nt) * dt
     shift = 0.030
-    obs = torch.tensor(_gaussian(t, 0.13, 0.005)).view(1, nt, 1, 1).double()
-    syn = torch.tensor(_gaussian(t, 0.13 + shift, 0.005)).view(1, nt, 1, 1).double()
+    obs = _mute(_gaussian(t, 0.03, 0.005), t, 0.03, 0.045)
+    syn = _mute(_gaussian(t, 0.03 + shift, 0.005), t, 0.03 + shift, 0.045)
+    obs = torch.tensor(obs).view(1, nt, 1, 1).double()
+    syn = torch.tensor(syn).view(1, nt, 1, 1).double()
     # for a translated Gaussian, W2^2 = shift^2 exactly
     expected = shift ** 2
     eps_small = (2 * dt) ** 2
@@ -90,14 +107,26 @@ def test_sinkhorn_approaches_w2_squared_for_small_epsilon():
 
 
 def test_sinkhorn_monotone_across_l2_cycle_skipping():
-    nt, dt = 1024, 1e-3
+    # The 15 Hz Ricker pulses of a 1024-sample trace (pulse at 0.5 s), cut to
+    # 0.1 s either side of the pulses (squared Ricker < 1e-16 of its peak
+    # there): same dt, epsilon and shifts, and since the cost depends only on
+    # t - t', the L2 and Sinkhorn values agree with the 1024-sample ones to
+    # round-off (3e-15 relative) at 1/13 of the O(nt^2) cost.
+    # The exact zeros are deliberate: each pulse is muted more than 0.15 s
+    # from its centre, like a muted or zero-padded trace, so the solver's
+    # log(0) guard is exercised (in the 1024-sample traces, 199 samples
+    # underflowed to 0). The observed trace has 37 zeros, so every solve sees
+    # them. The muted samples hold < 1e-40 of the mass, below the solver's
+    # 1e-30 floor, so the values do not change.
+    nt, dt = 288, 1e-3
     t = np.arange(nt) * dt
-    o = torch.tensor(_ricker(t, 0.5)).view(1, nt, 1, 1).double()
+    o = torch.tensor(_mute(_ricker(t, 0.1), t, 0.1, 0.15)).view(1, nt, 1, 1).double()
     eps = (8 * dt) ** 2
     shifts = [0.0, 0.020, 0.030, 0.040, 0.060, 0.080]
     l2_vals, s_vals = [], []
     for ms in shifts:
-        s = torch.tensor(_ricker(t, 0.5 + ms)).view(1, nt, 1, 1).double()
+        s = _mute(_ricker(t, 0.1 + ms), t, 0.1 + ms, 0.15)
+        s = torch.tensor(s).view(1, nt, 1, 1).double()
         l2_vals.append(float(L2Loss(reduction="sum")(s, o)))
         s_vals.append(float(SinkhornLoss(
             epsilon=eps, n_iter=80, positive="square", dt=dt,
