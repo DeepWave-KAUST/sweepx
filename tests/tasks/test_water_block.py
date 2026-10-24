@@ -30,6 +30,15 @@ def _write(spec: dict, path: Path) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _outside_slurm(monkeypatch):
+    """Run as on a CI runner. Inside a Slurm job every run's metadata dump asks
+    the real ``scontrol`` for the job (best effort, up to 2 x 10 s, seconds on a
+    busy controller); nothing here reads it, and what it records is checked
+    against a fake ``scontrol`` in test_run_meta_archive.py."""
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+
 # ------------------------------------------------------------- schema ----
 
 def _fwi_doc(**extra):
@@ -348,9 +357,12 @@ def _models(tmp_path, shape=(36, 48), water_rows=6, v_water=1500.0):
 
 def _conv_spec(tmp_path, **extra):
     true_p, init_p = _models(tmp_path)
+    # 150 steps: the 12 Hz wavelet (peak at 0.08 s) and its reflection off
+    # the seabed reach the receivers, so the water and the rock below it both
+    # get a gradient (one free step moves every water cell)
     spec = {
         "task_type": "fwi", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
-        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 220},
+        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 150},
         "wavelet": {"kind": "ricker", "fm": 12.0, "delay": 0.08, "scale": 1.0},
         "geometry": {"kind": "line",
                      "sources": {"step": 10, "depth": 2, "start": 4, "stop": 45},
@@ -429,7 +441,9 @@ def test_conventional_pin_holds_the_layer_on_every_stage(tmp_path, monkeypatch, 
 
 def test_conventional_reset_restarts_the_water_each_stage(tmp_path, monkeypatch):
     seen = _spy_train_steps(monkeypatch)
-    spec = _conv_spec(tmp_path, stages=[{"epochs": 2}, {"epochs": 2}])
+    # stage 0: entry + one step inside it; stage 1: entry, then the final model
+    # after its one step is the "free within the stage" check
+    spec = _conv_spec(tmp_path, stages=[{"epochs": 2}, {"epochs": 1}])
     spec["water"] = {"seabed": 55.0, "mode": "reset_each_stage"}
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "reset.yaml")))
     assert res.status.state == "success", res.status.error
@@ -454,7 +468,8 @@ def test_conventional_reparam_pin_and_reset(tmp_path, monkeypatch):
     assert np.all(inv[wet] == 1490.0)
 
     seen = _spy_train_steps(monkeypatch)
-    spec = _conv_spec(tmp_path / "r", reparam=rp, stages=[{"epochs": 2}, {"epochs": 2}])
+    # entries seen[0] and seen[2], then the final model after stage 1's step
+    spec = _conv_spec(tmp_path / "r", reparam=rp, stages=[{"epochs": 2}, {"epochs": 1}])
     spec["water"] = {"seabed": 55.0, "mode": "reset_each_stage"}
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "rreset.yaml")))
     assert res.status.state == "success", res.status.error
@@ -473,7 +488,8 @@ def test_conventional_model_plan_crops_the_water(tmp_path, monkeypatch):
     mask[:3, 20:] = True
     np.save(tmp_path / "w.npy", mask)
     spec = _conv_spec(tmp_path, model_plan={"x_window_m": [100.0, 400.0],
-                                            "drop_outside_sources": True})
+                                            "drop_outside_sources": True},
+                      epochs=1)                        # seen[0] is what is checked
     spec["water"] = {"mask": str(tmp_path / "w.npy")}
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "crop.yaml")))
     assert res.status.state == "success", res.status.error
@@ -488,7 +504,7 @@ def test_lsrtm_holds_the_water_reflectivity_at_zero(tmp_path):
     true_p, init_p = _models(tmp_path)
     spec = {
         "task_type": "lsrtm", "output_dir": str(tmp_path / "tasks"), "device": "cpu",
-        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 220},
+        "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 150},
         "wavelet": {"kind": "ricker", "fm": 12.0, "delay": 0.08, "scale": 1.0},
         "geometry": {"kind": "line",
                      "sources": {"step": 10, "depth": 2, "start": 4, "stop": 45},
@@ -496,11 +512,14 @@ def test_lsrtm_holds_the_water_reflectivity_at_zero(tmp_path):
         "physics": {"equation": "AcousticLSRTM", "spatial_order": 4, "abcn": 10,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["sh1"]},
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # uncompiled like the FWI specs above: Inductor would build C++ for
+        # both LSRTM propagators; the water held at zero is not in the step
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "background_model": {"name": "vp", "path": str(init_p)},
         "true_model": {"name": "vp", "path": str(true_p)},
         "optimizer": {"kind": "adam", "lr": 1.0e-2},
-        "epochs": 3, "batchsize": 2, "show_every": 10,
+        "epochs": 2, "batchsize": 2, "show_every": 10,      # held over a 2nd step
         "water": {"seabed": 55.0},
     }
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "lsrtm.yaml")))
@@ -518,7 +537,7 @@ def _freqsel_spec(tmp_path, *, water, reparam=None, stages=None):
     spec = {
         "task_type": "fwi", "output_dir": str(tmp_path / "tasks"),
         "task_id": "fs", "device": "cpu",
-        "grid": {"dh": 10.0}, "time": {"dt": 0.002, "nt": 700},
+        "grid": {"dh": 10.0}, "time": {"dt": 0.002, "nt": 300},
         "physics": {"equation": "Acoustic", "spatial_order": 4, "abcn": 12,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["h1"]},
@@ -531,8 +550,11 @@ def _freqsel_spec(tmp_path, *, water, reparam=None, stages=None):
                                 "true_model_path": str(true_p),
                                 "synth_n_nodes": 3, "synth_rec_stride": 3,
                                 "synth_node_z": 2, "probe_samples": 200,
-                                "k_lo": 2, "k_hi": 4, "steady_samples": 450,
-                                "slack_samples": 50, "ramp_s": 0.3,
+                                # the comb (2.5 Hz bins of the 200-sample
+                                # window) as before, a lead-in as long as
+                                # the ramp: nt = 50 + 50 + 200
+                                "k_lo": 2, "k_hi": 4, "steady_samples": 50,
+                                "slack_samples": 50, "ramp_s": 0.1,
                                 "n_pools": 1}},
         "optimizer": {"kind": "adam", "lr": 20.0},
         "epochs": 2, "batchsize": 1, "show_every": 100,
@@ -557,6 +579,7 @@ def test_freqsel_refuses_unsaid_water_on_a_model_it_used_to_pin(tmp_path):
 
 def test_freqsel_water_false_inverts_the_old_pinned_cells(tmp_path):
     spec = _freqsel_spec(tmp_path, water=False)
+    spec["epochs"] = 1                       # one free step moves the cells
     res = TaskRunner().run(load_task(_write(spec, tmp_path / "free.yaml")))
     assert res.status.state == "success", res.status.error
     inv = np.load(Path(spec["output_dir"]) / "fs" / "inverted_vp.npy")

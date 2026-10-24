@@ -3,6 +3,14 @@
 These tests are tuned to run in a few seconds on CPU or GPU. They confirm
 that the runner can construct a propagator and execute the dispatch path
 without crashing; they do not check numerical accuracy.
+
+Cost note: the eager backend ``torch.compile``s its time step again for every
+new padded grid, shot batch size, grad mode, equation and dh, and those
+compiles, not the time stepping, are most of what this file costs (seconds
+each on a cold cache, CPU or GPU). So the tests share one setup wherever what
+they check allows it: a 48x48 model at dh=10 m with ``abcn=12``, dt=1 ms and
+shot batches of 1, 3 or 6 (``batchsize=3`` over 6 shots). A test that needs
+another grid (model_plan crop, per-stage dh) still gets its own.
 """
 
 from pathlib import Path
@@ -102,7 +110,7 @@ def test_fwi_runs_and_loss_decreases(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 300},
+        "time": {"dt": 0.001, "nt": 200},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -131,7 +139,7 @@ def test_lsrtm_runs(tmp_path):
         "task_type": "lsrtm",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 300},
+        "time": {"dt": 0.001, "nt": 200},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -181,7 +189,9 @@ def test_forward_with_explicit_geometry(tmp_path):
 
 
 def test_forward_with_from_file_geometry(tmp_path):
-    sources = np.array([[12, 4], [28, 4]], dtype=np.int64)
+    # 3 shots: the same shot batch as the explicit-geometry test and the FWI
+    # obs batches, so no extra compiled step for a 2-shot batch.
+    sources = np.array([[12, 4], [28, 4], [36, 4]], dtype=np.int64)
     receivers = np.array([[6, 6], [16, 6], [26, 6], [36, 6]], dtype=np.int64)
     sf = tmp_path / "src.npy"
     rf = tmp_path / "rec.npy"
@@ -195,7 +205,7 @@ def test_forward_with_from_file_geometry(tmp_path):
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fromfile.yaml")))
     assert result.status.state == "success", result.status.error
-    assert result.status.summary["nshots"] == 2
+    assert result.status.summary["nshots"] == 3
     assert result.status.summary["nreceivers"] == 4
 
 
@@ -229,7 +239,7 @@ def test_fwi_with_modeling_override_wavelet(tmp_path):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 300},
+        "time": {"dt": 0.001, "nt": 200},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -245,7 +255,9 @@ def test_fwi_with_modeling_override_wavelet(tmp_path):
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 3, "show_every": 1,
+        # One epoch: the override only changes how obs is modelled, which
+        # happens once before the first step.
+        "epochs": 1, "batchsize": 3, "show_every": 1,
         "modeling_override": {
             "wavelet": {"kind": "ricker", "fm": 8.0, "delay": 0.1, "scale": 1.0},
         },
@@ -286,7 +298,8 @@ def _fwi_smoke_spec(tmp_path: Path, **overrides) -> dict:
 
 @pytest.mark.parametrize("loss_kind", ["mse", "l1", "huber"])
 def test_fwi_loss_kinds_run(tmp_path, loss_kind):
-    spec_dict = _fwi_smoke_spec(tmp_path, loss={"kind": loss_kind})
+    # One epoch runs the misfit forward, its backward and an optimizer step.
+    spec_dict = _fwi_smoke_spec(tmp_path, loss={"kind": loss_kind}, epochs=1)
     if loss_kind == "huber":
         spec_dict["loss"]["huber_delta"] = 0.5
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / f"l_{loss_kind}.yaml")))
@@ -353,19 +366,32 @@ def test_fwi_optimizer_variants_run(tmp_path, opt_kind):
     {"kind": "cosine", "eta_min": 0.0},
 ])
 def test_fwi_scheduler_runs(tmp_path, scheduler):
-    spec_dict = _fwi_smoke_spec(tmp_path, scheduler=scheduler, epochs=3)
+    # Two epochs: the scheduler steps after each, so the second epoch already
+    # runs at a scheduled (non-initial) learning rate.
+    spec_dict = _fwi_smoke_spec(tmp_path, scheduler=scheduler, epochs=2)
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "sched.yaml")))
     assert result.status.state == "success", result.status.error
 
 
 def test_fwi_train_shot_batchsize_accumulation(tmp_path):
-    spec_dict = _fwi_smoke_spec(tmp_path, batchsize=4, train_shot_batchsize=2, epochs=2)
+    # 7 shots, batchsize 6 in chunks of 3: every step accumulates the
+    # gradient over two chunks, and the obs is modelled in batchsize chunks
+    # with a short last one (6 + 1). Batches of 6, 3 and 1 shots are the ones
+    # the other tests compile anyway.
+    geometry = {
+        "kind": "line",
+        "sources": {"step": 6, "depth": 2, "start": 3, "stop": 45},   # 7 shots
+        "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44},
+    }
+    spec_dict = _fwi_smoke_spec(tmp_path, geometry=geometry, batchsize=6,
+                                train_shot_batchsize=3, epochs=2)
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "accum.yaml")))
     assert result.status.state == "success", result.status.error
 
 
 def test_fwi_save_illumination_produces_artifacts(tmp_path):
-    spec_dict = _fwi_smoke_spec(tmp_path, save_illumination=True, show_every=1, epochs=2)
+    # One epoch: with show_every=1 epoch 0 already writes its snapshots.
+    spec_dict = _fwi_smoke_spec(tmp_path, save_illumination=True, show_every=1, epochs=1)
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "illum.yaml")))
     assert result.status.state == "success", result.status.error
     illum_files = list((result.task_dir / "output" / "epochs").glob("*illumination*.npy"))
@@ -451,7 +477,9 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_fwi_mod, "_save_checkpoint", _save_then_sigint)
 
-    spec_dict = _fwi_smoke_spec(tmp_path, epochs=5, task_id="stoptest",
+    # 3 epochs: stopped after epoch 0, the resumed run still has two epochs
+    # (more than one step on the restored optimizer state) to finish.
+    spec_dict = _fwi_smoke_spec(tmp_path, epochs=3, task_id="stoptest",
                                 resume=True)
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "stop.yaml")))
 
@@ -469,7 +497,7 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
     assert result2.status.state == "success", result2.status.error
     assert result2.status.summary["resumed_from"] == "stoptest"
     losses_full = np.load(result2.task_dir / "output" / "loss.npy").tolist()
-    assert len(losses_full) == 5
+    assert len(losses_full) == 3
     # Iter-0 loss must match between the runs (resume preserves Adam state + RNG).
     assert losses_full[0] == pytest.approx(losses_partial[0])
 
@@ -477,7 +505,8 @@ def test_fwi_graceful_stop_via_sigint(tmp_path, monkeypatch):
 def test_fwi_init_models_list_acoustic_smoke(tmp_path):
     # Multi-model `init_models` API path; for Acoustic the list is just [vp].
     true_path, init_path, _ = _tiny_grid_models(tmp_path)
-    spec_dict = _fwi_smoke_spec(tmp_path)
+    # One epoch: the list API is resolved at setup; one step uses it.
+    spec_dict = _fwi_smoke_spec(tmp_path, epochs=1)
     spec_dict.pop("init_model")
     spec_dict["init_models"] = [{"name": "vp", "path": str(init_path)}]
     spec_dict["obs"] = {"synthetic_from_models": [{"name": "vp", "path": str(true_path)}]}
@@ -487,9 +516,12 @@ def test_fwi_init_models_list_acoustic_smoke(tmp_path):
 
 
 def test_fwi_per_model_lr_dict_acoustic_smoke(tmp_path):
+    # One epoch: the per-model lr dict is resolved when the optimizer is
+    # built; one step uses it.
     spec_dict = _fwi_smoke_spec(
         tmp_path,
         optimizer={"kind": "adam", "lr": {"vp": 5.0}, "eps": 1.0e-22},
+        epochs=1,
     )
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "pm_lr.yaml")))
     assert result.status.state == "success", result.status.error
@@ -539,7 +571,7 @@ def _fwi_spec_with(tmp_path, **overrides):
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 300},
+        "time": {"dt": 0.001, "nt": 200},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -555,17 +587,19 @@ def _fwi_spec_with(tmp_path, **overrides):
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 2, "batchsize": 2, "show_every": 1,
+        # One epoch: data_plan / model_plan act at setup, before the first
+        # step. batchsize 3 = the shot batch the other tests compile.
+        "epochs": 1, "batchsize": 3, "show_every": 1,
     }
     spec.update(overrides)
     return spec
 
 
 def test_fwi_data_plan_shot_stride_reduces_nshots(tmp_path):
-    """`data_plan.shot_stride=3` over 6 shots should keep 2 shots."""
+    """`data_plan.shot_stride=2` over 6 shots should keep 3 shots."""
     spec_dict = _fwi_spec_with(tmp_path, **{
-        "data_plan": {"shot_stride": 3},
-        "batchsize": 2,    # cannot exceed kept-shots count
+        "data_plan": {"shot_stride": 2},
+        "batchsize": 3,    # cannot exceed kept-shots count
     })
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_plan.yaml")))
     assert result.status.state == "success", result.status.error
@@ -582,6 +616,8 @@ def test_fwi_data_plan_receiver_stride_reduces_nrec(tmp_path):
 def test_fwi_model_plan_crops_and_runs(tmp_path):
     """Gap 2: model_plan crops vp in z (receivers stay within the new domain)."""
     import numpy as np
+    # The crop is a grid of its own (its own compiled steps); batchsize 1
+    # keeps that run small.
     spec_dict = _fwi_spec_with(tmp_path, **{
         "model_plan": {"z_window_m": [0.0, 100.0]},   # crop z, keep full x
         "batchsize": 1,
@@ -642,6 +678,8 @@ def test_fwi_obs_segy_and_from_segy_headers_runs(tmp_path):
     vp_path = tmp_path / "vp.npy"
     np.save(vp_path, vp)
 
+    # abcn=12 and a 3-shot batch: the padded grid and shot batch of the
+    # other FWI tests, so this step is not compiled a second time.
     spec_dict = {
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
@@ -655,7 +693,7 @@ def test_fwi_obs_segy_and_from_segy_headers_runs(tmp_path):
             "receiver_depth_m_override": 10.0,
         },
         "physics": {
-            "equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 12,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
@@ -665,7 +703,7 @@ def test_fwi_obs_segy_and_from_segy_headers_runs(tmp_path):
                          "source_depth_m_override": 10.0,
                          "receiver_depth_m_override": 10.0}},
         "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
-        "epochs": 1, "batchsize": 2, "show_every": 1,
+        "epochs": 1, "batchsize": 3, "show_every": 1,
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_segy.yaml")))
     assert result.status.state == "success", result.status.error
@@ -690,6 +728,7 @@ def test_fwi_obs_segy_index_runs(tmp_path):
     vp_path = tmp_path / "vp.npy"
     np.save(vp_path, vp)
 
+    # abcn=12, 3-shot batch: shares the compiled step (see the test above).
     spec_dict = {
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
@@ -698,7 +737,7 @@ def test_fwi_obs_segy_index_runs(tmp_path):
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
         "geometry": {"kind": "from_segy_index", "index_path": str(idx_path)},
         "physics": {
-            "equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+            "equation": "Acoustic", "spatial_order": 8, "abcn": 12,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
@@ -706,25 +745,31 @@ def test_fwi_obs_segy_index_runs(tmp_path):
         "init_model": {"name": "vp", "path": str(vp_path)},
         "obs": {"segy_index": {"index_path": str(idx_path)}},
         "optimizer": {"kind": "adam", "lr": 1.0, "eps": 1.0e-22},
-        "epochs": 1, "batchsize": 2, "show_every": 1,
+        "epochs": 1, "batchsize": 3, "show_every": 1,
     }
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / "fwi_segy_idx.yaml")))
     assert result.status.state == "success", result.status.error
 
 
 def test_fwi_stages_per_stage_dh_and_bandpass_runs(tmp_path):
-    """Gaps 4 + 5: stage 0 at dh=20m, stage 1 at dh=10m + bandpass.
+    """Gaps 4 + 5: stage 0 on the native grid (dh=10m), stage 1 refined to
+    dh=5m + dt_s + bandpass.
 
     Confirms vp gets resampled across the dh change and the per-stage
     bandpass + dt_s + optimizer-reset path doesn't crash.
     """
     import numpy as np
+    # Native grid = the 48x48, dh=10 m, dt=1 ms setup of the other FWI tests,
+    # so the obs modelling and stage 0 reuse their compiled steps; only the
+    # refined stage 1 (95x95 at 5 m, dt 0.5 ms) compiles its own. Same
+    # structure as a native dh=20 m -> 10 m run: stage 0 native, stage 1
+    # twice as fine with half the dt.
     true_path, init_path, _ = _tiny_grid_models(tmp_path)
     spec_dict = {
         "task_type": "fwi",
         "output_dir": str(tmp_path / "tasks"),
-        "grid": {"dh": 20.0},
-        "time": {"dt": 0.002, "nt": 200},
+        "grid": {"dh": 10.0},
+        "time": {"dt": 0.001, "nt": 200},
         "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.05, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -740,10 +785,13 @@ def test_fwi_stages_per_stage_dh_and_bandpass_runs(tmp_path):
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
-        "epochs": 4, "batchsize": 3, "show_every": 10,  # the stages' sum
+        # One epoch per stage still crosses the stage boundary (resample,
+        # re-snap, dt change, bandpass, optimizer reset) and runs a step on
+        # each grid.
+        "epochs": 2, "batchsize": 3, "show_every": 10,  # the stages' sum
         "stages": [
-            {"epochs": 2, "dh_m": 20.0, "bandpass": {"lo_hz": 1.0, "hi_hz": 6.0}},
-            {"epochs": 2, "dh_m": 10.0, "dt_s": 0.001,
+            {"epochs": 1, "dh_m": 10.0, "bandpass": {"lo_hz": 1.0, "hi_hz": 6.0}},
+            {"epochs": 1, "dh_m": 5.0, "dt_s": 0.0005,
              "bandpass": {"lo_hz": 1.0, "hi_hz": 12.0}},
         ],
     }
@@ -773,7 +821,13 @@ def test_fwi_obs_segy_index_lazy_prefetched_load(tmp_path):
     idx_path = tmp_path / "tinyC.index.npz"
     idx.save(idx_path)
 
-    vp = np.full((32, 32), 2000.0, dtype="float32")
+    # 11x48 cells with abcn=12 at batchsize 1: the padded grid and shot batch
+    # of the model_plan crop test's training step, so these two runs reuse it
+    # instead of compiling a step of their own. (Not the 3-shot batch of the
+    # 48x48 tests: there the loss is dominated by the shot whose source sits
+    # on a receiver, and a 1% change to the lazily loaded obs no longer moves
+    # it past rtol=1e-5.)
+    vp = np.full((11, 48), 2000.0, dtype="float32")
     np.save(tmp_path / "vp.npy", vp)
 
     base = {
@@ -781,7 +835,7 @@ def test_fwi_obs_segy_index_lazy_prefetched_load(tmp_path):
         "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": 32},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.005, "scale": 1.0},
         "geometry": {"kind": "from_segy_index", "index_path": str(idx_path)},
-        "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 8,
+        "physics": {"equation": "Acoustic", "spatial_order": 8, "abcn": 12,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["h1"]},
         "backend": {"impl": "eager", "use_ckpt": False},
