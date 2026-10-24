@@ -11,14 +11,6 @@ import yaml
 from sweepx.tasks.cli import main
 
 
-@pytest.fixture
-def outside_slurm(monkeypatch):
-    """Run as on a CI runner. Inside a Slurm job the run-metadata dump asks
-    ``scontrol`` for the job's batch script (best effort, up to 2 x 10 s, often
-    ~10 s on a busy controller); nothing these tests check reads it."""
-    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-
-
 def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
     shape = (32, 32)
     init_vp = np.full(shape, 2500.0, dtype=np.float32)
@@ -58,7 +50,6 @@ def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
     return yaml_path
 
 
-@pytest.mark.usefixtures("outside_slurm")
 def test_cli_run_with_override_changes_epochs(tmp_path, capsys):
     yaml_path = _make_2d_fwi_yaml(tmp_path)
     rc = main(["run", str(yaml_path), "--override", "epochs=2"])
@@ -69,7 +60,6 @@ def test_cli_run_with_override_changes_epochs(tmp_path, capsys):
     assert "epoch 0001" in captured.out, captured.out
 
 
-@pytest.mark.usefixtures("outside_slurm")
 def test_cli_run_with_multiple_overrides(tmp_path, capsys):
     yaml_path = _make_2d_fwi_yaml(tmp_path)
     rc = main([

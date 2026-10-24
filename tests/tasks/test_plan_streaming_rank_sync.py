@@ -61,9 +61,6 @@ def _start(tmp_path, tag, spec, nproc, dd=False, gpu=False):
     env["PYTHONPATH"] = os.pathsep.join(
         [str(ROOT / "src")] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env.update(OMP_NUM_THREADS="2", MKL_NUM_THREADS="2")
-    # As on a CI runner: inside a Slurm job, rank 0's run-metadata dump asks
-    # scontrol for the job (best effort, up to 2 x 10 s); nothing here reads it.
-    env.pop("SLURM_JOB_ID", None)
     if gpu:
         env["SWEEP_DIST_BACKEND"] = "nccl"
     else:

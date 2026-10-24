@@ -34,16 +34,12 @@ def wavefield_runs(tmp_path_factory):
     Every test used to build and run its own copy of the same wavefield task;
     the tools under test only read ``output/snapshots.npy``, so each test now
     gets a fresh copy of a finished run (see ``_copy_run``) and the runs are
-    made once. Outside Slurm, as on a CI runner: inside a job the run-metadata
-    dump asks the real ``scontrol`` for the job (up to 2 x 10 s per run), which
-    these tests do not read (tests/tasks/test_run_meta_archive.py checks it).
+    made once.
     """
     pytest.importorskip("sweep")          # the tests' own skip conditions,
     pytest.importorskip("sweepx.tasks")   # here so a missing tier skips, not errors
     root = tmp_path_factory.mktemp("p8_runs")
-    with pytest.MonkeyPatch.context() as mp:
-        mp.delenv("SLURM_JOB_ID", raising=False)
-        return {task_id: _run_wavefield(root, task_id) for task_id in ("wf1", "wf2")}
+    return {task_id: _run_wavefield(root, task_id) for task_id in ("wf1", "wf2")}
 
 
 def _copy_run(task_dir, tmp_path):

@@ -35,12 +35,6 @@ from test_task_fwi_plan_streaming import (
 _SKIPPED = ["illumination_precondition", "smooth_regularization"]
 
 
-@pytest.fixture(autouse=True)
-def _outside_slurm(monkeypatch):
-    """Run as on a CI runner: inside a Slurm job every run's metadata dump asks
-    ``scontrol`` for the job (best effort, up to 2 x 10 s); nothing here reads it."""
-    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-
 
 def _uncompiled(spec):
     """``spec`` with the eager step uncompiled (sweep's EagerOptions compiles

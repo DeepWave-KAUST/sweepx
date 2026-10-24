@@ -30,14 +30,6 @@ def _write(spec: dict, path: Path) -> Path:
     return path
 
 
-@pytest.fixture(autouse=True)
-def _outside_slurm(monkeypatch):
-    """Run as on a CI runner. Inside a Slurm job every run's metadata dump asks
-    the real ``scontrol`` for the job (best effort, up to 2 x 10 s, seconds on a
-    busy controller); nothing here reads it, and what it records is checked
-    against a fake ``scontrol`` in test_run_meta_archive.py."""
-    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-
 
 # ------------------------------------------------------------- schema ----
 

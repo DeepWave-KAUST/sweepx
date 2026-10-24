@@ -25,13 +25,9 @@ ROOT = Path(__file__).resolve().parents[2]  # repo root (tests/tasks/<file>)
 
 
 def _launch_env(env: dict) -> None:
-    """Launch as on a CI runner. Inside a Slurm job rank 0's run-metadata dump
-    asks ``scontrol`` for the job's batch script (best effort, up to 2 x 10 s,
-    often ~10 s on a busy controller); nothing this test checks reads it. And
-    one OpenMP thread per rank, torchrun's own default when the variable is
+    """One OpenMP thread per rank, torchrun's own default when the variable is
     unset: an inherited OMP_NUM_THREADS sized for the whole allocation gives
     each of the two ranks that many threads on the same cores."""
-    env.pop("SLURM_JOB_ID", None)
     env["OMP_NUM_THREADS"] = "1"
 
 
