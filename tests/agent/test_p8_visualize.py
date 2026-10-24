@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -26,21 +27,49 @@ def _run_wavefield(tmp_path, task_id, snaps=(20, 50, 80)):
     return r.value["task_dir"]
 
 
+@pytest.fixture(scope="module")
+def wavefield_runs(tmp_path_factory):
+    """The two wavefield runs the tests read, built and run once per module.
+
+    Every test used to build and run its own copy of the same wavefield task;
+    the tools under test only read ``output/snapshots.npy``, so each test now
+    gets a fresh copy of a finished run (see ``_copy_run``) and the runs are
+    made once. Outside Slurm, as on a CI runner: inside a job the run-metadata
+    dump asks the real ``scontrol`` for the job (up to 2 x 10 s per run), which
+    these tests do not read (tests/tasks/test_run_meta_archive.py checks it).
+    """
+    pytest.importorskip("sweep")          # the tests' own skip conditions,
+    pytest.importorskip("sweepx.tasks")   # here so a missing tier skips, not errors
+    root = tmp_path_factory.mktemp("p8_runs")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("SLURM_JOB_ID", raising=False)
+        return {task_id: _run_wavefield(root, task_id) for task_id in ("wf1", "wf2")}
+
+
+def _copy_run(task_dir, tmp_path):
+    """A private copy of a finished run, laid out as run_task leaves it
+    (``<tmp_path>/runs/<task_id>``), so what one test writes into the run's
+    output/ (a PNG, a GIF) is never seen by another."""
+    dst = tmp_path / "runs" / Path(task_dir).name
+    shutil.copytree(task_dir, dst)
+    return str(dst)
+
+
 @pytest.mark.timeout(180)
-def test_plot_wavefield(tmp_path):
+def test_plot_wavefield(tmp_path, wavefield_runs):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
-    td = _run_wavefield(tmp_path, "wf")
+    td = _copy_run(wavefield_runs["wf1"], tmp_path)
     res = registry.get("plot_wavefield").invoke({"task_dir": td, "abcn": 10, "snapshot_index": -1})
     assert res.ok and "error" not in res.value, res.value
     assert Path(res.value["image_path"]).is_file()
 
 
 @pytest.mark.timeout(180)
-def test_make_gif(tmp_path):
+def test_make_gif(tmp_path, wavefield_runs):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
-    td = _run_wavefield(tmp_path, "wf")
+    td = _copy_run(wavefield_runs["wf1"], tmp_path)
     res = registry.get("make_wavefield_gif").invoke({"task_dir": td, "abcn": 10, "fps": 6})
     assert res.ok and "error" not in res.value, res.value
     assert Path(res.value["gif_path"]).is_file()
@@ -48,11 +77,11 @@ def test_make_gif(tmp_path):
 
 
 @pytest.mark.timeout(180)
-def test_gif_path_fallback(tmp_path):
+def test_gif_path_fallback(tmp_path, wavefield_runs):
     """Single-task gif tolerates a wrong task_dir by locating the real run."""
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
-    td = _run_wavefield(tmp_path, "wf")
+    td = _copy_run(wavefield_runs["wf1"], tmp_path)
     wrong = str(Path(td).parent / "hallucinated-name")
     res = registry.get("make_wavefield_gif").invoke({"task_dir": wrong, "abcn": 10})
     assert res.ok and "error" not in res.value, res.value
@@ -60,11 +89,11 @@ def test_gif_path_fallback(tmp_path):
 
 
 @pytest.mark.timeout(180)
-def test_compare_rejects_missing(tmp_path):
+def test_compare_rejects_missing(tmp_path, wavefield_runs):
     """compare must NOT silently fall back — a wrong/forward task_dir errors."""
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
-    td = _run_wavefield(tmp_path, "wf")
+    td = _copy_run(wavefield_runs["wf1"], tmp_path)
     res = registry.get("compare_wavefields").invoke({
         "task_dirs": [td, str(Path(td).parent / "nonexistent")],
         "labels": ["a", "b"], "abcn": 10, "out_path": str(tmp_path / "cmp.png"),
@@ -73,11 +102,11 @@ def test_compare_rejects_missing(tmp_path):
 
 
 @pytest.mark.timeout(240)
-def test_compare_ok(tmp_path):
+def test_compare_ok(tmp_path, wavefield_runs):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
-    td1 = _run_wavefield(tmp_path, "wf1")
-    td2 = _run_wavefield(tmp_path, "wf2")
+    td1 = _copy_run(wavefield_runs["wf1"], tmp_path)
+    td2 = _copy_run(wavefield_runs["wf2"], tmp_path)
     res = registry.get("compare_wavefields").invoke({
         "task_dirs": [td1, td2], "labels": ["one", "two"], "abcn": 10,
         "out_path": str(tmp_path / "cmp.png"),

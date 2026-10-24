@@ -40,7 +40,9 @@ def _spec(tmp_path, init_path, true_path, *, backward_mode, task_id, epochs=1):
         "output_dir": str(tmp_path / "tasks"),
         "task_id": task_id,
         "grid": {"dh": 10.0},
-        "time": {"dt": 0.001, "nt": 200},
+        # 0.12 s: the 15 Hz wavelet (peak at 0.08 s) and the near-offset
+        # direct arrivals are in the window, so every mode gets a gradient.
+        "time": {"dt": 0.001, "nt": 120},
         "wavelet": {"kind": "ricker", "fm": 15.0, "delay": 0.08, "scale": 1.0},
         "geometry": {
             "kind": "line",
@@ -52,7 +54,11 @@ def _spec(tmp_path, init_path, true_path, *, backward_mode, task_id, epochs=1):
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled eager: Inductor would compile a new step graph per
+        # propagator, which costs far more than these small runs; what is
+        # tested here does not depend on it.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "model_bounds": {"vp": {"min": 1500.0, "max": 4500.0}},

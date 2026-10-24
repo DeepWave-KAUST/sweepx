@@ -263,7 +263,11 @@ def _tiny_rtm_dict(tmp_path: Path, *, grid_shape=None, true_path=None) -> dict:
                      "sources": {"step": 10, "depth": 2, "start": 6, "stop": 32},
                      "receivers": {"step": 2, "depth": 2}},
         "physics": {"equation": "Acoustic", "abcn": 8, "free_surface": False},
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled: the forward that synthesises obs is all that runs here
+        # (the batches are monkeypatched), and Inductor would spend far longer
+        # compiling its step than the 120 steps take.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "velocity_model": {"name": "vp", "path": str(vp_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "imaging": {"shots_per_batch": 1},

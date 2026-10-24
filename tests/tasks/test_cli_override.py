@@ -5,9 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 
 from sweepx.tasks.cli import main
+
+
+@pytest.fixture
+def outside_slurm(monkeypatch):
+    """Run as on a CI runner. Inside a Slurm job the run-metadata dump asks
+    ``scontrol`` for the job's batch script (best effort, up to 2 x 10 s, often
+    ~10 s on a busy controller); nothing these tests check reads it."""
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
 
 
 def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
@@ -35,7 +44,10 @@ def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # uncompiled step: torch.compile (Inductor building C++ on CPU) was most
+        # of this test's time, and the override path does not depend on it
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "init_model": {"name": "vp", "path": str(init_path)},
         "obs": {"synthetic_from": {"name": "vp", "path": str(true_path)}},
         "optimizer": {"kind": "adam", "lr": 5.0, "eps": 1.0e-22},
@@ -46,6 +58,7 @@ def _make_2d_fwi_yaml(tmp_path: Path) -> Path:
     return yaml_path
 
 
+@pytest.mark.usefixtures("outside_slurm")
 def test_cli_run_with_override_changes_epochs(tmp_path, capsys):
     yaml_path = _make_2d_fwi_yaml(tmp_path)
     rc = main(["run", str(yaml_path), "--override", "epochs=2"])
@@ -56,6 +69,7 @@ def test_cli_run_with_override_changes_epochs(tmp_path, capsys):
     assert "epoch 0001" in captured.out, captured.out
 
 
+@pytest.mark.usefixtures("outside_slurm")
 def test_cli_run_with_multiple_overrides(tmp_path, capsys):
     yaml_path = _make_2d_fwi_yaml(tmp_path)
     rc = main([

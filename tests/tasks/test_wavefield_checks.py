@@ -57,7 +57,11 @@ def _tiny_spec(tmp_path: Path, task_type: str = "forward", *,
             "free_surface": False, "source_type": ["h1"],
             "receiver_type": ["h1"],
         },
-        "backend": {"impl": "eager", "use_ckpt": False},
+        # Uncompiled eager: Inductor would compile a new step graph per
+        # propagator, which costs far more than these small runs; what is
+        # tested here does not depend on it.
+        "backend": {"impl": "eager", "use_ckpt": False,
+                    "eager_options": {"use_compile": False}},
         "models": [model],
     }
     if task_type == "wavefield":
