@@ -317,6 +317,29 @@ def _maybe_upgrade_3d(equation: str, ndim: int) -> tuple[str, str | None]:
 
 
 def _resolve_geometry(p: "BuildForwardParams", vp_shape: tuple[int, ...]) -> dict[str, Any]:
+    """`_flat_geometry`, with explicit 2-D points under a topography moved down
+    by the surface row of their column: depths count from the surface, and sweep
+    takes physical rows. (A line geometry follows the surface in sweepx.tasks.)
+    The centred source stays at the model centre."""
+    geom = _flat_geometry(p, vp_shape)
+    topo = getattr(p, "topography", None)
+    if topo is None or geom["kind"] != "explicit" or len(vp_shape) != 2:
+        return geom
+    from sweepx.tasks._helpers.geometry import _surface_rows
+    surface = _surface_rows(topo)
+    if surface.size != vp_shape[-1]:
+        raise ValueError(f"topography has {surface.size} columns; the model has {vp_shape[-1]}.")
+
+    def down(pt):
+        return [pt[0], pt[1] + int(surface[pt[0]])]
+
+    geom["receivers"] = [down(r) for r in geom["receivers"]]
+    if not getattr(p, "source_at_center", False):
+        geom["sources"] = [down(s) for s in geom["sources"]]
+    return geom
+
+
+def _flat_geometry(p: "BuildForwardParams", vp_shape: tuple[int, ...]) -> dict[str, Any]:
     """2-D grid → line geometry. 3-D grid → an explicit grid of sources/receivers
     laid out in the (x, y) plane at the given depths. Coordinate order is
     (x, y, z), extending the 2-D line convention (x, z). When source_at_center is

@@ -476,8 +476,9 @@ def build_geometry_arrays(spec: Any) -> tuple[np.ndarray, np.ndarray]:
             )
     shape = grid_shape(spec)
     if isinstance(spec, (FWISpec, RTMSpec)):
-        return _build_geometry(spec.geometry, shape, dh=spec.grid.dh, segy_cache={})
-    return _build_geometry(spec.geometry, shape)
+        return _build_geometry(spec.geometry, shape, dh=spec.grid.dh, segy_cache={},
+                               topography=spec.physics.topography)
+    return _build_geometry(spec.geometry, shape, topography=spec.physics.topography)
 
 
 def build_wavelet(spec: Any) -> np.ndarray:

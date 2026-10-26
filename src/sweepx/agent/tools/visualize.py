@@ -208,8 +208,8 @@ class MakeGifParams(BaseModel):
         ),
     )
     curvilinear: bool = Field(
-        True,
-        description="True for AcousticCurvilinear (resample computational→physical); False for image-method physical-grid fields. Only used when topography_path is set.",
+        False,
+        description="Leave False: sweep returns every snapshot on the physical grid, curvilinear equations included. True only for a snapshot taken on the boundary-fitted grid (snapshot_grid='computational'). Only used when topography_path is set.",
     )
     sources: list[list[int]] | None = Field(
         None,

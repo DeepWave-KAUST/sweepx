@@ -152,7 +152,7 @@ def plot_snapshot_topography(
     ax: Axes | None = None,
     sources=None,
     receivers=None,
-    curvilinear: bool = True,
+    curvilinear: bool = False,
     perc: float = 99.0,
     cmap: str = "RdBu_r",
     title: str | None = None,
@@ -160,10 +160,12 @@ def plot_snapshot_topography(
     """Wavefield snapshot under irregular topography: air masked white, topo line
     + source (red star) / receiver (yellow ▼) markers overlaid.
 
-    ``curvilinear=True`` resamples a computational-grid field back to physical
-    coordinates (AcousticCurvilinear); ``False`` just masks the air for a field
-    already on the physical grid (image method). Source/receiver positions are
-    (x, depth_below_local_surface) pairs; the depth is added to topo[x]."""
+    sweep returns snapshots on the physical grid, curvilinear equations
+    included, so by default the air is only masked. ``curvilinear=True``
+    resamples a snapshot taken on the boundary-fitted grid
+    (``snapshot_grid='computational'``) onto the physical grid first.
+    Source/receiver positions are (x, depth_below_local_surface) pairs; the
+    depth is added to topo[x]."""
     field = np.asarray(field)
     topo = np.asarray(topo)
     phys = _curvilinear_to_physical(field, topo) if curvilinear else _mask_air(field, topo)
@@ -197,7 +199,7 @@ def animate_snapshots_topography(
     *,
     sources=None,
     receivers=None,
-    curvilinear: bool = True,
+    curvilinear: bool = False,
     fps: int = 8,
     perc: float = 99.0,
     cmap: str = "RdBu_r",

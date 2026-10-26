@@ -121,6 +121,7 @@ class RTMRunnerMixin:
         segy_cache: dict = {}
         sources, receivers = _build_geometry_2d(
             spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+            topography=spec.physics.topography,
         )
         nshots = int(sources.shape[0])
 

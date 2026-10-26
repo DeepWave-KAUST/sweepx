@@ -316,7 +316,9 @@ Wavelet = Annotated[
 class LineSet(_Forbid):
     """A 2D line of source/receiver points: x = arange(start, stop, step), z = depth.
 
-    Points come out in sweep's (x, z) grid-index order.
+    Points come out in sweep's (x, z) grid-index order. With
+    ``physics.topography`` the line follows the surface: ``depth`` counts rows
+    down from the surface of each column, z = surface[x] + depth.
     """
 
     step: int = Field(ge=1)
@@ -560,7 +562,9 @@ class PhysicsSpec(_Forbid):
     # (AcousticCurvilinear / ElasticCurvilinear). Path to a 1-D .npy of
     # per-column surface row indices (length nx; topo[ix] = grid row of the
     # surface at column ix). PropTorch builds the boundary-fitted grid from it.
-    # Distinct from the flat ``free_surface`` flag; None = no topo.
+    # Sources and receivers are physical rows; a ``line`` geometry's depth
+    # counts from the surface. Distinct from the flat ``free_surface`` flag;
+    # None = no topo.
     topography: Path | None = None
 
 

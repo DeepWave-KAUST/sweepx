@@ -8,7 +8,22 @@ from sweepx.tasks._helpers.data_loading import (
     _load_seismic_plan_payload,
 )
 
-def _line_array(line: LineSet, fallback_stop: int) -> "np.ndarray":
+def _surface_rows(topography) -> "np.ndarray | None":
+    """Surface row of each column of ``physics.topography`` (a path to a 1-D
+    .npy, or None), rounded up into the medium; None without a topography."""
+    if topography is None:
+        return None
+    topo = np.asarray(np.load(topography), dtype=np.float64)
+    if topo.ndim != 1:
+        raise ValueError(
+            f"physics.topography must be a 1-D array (one surface row per "
+            f"column); got shape {topo.shape}."
+        )
+    return np.ceil(topo - 1e-9).astype(np.int64)
+
+
+def _line_array(line: LineSet, fallback_stop: int,
+                surface: "np.ndarray | None" = None) -> "np.ndarray":
     stop = line.stop if line.stop is not None else fallback_stop
     if stop <= line.start:
         raise ValueError(
@@ -16,6 +31,15 @@ def _line_array(line: LineSet, fallback_stop: int) -> "np.ndarray":
         )
     xs = np.arange(line.start, stop, line.step, dtype=np.int64).reshape(-1, 1)
     zs = np.full_like(xs, line.depth)
+    if surface is not None:
+        # Under topography a line follows the surface: sweep takes physical
+        # rows, so ``depth`` rows below the surface is row surface[x] + depth.
+        if int(xs.max()) >= surface.size:
+            raise ValueError(
+                f"LineSet reaches column {int(xs.max())}, but physics.topography "
+                f"has {surface.size} columns."
+            )
+        zs = zs + surface[xs]
     return np.concatenate([xs, zs], axis=1)
 
 
@@ -43,6 +67,7 @@ def _build_geometry(
     *,
     dh: float | None = None,
     segy_cache: dict | None = None,
+    topography=None,
 ) -> tuple["np.ndarray", "np.ndarray"]:
     """Dispatch on geometry.kind and return (sources, receivers) numpy arrays.
 
@@ -52,6 +77,10 @@ def _build_geometry(
     is 2-D-only and ``grid`` is its 3-D-only counterpart; the SEG-Y kinds
     are 2-D-only because their header-derived geometry is built around
     ``(x, z)`` only.
+
+    ``topography`` is ``physics.topography``. With one, a ``line``'s depth
+    counts down from the surface of each column; every other kind gives
+    physical rows, as sweep takes them.
 
     ``dh`` and ``segy_cache`` are only used by the SEG-Y-backed kinds
     (``from_segy_headers`` / ``from_segy_index``). The cache lets the runner
@@ -69,8 +98,9 @@ def _build_geometry(
                 f"for 3-D."
             )
         nx = int(shape[-1])
-        sources = _line_array(geometry.sources, nx)
-        rec = _line_array(geometry.receivers, nx)
+        surface = _surface_rows(topography)
+        sources = _line_array(geometry.sources, nx, surface)
+        rec = _line_array(geometry.receivers, nx, surface)
         receivers = rec[None, ...].repeat(sources.shape[0], axis=0)
         return sources, receivers
     if kind == "grid":

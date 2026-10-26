@@ -94,7 +94,8 @@ class LSRTMRunnerMixin:
         )
 
         wavelet = _build_wavelet(spec.wavelet, spec.time)
-        sources, receivers = _build_geometry_2d(spec.geometry, shape)
+        sources, receivers = _build_geometry_2d(spec.geometry, shape,
+                                                topography=spec.physics.topography)
         nshots = int(sources.shape[0])
         if dist_info.is_root:
             print(f"[lsrtm] shape={shape} nshots={nshots} epochs={spec.epochs} "

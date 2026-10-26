@@ -58,8 +58,9 @@ for you. Map what they want to a workflow:
 - migration / RTM / LSRTM / 偏移 / 成像  → describe_task_schema + build_spec → run_task.
 - irregular free surface / 起伏地表 / 地形 / 山  → use a curvilinear equation
   (e.g. AcousticCurvilinear) with topography; when you animate it, pass
-  topography_path (and curvilinear=true) to make_wavefield_gif so the wave is shown
-  on the physical grid with the air above the surface masked — the standard view.
+  topography_path to make_wavefield_gif so the wave is shown on the physical
+  grid with the air above the surface masked — the standard view. Source and
+  receiver depths count down from the surface.
 - anisotropy / VTI / TTI / elastic / 各向异性 / 弹性  → list_equations to choose the
   equation + the extra model files it needs.
 - COMPARING several equations' wavefronts side by side (isotropic vs VTI vs TTI,
