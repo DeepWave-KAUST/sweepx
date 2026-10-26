@@ -44,6 +44,12 @@ hide:
 <h2 class="sweep-new__title">Recently shipped.</h2>
 <p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
 <div class="sweep-new__grid">
+  <a class="sweep-new__card" href="solver/notebooks/41_fd_vs_sem_topography/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Spectral elements</div>
+    <div class="sweep-new__desc"><code>sweep.sem.PropSEM</code> solves on meshes fitted to the free surface, with <code>PropTorch</code>'s constructor and call: acoustic, elastic, fluid-solid and Biot poroelastic in 2-D, acoustic and elastic in 3-D, with C-PML, boundary saving and <code>impl='c'</code> kernels. <code>sweep list equations</code> lists them next to the finite-difference equations.</div>
+  </a>
+
   <a class="sweep-new__card" href="solver/notebooks/40_wavefield_poroelastic/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">Poroelastic waves</div>
@@ -72,12 +78,6 @@ hide:
     <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.0</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">One package for the toolkit</div>
     <div class="sweep-new__desc">The task runner, the agent and the io, loss, nn and opt libraries now ship as one package, <code>sweepx</code>, from one repository. Imports change from <code>sweep_tasks</code> to <code>sweepx.tasks</code>, and likewise for the rest; the <code>sweep-tasks</code> and <code>sweep-agent</code> commands stay as they were.</div>
-  </a>
-
-  <a class="sweep-new__card" href="opt/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.0</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">Optimizers for FWI</div>
-    <div class="sweep-new__desc"><code>sweepx.opt</code> joins the toolkit: L-BFGS, truncated Newton and Gauss-Newton, trust region, Adam, Shampoo and SOAP behind the <code>torch.optim</code> interface, with pseudo-Hessian and depth preconditioners and bound parameterizations.</div>
   </a>
 
 </div>
