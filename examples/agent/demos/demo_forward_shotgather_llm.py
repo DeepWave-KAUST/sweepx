@@ -2,10 +2,9 @@
 
 A real local LLM does everything from natural language — inspect the velocity
 model, run a forward simulation, and plot the synthetic shot gather (direct +
-reflected arrivals). The model never sees Python or tool names. Needs a vLLM
+reflected arrivals). The model never sees Python or tool names. Needs an LLM
 server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_forward_shotgather_llm.py
 
 Verified end-to-end on Qwen2.5-7B with pure natural language — any path

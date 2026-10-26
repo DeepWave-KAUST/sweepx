@@ -1,7 +1,13 @@
 """Optimizer / scheduler construction + per-stage lr scaling. Verbatim from runner.py."""
 
-def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
-    """Construct a torch optimizer; supports per-model lr via dict."""
+import functools
+
+
+def _build_optimizer(opt_spec, inv_tensors_by_name, required_names, model_bounds=None):
+    """Construct a torch optimizer; supports per-model lr via dict.
+
+    ``model_bounds`` (``spec.model_bounds``) gives L-BFGS the box of a single
+    inverted model, so its line search never evaluates a point outside it."""
 
     import torch
 
@@ -35,14 +41,60 @@ def _build_optimizer(opt_spec, inv_tensors_by_name, required_names):
             weight_decay=opt_spec.weight_decay,
         )
     if kind == "lbfgs":
-        return torch.optim.LBFGS(
+        bounds = None
+        if len(required_names) == 1:
+            from sweepx.tasks._helpers.bounds import _effective_bound
+            b = _effective_bound(model_bounds, required_names[0])
+            if b is not None and (b.min is not None or b.max is not None):
+                bounds = (b.min, b.max)
+        return _task_lbfgs_class()(
             params_in_order,
             lr=float(opt_spec.lr),
-            max_iter=opt_spec.max_iter,
             history_size=opt_spec.history_size,
-            line_search_fn=opt_spec.line_search_fn,
+            bounds=bounds,
+            initial_step=_lbfgs_initial_step(opt_spec.initial_step, params_in_order),
         )
     raise ValueError(f"Unknown optimizer kind '{kind}'.")
+
+
+@functools.lru_cache(maxsize=1)
+def _task_lbfgs_class():
+    from sweepx.opt.optim import LBFGS
+
+    class _TaskLBFGS(LBFGS):
+        """``sweepx.opt`` L-BFGS whose step multiplier sits in
+        ``param_groups[0]["lr"]``, where the runner's schedulers, per-stage lr
+        scales and resume read and write every optimizer's lr."""
+
+        def __init__(self, params, *, lr, **kwargs):
+            super().__init__(params, alpha_init=lr, alpha_max=10.0 * lr, **kwargs)
+            self.defaults["lr"] = lr
+            for group in self.param_groups:
+                group["lr"] = lr
+
+        def step(self, closure=None):
+            lr = float(self.param_groups[0]["lr"])
+            self.alpha_init, self.alpha_max = lr, 10.0 * lr
+            return super().step(closure)
+
+    return _TaskLBFGS
+
+
+def _lbfgs_initial_step(initial_step, params):
+    """``initial_step`` of an L-BFGS spec in the model's units; ``"auto"`` is 1% of
+    the mean |model| (25 m/s on a 2500 m/s velocity model)."""
+    if initial_step != "auto":
+        return float(initial_step)
+    import torch
+
+    with torch.no_grad():
+        mean_abs = float(torch.cat([p.detach().abs().reshape(-1) for p in params]).mean())
+    if not mean_abs > 0.0:
+        raise ValueError(
+            "optimizer.initial_step='auto' takes its scale from the model, which is "
+            "all zeros here (a reflectivity's first iterate): set initial_step to "
+            "the size of the first L-BFGS step in the model's units.")
+    return 0.01 * mean_abs
 
 
 def _build_reparam_optimizer(opt_spec, net_params, lr: float):
@@ -68,6 +120,11 @@ def _build_reparam_optimizer(opt_spec, net_params, lr: float):
             nesterov=opt_spec.nesterov, weight_decay=opt_spec.weight_decay,
         )
     if kind == "lbfgs":
+        if "initial_step" in opt_spec.model_fields_set:
+            raise ValueError(
+                "optimizer.initial_step sizes the first step in the model's units and "
+                "has no meaning for a reparam network's weights; remove it (the "
+                "network's L-BFGS steps start from reparam.lr).")
         return torch.optim.LBFGS(
             params, lr=float(lr), max_iter=opt_spec.max_iter,
             history_size=opt_spec.history_size,

@@ -1,6 +1,6 @@
 """``list_equations`` — let the LLM discover which equations sweep supports.
 
-The flat builders can't enumerate sweep's ~33 equations in their schema, and the
+The flat builders can't enumerate sweep's 40-odd equations in their schema, and the
 LLM must not guess equation names or their model requirements. This tool exposes
 the real registry: each equation maps to the ordered list of physical-property
 models it needs (Acoustic→[vp], AcousticVTI→[vp,epsilon,delta], ...).

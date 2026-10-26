@@ -165,7 +165,8 @@ def _restore_stage_state(*, spec, ckpt: dict, state: dict, stages: list,
     net = state.get("reparam_net")
     if net is None:
         by_name = {n: _tensor(n, grad=True) for n in state["inv_by_name"]}
-        optimizer = _build_optimizer(spec.optimizer, by_name, required_names)
+        optimizer = _build_optimizer(spec.optimizer, by_name, required_names,
+                                     model_bounds=spec.model_bounds)
         state["initial_lrs"] = _remember_initial_lrs(optimizer)
     else:
         if "reparam_net" not in ckpt:
@@ -724,6 +725,7 @@ def _prepare_stage(
         else:
             state["optimizer"] = _build_optimizer(
                 spec.optimizer, state["inv_by_name"], required_names,
+                model_bounds=spec.model_bounds,
             )
         state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
     elif force_reset:
@@ -735,6 +737,7 @@ def _prepare_stage(
         else:
             state["optimizer"] = _build_optimizer(
                 spec.optimizer, state["inv_by_name"], required_names,
+                model_bounds=spec.model_bounds,
             )
         state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
         if dist_info.is_root:
@@ -742,6 +745,7 @@ def _prepare_stage(
     elif grid_changed and state.get("reparam_net") is None:
         state["optimizer"] = _build_optimizer(
             spec.optimizer, state["inv_by_name"], required_names,
+            model_bounds=spec.model_bounds,
         )
         state["initial_lrs"] = _remember_initial_lrs(state["optimizer"])
 

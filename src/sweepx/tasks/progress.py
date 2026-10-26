@@ -55,10 +55,11 @@ def _jsonable(value: Any) -> Any:
 
 
 def optimizer_lr(optimizer: Any) -> float | None:
-    """Learning rate of the first param group, or ``None`` without an optimizer."""
+    """Learning rate of the first param group, or ``None`` without an optimizer
+    or one that keeps no ``lr`` there (L-BFGS sizes its steps by line search)."""
     if optimizer is None:
         return None
-    return optimizer.param_groups[0]["lr"]
+    return optimizer.param_groups[0].get("lr")
 
 
 def band_desc(bandpass: Any) -> dict[str, float] | None:

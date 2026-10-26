@@ -122,7 +122,9 @@ optimizer:
   # eps: 1.0e-16
 # ── ALTERNATIVES ──
 # optimizer: {kind: sgd, lr: 0.02, momentum: 0.9}
-# optimizer: {kind: lbfgs, lr: 1.0, max_iter: 20, line_search_fn: strong_wolfe}
+# optimizer: {kind: lbfgs, initial_step: 0.002}   # the first step in the image's units:
+#             it starts at zero, so 'auto' has no scale to take; max_iter iterations
+#             per epoch (default 1).
 
 # ═══ LR scheduler ═════════════════════════════════════════════════════════════
 # Discriminated on `kind`: constant | step | exp | cosine

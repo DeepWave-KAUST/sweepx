@@ -1,14 +1,17 @@
-"""End-to-end demo: real local LLM drives a sweep forward run.
+"""End-to-end demo: a real local LLM drives a sweep forward run.
 
 Prereqs:
-    * vLLM server already running at $SWEEP_AGENT_LLM_URL (default http://localhost:8000/v1)
-    * The matching model id is in $SWEEP_AGENT_LLM_MODEL (e.g. Qwen/Qwen2.5-7B-Instruct)
-    * sweep-agent installed in the env where this script runs (ifwitorch)
-    * /tmp/vp_demo.npy already prepared
+    * an OpenAI-compatible LLM server with a 32k context, e.g.
+      `bash examples/agent/start_vllm_qwen7b.sh`; found on :8000 / :8001 / :11434,
+      or set $SWEEP_AGENT_LLM_URL (and $SWEEP_AGENT_LLM_MODEL)
+    * sweepx installed in the environment this script runs in
 
 Usage:
-    python -m sweepx.agent.examples.demo_real_llm
+    python examples/agent/demo_real_llm.py
     python examples/agent/demo_real_llm.py "your custom prompt"
+
+Without a prompt it writes a two-layer model to /tmp/vp_demo.npy (if absent) and
+asks for a forward run on it.
 """
 
 from __future__ import annotations
@@ -16,16 +19,15 @@ from __future__ import annotations
 import os
 import sys
 
-# Sensible defaults so the script "just works" right after `vllm serve` is up.
-os.environ.setdefault("SWEEP_AGENT_LLM_URL",   "http://localhost:8000/v1")
-os.environ.setdefault("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+import numpy as np
 
 from sweepx.agent.agent import Agent
-from sweepx.agent.llm.vllm_backend import VLLMBackend
+from sweepx.agent.llm.vllm_backend import VLLMBackend, backend_hint
 
+VP_DEMO = "/tmp/vp_demo.npy"
 
 DEFAULT_USER_MSG = (
-    "I have a velocity model at /tmp/vp_demo.npy. "
+    f"I have a velocity model at {VP_DEMO}. "
     "Please run a 2-D acoustic forward modelling with an 8 Hz Ricker wavelet, "
     "grid spacing dh=12.5 m, dt=0.001 s, 400 time samples, on the CPU eager backend "
     "(set device='cpu' and backend_impl='eager'). "
@@ -36,8 +38,17 @@ DEFAULT_USER_MSG = (
 
 def main() -> int:
     user_msg = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_USER_MSG
+    if len(sys.argv) <= 1 and not os.path.exists(VP_DEMO):
+        vp = np.full((64, 96), 1800.0, dtype=np.float32)
+        vp[32:, :] = 2600.0
+        np.save(VP_DEMO, vp)
 
     backend = VLLMBackend()
+    hint = backend_hint(backend.url)
+    if hint is not None:
+        backend.close()
+        print(f"[demo] {hint}", file=sys.stderr)
+        return 1
     agent = Agent(llm=backend, max_steps=15)
 
     print(f"[demo] LLM url   = {backend.url}")

@@ -234,8 +234,10 @@ optimizer:
   # lr can also be per-parameter: {vp: 20.0, vs: 5.0}
 # ── ALTERNATIVES ──
 # optimizer: {kind: sgd, lr: 10.0, momentum: 0.9, nesterov: false}
-# optimizer: {kind: lbfgs, lr: 1.0, max_iter: 20, history_size: 10,
-#             line_search_fn: strong_wolfe}   # single-GPU only (not under torchrun)
+# optimizer: {kind: lbfgs, initial_step: 20.0}   # sweepx.opt L-BFGS: the first step
+#             moves vp by up to 20 m/s ('auto': 1% of the mean model), later ones come
+#             from the curvature; max_iter iterations per epoch (default 1). Single-GPU
+#             only (not under torchrun).
 
 # ═══ LR scheduler ═════════════════════════════════════════════════════════════
 # Discriminated on `kind`: constant | step | exp | cosine

@@ -352,10 +352,10 @@ def test_fwi_multi_stage_runs(tmp_path):
 @pytest.mark.parametrize("opt_kind", ["sgd", "lbfgs"])
 def test_fwi_optimizer_variants_run(tmp_path, opt_kind):
     if opt_kind == "sgd":
-        opt = {"kind": "sgd", "lr": 0.5, "momentum": 0.9}
-    else:
-        opt = {"kind": "lbfgs", "lr": 1.0, "max_iter": 3, "history_size": 3}
-    spec_dict = _fwi_smoke_spec(tmp_path, optimizer=opt, epochs=2)
+        opt, batch = {"kind": "sgd", "lr": 0.5, "momentum": 0.9}, 3
+    else:   # L-BFGS takes every shot each epoch (one misfit for its curvature)
+        opt, batch = {"kind": "lbfgs", "lr": 1.0, "max_iter": 3, "history_size": 3}, 6
+    spec_dict = _fwi_smoke_spec(tmp_path, optimizer=opt, epochs=2, batchsize=batch)
     result = TaskRunner().run(load_task(_write(spec_dict, tmp_path / f"opt_{opt_kind}.yaml")))
     assert result.status.state == "success", result.status.error
 

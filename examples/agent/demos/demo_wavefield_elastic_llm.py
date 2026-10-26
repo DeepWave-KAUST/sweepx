@@ -2,16 +2,15 @@
 
 Mirrors the notebook ``06_wavefield_elastic.ipynb`` but driven entirely by
 natural language: the model inspects the three elastic parameter files
-(vp / vs / rho), recognises this needs the Elastic equation, builds a wavefield
-task with a centred source, runs it, and animates the snapshots into a GIF
-showing the fast P-wave ring and the slower S-wave ring. Needs a vLLM server
-(examples/agent/start_vllm_qwen7b.sh).
+(vp / vs / rho), recognises this needs the Elastic equation, and animates a
+centred source into a GIF showing the fast P-wave ring and the slower S-wave
+ring. The source is a vertical force: an explosion (the equation's default)
+would radiate P alone. Needs an LLM server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_wavefield_elastic_llm.py
 
-The system prompt's intent routing maps "弹性 / P波 / S波 / 看波场传播" to a
-wavefield task with source_at_center=True + make_wavefield_gif.
+The system prompt's intent routing maps "弹性 / P波 / S波 / 看波场传播" to one
+animate_wavefield call (centred vertical-force source, frames, GIF).
 """
 
 from __future__ import annotations

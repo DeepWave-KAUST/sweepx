@@ -37,6 +37,32 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return out
 
 
+def _absolute_paths(spec: dict[str, Any]) -> dict[str, Any]:
+    """``spec`` with every file path made absolute against the working directory.
+
+    The user names files relative to where they are, but ``load_task`` reads a
+    relative path in a YAML against the YAML's own directory: a model given as
+    ``vp_init.npy`` was looked for as ``sweep_runs/vp_init.npy``, and the default
+    ``output_dir`` became ``sweep_runs/sweep_runs``. ``physics.topography`` is read
+    against the working directory at run time, so it is pinned here too."""
+    from sweepx.tasks.yaml_io import resolve_paths
+
+    out = resolve_paths(spec, Path.cwd())
+    topo = (out.get("physics") or {}).get("topography")
+    if isinstance(topo, str):
+        out["physics"]["topography"] = str(Path(topo).expanduser().resolve())
+    return out
+
+
+def _output_file(out_path: str, default_name: str) -> Path:
+    """The file ``out_path`` names; a directory (an existing one, or a path without
+    a suffix, e.g. "save it to /tmp/run") gets ``default_name`` inside it."""
+    p = Path(out_path).expanduser()
+    if p.is_dir() or not p.suffix:
+        return p / default_name
+    return p
+
+
 class BuildForwardParams(BaseModel):
     """Flat parameter surface for a 2-D acoustic forward modelling task.
 
@@ -65,7 +91,7 @@ class BuildForwardParams(BaseModel):
     source_step: int = Field(50, ge=1, description="Source spacing in cells along x.")
     source_depth: int = Field(1, ge=0, description="Source depth in cells (0=top). Surface default 1.")
     receiver_step: int = Field(1, ge=1, description="Receiver spacing in cells along x.")
-    receiver_depth: int = Field(18, ge=0, description="Receiver depth in cells.")
+    receiver_depth: int = Field(4, ge=0, description="Receiver depth in cells (0=top). Near-surface default 4.")
     source_at_center: bool = Field(
         False,
         description="Single source at the model centre (mid-depth) for wavefront-shape views (P/S rings, anisotropy). Overrides source_step/depth.",
@@ -87,7 +113,10 @@ class BuildForwardParams(BaseModel):
         None,
         description="1-D .npy of per-column surface rows (len nx) for irregular free surface; use with equation='AcousticCurvilinear'/'ElasticCurvilinear'. Different from free_surface (flat).",
     )
-    backend_impl: Literal["eager", "c"] = Field("eager", description="`eager` = pure-torch (universal); `c` = CUDA kernels (needs build).")
+    backend_impl: Literal["auto", "eager", "c"] = Field(
+        "auto",
+        description="`auto` (default) = the CUDA kernels (`c`) on an NVIDIA GPU for an equation that has them, else `eager` (pure torch: CPU, MPS, the eager-only equations).",
+    )
     use_compile: bool = Field(False, description="torch.compile the eager step (CUDA + sweep.torch only). Default off.")
 
     # --- Multi-model (anisotropic / elastic equations) --------------------
@@ -99,7 +128,7 @@ class BuildForwardParams(BaseModel):
     # --- Identity / IO ----------------------------------------------------
     output_dir: str = Field("./sweep_runs", description="Parent dir; <output_dir>/<task_id>/ holds artifacts.")
     task_id: str | None = Field(None, description="Subdirectory name; auto from timestamp if omitted.")
-    device: str = Field("cpu", description="Simulation device: 'cpu', 'cuda' (NVIDIA GPU) or 'mps' (Apple Silicon GPU). Defaults to cpu because the GPU is usually held by the LLM. Use 'cuda' only when an NVIDIA GPU is free; on a Mac use 'mps' — 'cuda' is NOT available there and will fail.")
+    device: str = Field("auto", description="Simulation device: 'auto' (default: the NVIDIA GPU if there is one, else Apple's MPS, else the CPU), 'cuda', 'mps' or 'cpu'. A local LLM server may hold most of the same GPU; if the run runs out of GPU memory, lower the server's share or pass 'cpu'.")
     seed: int = Field(0, description="RNG seed.")
 
     # --- Output of this tool ----------------------------------------------
@@ -197,8 +226,7 @@ def _physics_source_fields(equation: str, source_type: Any, receiver_type: Any, 
     acoustic→h1 + cpmlr). Returns a dict to merge into the physics block. These
     per-equation defaults are what makes elastic / 3-D anisotropic equations run
     instead of crashing on the schema's plain acoustic defaults. The PML is
-    filled in explicitly because sweep-tasks before its pml_type fix defaults to
-    'cpmlr' rather than to the equation's own."""
+    written into the spec too, so the YAML says which one ran."""
     src_t, rec_t = source_type, receiver_type
     if src_t is None or rec_t is None:
         try:
@@ -245,6 +273,40 @@ def _centered_geometry(vp_shape: tuple[int, ...], receiver_step: int, receiver_d
     else:
         raise ValueError(f"unsupported model ndim={len(vp_shape)}; expected 2-D or 3-D.")
     return {"kind": "explicit", "sources": [src], "receivers": recs}
+
+
+def _auto_device(device: str) -> str:
+    """``device`` with 'auto' resolved as this machine has it: the NVIDIA GPU,
+    else Apple's MPS, else the CPU. The spec then records what ran."""
+    if (device or "").strip().lower() != "auto":
+        return device
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    return "mps" if mps is not None and mps.is_available() else "cpu"
+
+
+def _auto_impl(impl: str, device: str, equation: str, *, snapshots: bool = False) -> str:
+    """``impl`` with 'auto' resolved: the CUDA core ('c') on an NVIDIA GPU for an
+    equation it has kernels for, else 'eager' (CPU / MPS, the eager-only
+    equations, and wavefield snapshots, which only eager captures)."""
+    if impl != "auto":
+        return impl
+    if snapshots or not str(device).startswith("cuda"):
+        return "eager"
+    try:
+        import sweep
+        import sweep.equations as eq_mod
+
+        if eq_mod.supports_torch_binding(equation) and sweep.is_torch_binding_available():
+            return "c"
+    except Exception:
+        pass
+    return "eager"
 
 
 def _device_unavailable_reason(device: str) -> str | None:
@@ -443,6 +505,7 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweepx.tasks is not importable: {exc}"}
 
+    args.device = _auto_device(args.device)
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:
         return {"error": dev_err}
@@ -465,13 +528,14 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     models, err = _resolve_models(args)
     if err is not None:
         return err
+    args.backend_impl = _auto_impl(args.backend_impl, args.device, args.equation)
 
     try:
         geometry = _resolve_geometry(args, vp_shape)
     except ValueError as exc:
         return {"error": str(exc)}
 
-    spec_dict = _construct_spec_dict(args, models, geometry)
+    spec_dict = _absolute_paths(_construct_spec_dict(args, models, geometry))
     try:
         spec = ForwardSpec.model_validate(spec_dict)
     except Exception as exc:

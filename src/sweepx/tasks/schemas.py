@@ -1806,11 +1806,28 @@ class OptimizerSGD(_Forbid):
 
 
 class OptimizerLBFGS(_Forbid):
+    """L-BFGS with a strong-Wolfe line search (``sweepx.opt.optim.LBFGS``).
+
+    An epoch runs ``max_iter`` iterations over the epoch's shots, each one
+    gradient plus a line search. ``initial_step`` sizes the first step in the
+    model's own units (m/s for vp); ``"auto"`` is 1% of the mean |model|. Later
+    steps take their scale from the curvature pairs, times ``lr`` (1 = the
+    quasi-Newton step). torch's L-BFGS took steps in gradient units, which on a
+    velocity model in m/s either stalled or diverged."""
+
     kind: Literal["lbfgs"] = "lbfgs"
-    lr: float = 1.0  # LBFGS uses a single shared lr (no per-model splits)
-    max_iter: int = 20
-    history_size: int = 10
-    line_search_fn: Literal["strong_wolfe"] | None = None
+    lr: float = Field(1.0, gt=0)  # one shared multiplier (no per-model splits)
+    initial_step: float | Literal["auto"] = "auto"
+    max_iter: int = Field(1, ge=1)
+    history_size: int = Field(10, ge=1)
+    line_search_fn: Literal["strong_wolfe"] = "strong_wolfe"
+
+    @field_validator("initial_step")
+    @classmethod
+    def _initial_step_positive(cls, v):
+        if v != "auto" and not v > 0:
+            raise ValueError(f"initial_step must be positive or 'auto', got {v}")
+        return v
 
 
 Optimizer = Annotated[

@@ -16,6 +16,9 @@ from pydantic import Field
 from sweepx.agent.tools import register
 from sweepx.agent.tools.build_forward import (
     BuildForwardParams,
+    _absolute_paths,
+    _auto_device,
+    _auto_impl,
     _deep_merge,
     _device_unavailable_reason,
     _maybe_upgrade_3d,
@@ -27,7 +30,30 @@ from sweepx.agent.tools.build_forward import (
 )
 
 
+# An explosion: normal stresses only. In an isotropic elastic medium it radiates
+# P and no S at all.
+_EXPLOSION = ({"sxx", "szz"}, {"sxx", "syy", "szz"})
+
+
+def _p_and_s_source(equation: str) -> list[str] | None:
+    """A vertical force ``['vz']`` for an elastic equation whose own default source
+    is an explosion, so an animation shows the S ring too; ``None`` (the
+    equation's default) for everything else."""
+    try:
+        from sweepx.agent.tools.introspect import equation_default_fields
+        src, rec = equation_default_fields(equation)
+    except Exception:
+        return None
+    if set(src) in _EXPLOSION and "vz" in rec:
+        return ["vz"]
+    return None
+
+
 class BuildWavefieldParams(BuildForwardParams):
+    """BuildForwardParams + snapshots. On an elastic medium the default source is
+    a vertical force, which radiates P and S; ``source_type=['sxx','szz']`` is an
+    explosion (P only)."""
+
     snapshot_times: list[int] = Field(
         ...,
         min_length=1,
@@ -76,6 +102,8 @@ def _construct_wavefield_dict(p: BuildWavefieldParams, models: list[dict[str, An
         "Construct a validated wavefield-snapshot spec: like build_forward_spec but also dumps the "
         "full wavefield at the given snapshot_times (for movies / QC / figures). Same parameters as "
         "build_forward_spec plus snapshot_times (list of time-step indices in [0, nt)) and plot. "
+        "On an elastic medium the default source is a vertical force (P and S waves); "
+        "source_type=['sxx','szz'] is an explosion (P only). "
         "Call inspect_file on the model first; for non-Acoustic equations use list_equations + "
         "extra_models. Returns the validated spec + YAML path; then run_task(yaml_path)."
     ),
@@ -88,6 +116,7 @@ def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweepx.tasks is not importable: {exc}"}
 
+    args.device = _auto_device(args.device)
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:
         return {"error": dev_err}
@@ -120,7 +149,10 @@ def build_wavefield_spec(args: BuildWavefieldParams) -> dict[str, Any]:
     except ValueError as exc:
         return {"error": str(exc)}
 
-    spec_dict = _construct_wavefield_dict(args, models, geometry)
+    if args.source_type is None:
+        args.source_type = _p_and_s_source(args.equation)
+    args.backend_impl = _auto_impl(args.backend_impl, args.device, args.equation, snapshots=True)
+    spec_dict = _absolute_paths(_construct_wavefield_dict(args, models, geometry))
     try:
         spec = WavefieldSpec.model_validate(spec_dict)
     except Exception as exc:

@@ -1,27 +1,35 @@
 """Shared driver for LLM-driven demos.
 
-Sends one natural-language prompt through Agent + a local vLLM backend and prints
+Sends one natural-language prompt through Agent + a local LLM backend and prints
 the tool-call trace. The LLM does everything — builds the spec, runs it, and
 produces the figure/GIF — exactly as an end user would via `sweep-agent chat`.
 
-Needs a running vLLM server; see examples/start_vllm_qwen7b.sh. Override the
-endpoint/model with SWEEP_AGENT_LLM_URL / SWEEP_AGENT_LLM_MODEL.
+Needs a running OpenAI-compatible server with a 32k context, e.g.
+`bash examples/agent/start_vllm_qwen7b.sh` (vLLM) or
+`OLLAMA_CONTEXT_LENGTH=32768 ollama serve`. The demo finds a server on
+:8000 / :8001 (vLLM) or :11434 (Ollama) and asks it which model it serves;
+SWEEP_AGENT_LLM_URL / SWEEP_AGENT_LLM_MODEL choose others.
+
+Qwen2.5-7B finishes most demos but not every time (a rerun usually does);
+Qwen2.5-14B (MODEL=Qwen/Qwen2.5-14B-Instruct, a 48 GB-class GPU) is the reliable
+choice.
 """
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("SWEEP_AGENT_LLM_URL", "http://localhost:8001/v1")
-os.environ.setdefault("SWEEP_AGENT_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+import sys
 
 from sweepx.agent.agent import Agent
-from sweepx.agent.llm.vllm_backend import VLLMBackend
+from sweepx.agent.llm.vllm_backend import VLLMBackend, backend_hint
 from sweepx.agent.tools.selection import select_tool_names
 
 
 def drive(prompt: str, max_steps: int = 24) -> None:
     backend = VLLMBackend()
+    hint = backend_hint(backend.url)
+    if hint is not None:
+        backend.close()
+        sys.exit(f"[demo] {hint}")
     agent = Agent(llm=backend, max_steps=max_steps, tool_selector=select_tool_names)
     print(f"[demo] model={backend.model_id}  url={backend.url}\n")
     print(f"USER  > {prompt}\n")

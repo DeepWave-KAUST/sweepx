@@ -213,8 +213,12 @@ class ForwardRunnerMixin:
         out_dir = task_dir / "output"
         record_path = out_dir / "record.npy"
         snapshots_path = out_dir / "snapshots.npy"
+        sources_path = out_dir / "sources.npy"
+        receivers_path = out_dir / "receivers.npy"
         np.save(record_path, record_np)
         np.save(snapshots_path, snapshots_np)
+        np.save(sources_path, sources)
+        np.save(receivers_path, receivers)
         # After both saves (see _run_forward). The snapshots are taken inside
         # the grid, PML included, so they also name the field and the time
         # step where the blow-up shows, which the record alone cannot.
@@ -233,7 +237,7 @@ class ForwardRunnerMixin:
                         "field": field_names}),
         )
 
-        artifacts: list[Path] = [record_path, snapshots_path]
+        artifacts: list[Path] = [record_path, snapshots_path, sources_path, receivers_path]
         if spec.plot:
             try:
                 # Background for the snapshots: the velocity model the wave is

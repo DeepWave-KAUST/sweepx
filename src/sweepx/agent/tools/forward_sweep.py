@@ -6,10 +6,6 @@ write YAML, hand it to ``TaskRunner``. This one drives the solver directly —
 ``sweepx.tasks``, ``sweepx.io`` or ``sweepx.loss`` anywhere in the path. It needs
 only ``sweep`` + torch + numpy + matplotlib, so it runs on a laptop, CPU or
 Apple-Silicon MPS.
-
-STATUS: scaffold. The parameter surface, registration and dependency guard are
-in place; the modelling body is the exercise — see the TODO in
-``run_forward_sweep`` and ``tests/test_forward_sweep.py``.
 """
 
 from __future__ import annotations
@@ -105,13 +101,7 @@ def run_forward_sweep(args: RunForwardSweepParams) -> dict[str, Any]:
     dev_err = _device_unavailable_reason(device)
     if dev_err is not None:
         return {"error": dev_err}
-    
-    
 
-    # ------------------------------------------------------------------
-    # TODO — implement the forward run. Worked reference (a complete, runnable
-    # script using exactly this API):
-    #     sweep/examples/wavefields/topography/acoustic2d_hill_demo.py
     # Cap CPU threads. With use_compile=False the step runs interpreted, and torch
     # defaults to one intra-op thread per core. On a many-core box that badly
     # oversubscribes these small demo grids — every tiny op pays 20+ thread

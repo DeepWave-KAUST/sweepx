@@ -263,12 +263,28 @@ def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
 # plot_shot_gather
 # ---------------------------------------------------------------------------
 
+def _receiver_x(task_dir: Path, shot: int, dh: float | None, nrec: int) -> np.ndarray | None:
+    """The receivers' x positions (m) of ``shot``, from the task's receivers.npy
+    (grid indices, (nshots, nrec, ndim), x first); None (a trace-number axis)
+    without the file or ``dh``, or on a 3-D grid, where the traces are not one
+    line."""
+    path = task_dir / "output" / "receivers.npy"
+    if dh is None or not path.is_file():
+        return None
+    rec = np.load(path)
+    if rec.ndim == 2:            # (nrec, ndim), shared by every shot
+        rec = rec[None]
+    if rec.ndim != 3 or rec.shape[-1] != 2 or rec.shape[1] != nrec:
+        return None
+    return rec[min(shot, rec.shape[0] - 1), :, 0] * float(dh)
+
+
 class PlotShotGatherParams(BaseModel):
     task_dir: str = Field(..., description="Forward / FWI task directory from run_task — must contain output/record.npy.")
     shot: int = Field(0, description="Which shot to display (default 0).")
     channel: int = Field(0, description="Which channel/component (default 0).")
     dt: float | None = Field(None, description="Time step (s) for the time axis — pass the dt used in the run.")
-    dh: float | None = Field(None, description="Receiver spacing (m) for the offset axis.")
+    dh: float | None = Field(None, description="Grid spacing (m) of the run; with the task's receivers.npy it gives the receivers' x positions.")
     wiggle: bool = Field(False, description="Wiggle display instead of image (good for < ~50 traces).")
     out_name: str = Field("shot_gather.png", description="Output PNG filename under <task_dir>/output/.")
     title: str | None = Field(None, description="Plot title.")
@@ -310,7 +326,8 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
         if args.title:
             ax.set_title(args.title)
     else:
-        seismic.plot_shot(arr, dt=args.dt, dh=args.dh, ax=ax, title=args.title or "shot gather")
+        seismic.plot_shot(arr, dt=args.dt, x=_receiver_x(rd, args.shot, args.dh, arr.shape[1]),
+                          ax=ax, title=args.title or "shot gather")
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(arr.shape)}

@@ -83,3 +83,11 @@ def test_topography_snapshot_is_masked_not_resampled():
     assert np.isnan(shown[~below]).all()
     assert np.array_equal(shown[below], field[below])
     plt.close(ax.figure)
+
+
+def test_snapshot_keeps_a_circle_round():
+    from sweepx.tasks.viz.wavefield import plot_snapshot
+
+    ax = plot_snapshot(np.zeros((40, 80)))
+    assert ax.get_aspect() == 1.0          # was "auto": a 1:2 field stretched to the axes
+    plt.close(ax.figure)

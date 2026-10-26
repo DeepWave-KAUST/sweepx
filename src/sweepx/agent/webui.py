@@ -227,8 +227,9 @@ def run_agent_turn(agent, prompt: str, history: list):
     except Exception as exc:  # surface backend/connection errors in the chat
         name = type(exc).__name__
         if "Connect" in name or "Connection refused" in str(exc) or "ConnectError" in name:
-            msg = ("⚠️ Can't reach the LLM backend — the vLLM server appears to be **down**. "
-                   "Restart it (e.g. `bash examples/start_vllm_qwen7b.sh`), then resend.")
+            msg = ("⚠️ Can't reach the LLM backend — the server appears to be **down**. "
+                   "Restart it (e.g. `sweep-agent serve-llm`, or "
+                   "`bash examples/agent/start_vllm_qwen7b.sh` from a sweepx checkout), then resend.")
         else:
             msg = f"⚠️ error: {name}: {exc}"
         history.append({"role": "assistant", "content": msg})
@@ -548,8 +549,8 @@ def build_app(max_steps: int = 24):
         )
         with gr.Row():
             clear = gr.Button("🗑 Clear conversation", variant="secondary", scale=1, elem_id="sw-clear")
-        # Quick-start example chips — click to fill the input box.
-        # Quick-start demos — all run on a base install (solver only, no sweepx.tasks).
+        # Quick-start example chips — click to fill the input box. None needs an
+        # input file: each makes or loads its own model.
         with gr.Row(elem_classes=["sw-chips"]):
             ex_model = gr.Button("📈 Make a 2-layer model", size="sm")
             ex_fwd = gr.Button("🌊 Forward + shot gather", size="sm")

@@ -226,6 +226,12 @@ class LSRTMRunnerMixin:
                     dist_info=dist_info, water_mask=pin_mask,
                 )
                 losses.append(loss_value)
+                if not np.isfinite(loss_value):
+                    raise FloatingPointError(
+                        f"loss is {loss_value} at stage {stage_idx} epoch {epoch_global}: "
+                        f"the inversion diverged (try a smaller optimizer.lr, or "
+                        f"initial_step for lbfgs); stopping instead of carrying a "
+                        f"non-finite image on")
                 # the lr this step used, read before the scheduler moves it
                 step_lr = optimizer_lr(optimizer)
                 if scheduler is not None:
@@ -344,7 +350,11 @@ class LSRTMRunnerMixin:
                     acc_loss += float(loss_t.detach().cpu())
                 zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
+            # max_iter L-BFGS iterations per epoch; the epoch's loss is the one
+            # at its start, as for every other optimizer.
             result = optimizer.step(_closure)
+            for _ in range(spec.optimizer.max_iter - 1):
+                optimizer.step(_closure)
             return float(result) if result is not None else 0.0
 
         optimizer.zero_grad()

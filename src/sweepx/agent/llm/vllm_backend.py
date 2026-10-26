@@ -34,6 +34,36 @@ MODEL_ALIASES: dict[str, str] = {
 }
 
 
+# The agent's first request (system prompt + the tool schemas offered) is about
+# 9-25k tokens; a server must hold that plus the reply.
+CONTEXT_TOKENS = 32768
+CONTEXT_HINT = (
+    f"the agent's requests need a {CONTEXT_TOKENS}-token context: start vLLM with "
+    f"--max-model-len {CONTEXT_TOKENS} (`sweep-agent serve-llm` does by default), or "
+    f"Ollama with OLLAMA_CONTEXT_LENGTH={CONTEXT_TOKENS} ollama serve"
+)
+
+
+class LLMServerError(RuntimeError):
+    """The LLM server answered a request with an error status."""
+
+
+def _server_error(url: str, resp) -> LLMServerError:
+    """An error naming what the server said, not just its status code."""
+    detail = ""
+    try:
+        body = resp.json()
+        err = body.get("error", body) if isinstance(body, dict) else body
+        detail = err.get("message", "") if isinstance(err, dict) else str(err)
+    except Exception:
+        pass
+    detail = (detail or resp.text or "").strip()[:600]
+    msg = f"the LLM server at {url} answered {resp.status_code}: {detail}"
+    if "context length" in detail.lower() or "context window" in detail.lower():
+        msg += f"\n  -> {CONTEXT_HINT}"
+    return LLMServerError(msg)
+
+
 def resolve_model(name: str) -> str:
     """Map a short alias to the canonical HF repo ID; pass through unknown names."""
     return MODEL_ALIASES.get(name.lower(), name)
@@ -57,6 +87,21 @@ def _endpoint_alive(url: str, timeout: float = 0.6) -> bool:
         return httpx.get(url.rstrip("/") + "/models", timeout=timeout).status_code < 500
     except Exception:
         return False
+
+
+def served_model(url: str) -> str | None:
+    """The model a vLLM (or other OpenAI-compatible, non-Ollama) server is
+    serving, from GET {url}/models; None for Ollama (its list is every pulled
+    model, not one served model) or when the server does not answer."""
+    if is_ollama(url):
+        return None
+    try:
+        import httpx
+
+        data = httpx.get(url.rstrip("/") + "/models", timeout=2.0).json().get("data") or []
+        return data[0].get("id") if data else None
+    except Exception:
+        return None
 
 
 def detect_endpoint() -> str:
@@ -113,13 +158,14 @@ def backend_hint(url: str) -> str | None:
     if is_ollama(url):
         if shutil.which("ollama") is not None:
             return (
-                "Ollama is installed but not running. Start it, then re-run:\n"
-                "    ollama serve            # or, with Homebrew:  brew services start ollama"
+                "Ollama is installed but not running. Start it with a context long enough\n"
+                "for the agent's prompt, then re-run:\n"
+                f"    OLLAMA_CONTEXT_LENGTH={CONTEXT_TOKENS} ollama serve"
             )
         return (
             "No local LLM found. The easiest backend is Ollama, and it needs no Homebrew:\n"
             "    curl -fsSL https://ollama.com/install.sh | sh    # macOS or Linux\n"
-            "    ollama serve\n"
+            f"    OLLAMA_CONTEXT_LENGTH={CONTEXT_TOKENS} ollama serve\n"
             "  (or download the app from https://ollama.com/download)\n"
             "then re-run this command. Already have an OpenAI-compatible server? "
             "Point at it with  --url http://host:port/v1"
@@ -150,7 +196,8 @@ class VLLMBackend(BaseLLM):
         # to a 7B that fits the detected backend.
         chosen_url = url or os.environ.get("SWEEP_AGENT_LLM_URL") or detect_endpoint()
         self.url = chosen_url.rstrip("/")
-        raw_model = model or os.environ.get("SWEEP_AGENT_LLM_MODEL") or default_model_for(self.url)
+        raw_model = (model or os.environ.get("SWEEP_AGENT_LLM_MODEL")
+                     or served_model(self.url) or default_model_for(self.url))
         self._model_id = resolve_model(raw_model)
         self.api_key = api_key or os.environ.get("SWEEP_AGENT_LLM_API_KEY", "EMPTY")
         self.timeout = timeout
@@ -183,7 +230,8 @@ class VLLMBackend(BaseLLM):
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         resp = self._client.post(f"{self.url}/chat/completions", json=payload, headers=headers)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise _server_error(self.url, resp)
         data = resp.json()
         try:
             msg = data["choices"][0]["message"]

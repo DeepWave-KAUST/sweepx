@@ -35,12 +35,13 @@ agent always starts.
 
 ## What the tools cover
 
-`pip install sweepx` brings the solver and the task runner along, so every tool works
-on a plain install:
+`pip install sweepx` brings the solver and the task runner along, so the tools work
+on a plain install; GIFs need `pip install "sweepx[animate]"` and SEG-Y files
+`pip install "sweepx[segy]"` (the tools say so when the package is missing):
 
 | tools | what they do |
 |---|---|
-| `tools`, `inspect_file`, `check_parameters`, `make_synthetic_model` | discovery and inspection |
+| `inspect_file`, `check_parameters`, `make_synthetic_model`, `describe_task_schema` | discovery and inspection |
 | `plot_*`, `compare_shot_gathers`, `list_equations` | plots, equation listing |
 | `run_forward_sweep` | forward modelling (acoustic **+ elastic**) |
 | `list_benchmark_models` / `get_benchmark_model` | Marmousi / Overthrust |

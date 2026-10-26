@@ -80,7 +80,7 @@ def test_run_forward_and_plot_uses_its_own_run(tmp_path):
     r = registry.get("run_forward_and_plot").invoke({
         "vp_path": str(vp), "out_path": str(tmp_path / "g.png"),
         "dh": 10.0, "dt": 1e-3, "record_length_s": 0.4, "fm": 12.0,
-        "source_step": 40, "receiver_step": 2, "output_dir": str(tmp_path / "runs"),
+        "receiver_step": 2, "output_dir": str(tmp_path / "runs"),
     })
     assert r.ok and "error" not in r.value, r.value
     assert Path(r.value["image_path"]).is_file()

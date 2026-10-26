@@ -1,7 +1,8 @@
 # Quickstart
 
 Start a chat — it auto-detects a running Ollama (`:11434`) or vLLM
-(`:8000`/`:8001`), picks a 7B model, and pulls it on first run:
+(`:8000`/`:8001`) and uses the model the server serves (on Ollama a 7B, pulled on
+first run); the server needs a 32k context, see [Installation](installation.md):
 
 ```bash
 sweep-agent chat
