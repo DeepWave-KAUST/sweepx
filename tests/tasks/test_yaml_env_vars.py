@@ -38,7 +38,7 @@ def _rtm_doc(var: str) -> dict:
 
 
 def test_every_string_expands_but_only_path_keys_rebase(tmp_path, monkeypatch):
-    monkeypatch.setenv("SX_HOME", "/data/survey")
+    monkeypatch.setenv("SX_HOME", "/demo/survey")
     doc = {
         "geometry": {"plan_path": "${SX_HOME}/plan.npz", "index_path": "$SX_HOME/i.npz"},
         "obs": {"plan": {"plan_path": "rel/plan.npz"}},
@@ -49,14 +49,14 @@ def test_every_string_expands_but_only_path_keys_rebase(tmp_path, monkeypatch):
         "notes": ["${SX_HOME}/a", 3],
     }
     out = resolve_paths(doc, tmp_path)
-    assert out["geometry"] == {"plan_path": "/data/survey/plan.npz",
-                               "index_path": "/data/survey/i.npz"}
+    assert out["geometry"] == {"plan_path": "/demo/survey/plan.npz",
+                               "index_path": "/demo/survey/i.npz"}
     assert out["obs"]["plan"]["plan_path"] == "rel/plan.npz"     # not re-based: cwd-relative
-    assert out["loss"]["data_mask_path"] == "/data/survey/mask.npy"
-    assert out["output_dir"] == "/data/survey/runs"
+    assert out["loss"]["data_mask_path"] == "/demo/survey/mask.npy"
+    assert out["output_dir"] == "/demo/survey/runs"
     assert out["models"][0]["path"] == str(tmp_path.resolve() / "vp.npy")
-    assert out["water"] == {"seabed": "/data/survey/sb.npz", "mode": "pin"}
-    assert out["notes"] == ["/data/survey/a", 3]
+    assert out["water"] == {"seabed": "/demo/survey/sb.npz", "mode": "pin"}
+    assert out["notes"] == ["/demo/survey/a", 3]
 
 
 def test_plan_path_variable_reaches_the_spec_expanded(tmp_path, monkeypatch):
