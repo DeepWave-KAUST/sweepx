@@ -44,6 +44,29 @@ hide:
 <h2 class="sweep-new__title">Recently shipped.</h2>
 <p class="sweep-new__lede">The latest user-visible additions across the stack. The badge says where each one lives: a released version you get from <code>pip install</code>, or <span class="sweep-new__badge sweep-new__badge--dev">dev</span> for what is merged but not yet on PyPI — these docs are built from the development branch.</p>
 <div class="sweep-new__grid">
+  <a class="sweep-new__card" href="solver/notebooks/40_wavefield_poroelastic/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Poroelastic waves</div>
+    <div class="sweep-new__desc"><code>Biot</code>: 2-D low-frequency Biot waves, fast P, slow P and S in one wavefield, with gradients. The viscous drag is integrated exactly, so any permeability runs at the fast-P time step, and <code>biot_from_rock</code> builds the coefficients from rock properties.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/notebooks/15_wavefield_topography/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Elastic topography, rebuilt</div>
+    <div class="sweep-new__desc"><code>ElasticCurvilinear</code> now follows Bartana, Xu &amp; Rickett: collocated fields and a self-adjoint operator that stays stable on every hill tried, where the old scheme blew up. Sources, receivers, snapshots and models all live on the physical grid. It replaces the APM free surface, now removed.</div>
+  </a>
+
+  <a class="sweep-new__card" href="solver/notebooks/34_lsrtm_qp_vti_tti/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Anisotropic qP on the CUDA core</div>
+    <div class="sweep-new__desc">The pure-qP <code>AcousticVTI</code> and <code>AcousticTTI</code> of Liang et al. (2023) run on <code>impl='c'</code> with full-storage and boundary-saving gradients, and gain Born / LSRTM forms, <code>AcousticVTILSRTM</code> and <code>AcousticTTILSRTM</code>, on both backends.</div>
+  </a>
+
+  <a class="sweep-new__card" href="tasks/datasets/viking/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.1</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Viking, wavelet-free</div>
+    <div class="sweep-new__desc">The Viking Graben walkthrough now inverts all 1001 shots at once with frequency-selection FWI: download, index, plan, six coefficient shards and one <code>sweep-tasks run</code>. No source wavelet, and under an hour on one V100.</div>
+  </a>
 
   <a class="sweep-new__card" href="getting-started/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.0</span><span class="sweep-new__date">2026-10</span></div>
@@ -55,30 +78,6 @@ hide:
     <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.0</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">Optimizers for FWI</div>
     <div class="sweep-new__desc"><code>sweepx.opt</code> joins the toolkit: L-BFGS, truncated Newton and Gauss-Newton, trust region, Adam, Shampoo and SOAP behind the <code>torch.optim</code> interface, with pseudo-Hessian and depth preconditioners and bound parameterizations.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/notebooks/32_rwi_acoustic_vs_lsrtm_gradient/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.5</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">Velocity from reflections</div>
-    <div class="sweep-new__desc"><code>AcousticLSRTM</code> on the CUDA core now returns the velocity gradient too: the reflection-waveform (RWI) terms of Wu &amp; Alkhalifah (2015), in 2-D and 3-D and under domain decomposition. Computed only when <code>vp</code> asks for one.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/notebooks/30_wavefield_visco_elastic/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.3</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">Attenuation, acoustic and elastic</div>
-    <div class="sweep-new__desc">Near-constant <em>Q</em> in 2-D with gradients for every model. New in 0.3.3: <code>ViscoElastic</code>, the generalized standard linear solid SPECFEM2D uses, with <code>Qp</code> and <code>Qs</code> on both backends. It joins the visco-acoustic form of Zhu &amp; Harris (2014).</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/getting-started/installation/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.2</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">Install for your GPU and driver</div>
-    <div class="sweep-new__desc">Pick your GPU and driver, copy the matching torch + sweep command, and confirm it with a 15-line run. 0.3.2 also runs eager on any g++, and a wrong <code>pml_type</code> is now a clear error instead of a crash.</div>
-  </a>
-
-  <a class="sweep-new__card" href="solver/getting-started/installation/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.0</span><span class="sweep-new__date">2026-09</span></div>
-    <div class="sweep-new__name">Prebuilt CUDA core</div>
-    <div class="sweep-new__desc">The wheel carries the compiled kernels, so <code>impl='c'</code> runs straight after <code>pip install</code> — no nvcc, no first-use build, one wheel for any PyTorch version.</div>
   </a>
 
 </div>
