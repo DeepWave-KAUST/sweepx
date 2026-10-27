@@ -252,7 +252,7 @@ def test_fwi_resume_keeps_global_epochs(tmp_path):
 def test_lsrtm_iter_losses_match_loss_npy(tmp_path):
     true_path = _true_vp(tmp_path)
     doc = _common(tmp_path)
-    doc["physics"].update(equation="AcousticLSRTM", receiver_type=["sh1"])
+    doc["physics"].update(equation="AcousticBorn", receiver_type=["sh1"])
     doc.update({
         "task_type": "lsrtm", "task_id": "lsrtm_progress",
         "background_model": {"name": "vp", "path": str(true_path),

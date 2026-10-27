@@ -147,7 +147,7 @@ def test_lsrtm_runs(tmp_path):
             "receivers": {"step": 2, "depth": 4, "start": 4, "stop": 44},
         },
         "physics": {
-            "equation": "AcousticLSRTM", "spatial_order": 8, "abcn": 12,
+            "equation": "AcousticBorn", "spatial_order": 8, "abcn": 12,
             "free_surface": False, "pml_type": "cpmlr",
             "source_type": ["h1"], "receiver_type": ["sh1"],
         },

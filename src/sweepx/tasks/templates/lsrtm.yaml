@@ -10,7 +10,7 @@
 # LSRTM = least-squares reverse-time migration. Inverts for a REFLECTIVITY
 # image that, when Born-modeled through the smooth `background_model`,
 # best matches data generated from `true_model`. Two solvers run internally:
-# AcousticLSRTM (foreground/perturbation) + Acoustic (background).
+# AcousticBorn (foreground/perturbation) + Acoustic (background).
 #
 # ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
 # │ • UNCOMMENTED = active example (Marmousi 2-D synthetic LSRTM). Runs     │
@@ -66,7 +66,7 @@ geometry:
 # ═══ Wave-equation physics ════════════════════════════════════════════════════
 
 physics:
-  equation: AcousticLSRTM            # LSRTM foreground solver (NOT plain Acoustic);
+  equation: AcousticBorn             # LSRTM foreground solver (NOT plain Acoustic);
                                      # the runner derives the Acoustic background from it
   spatial_order: 8
   abcn: 20

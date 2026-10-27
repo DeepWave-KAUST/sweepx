@@ -2928,10 +2928,10 @@ class RTMSpec(BaseTaskSpec):
 
 
 class LSRTMSpec(BaseTaskSpec):
-    """LSRTM uses two solvers: AcousticLSRTM (foreground) and Acoustic (background).
+    """LSRTM uses two solvers: AcousticBorn (foreground) and Acoustic (background).
 
     `physics.equation` names the LSRTM variant. The runner derives the matching
-    background equation (e.g. AcousticLSRTM -> Acoustic) automatically.
+    background equation (e.g. AcousticBorn -> Acoustic) automatically.
     """
 
     task_type: Literal["lsrtm"] = "lsrtm"

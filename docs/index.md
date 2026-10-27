@@ -65,7 +65,7 @@ hide:
   <a class="sweep-new__card" href="solver/notebooks/34_lsrtm_qp_vti_tti/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">Anisotropic qP on the CUDA core</div>
-    <div class="sweep-new__desc">The pure-qP <code>AcousticVTI</code> and <code>AcousticTTI</code> of Liang et al. (2023) run on <code>impl='c'</code> with full-storage and boundary-saving gradients, and gain Born / LSRTM forms, <code>AcousticVTILSRTM</code> and <code>AcousticTTILSRTM</code>, on both backends.</div>
+    <div class="sweep-new__desc">The pure-qP <code>AcousticVTI</code> and <code>AcousticTTI</code> of Liang et al. (2023) run on <code>impl='c'</code> with full-storage and boundary-saving gradients, and gain Born / LSRTM forms, <code>AcousticVTIBorn</code> and <code>AcousticTTIBorn</code>, on both backends.</div>
   </a>
 
   <a class="sweep-new__card" href="tasks/datasets/viking/">

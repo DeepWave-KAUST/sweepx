@@ -48,7 +48,7 @@ geometry:
   receivers: { step: 1,  depth: 18 }
 
 physics:
-  equation: AcousticLSRTM      # Born-scattering variant; the background
+  equation: AcousticBorn       # Born-scattering variant; the background
                                # propagator is picked automatically
   source_type: [h1]
   receiver_type: [sh1]         # MUST be set: LSRTM records the SCATTERED

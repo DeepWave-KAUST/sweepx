@@ -53,7 +53,7 @@ def _lsrtm_doc(**extra):
         wavelet={"kind": "ricker", "fm": 5.0},
         geometry={"kind": "line", "sources": {"step": 5, "depth": 1},
                   "receivers": {"step": 1, "depth": 1}},
-        physics={"equation": "AcousticLSRTM"},
+        physics={"equation": "AcousticBorn"},
         background_model={"name": "vp", "constant": 2000.0, "shape": [10, 20]},
         true_model={"name": "vp", "constant": 2000.0, "shape": [10, 20]},
         optimizer={"kind": "adam", "lr": 1.0}, epochs=1)
@@ -501,7 +501,7 @@ def test_lsrtm_holds_the_water_reflectivity_at_zero(tmp_path):
         "geometry": {"kind": "line",
                      "sources": {"step": 10, "depth": 2, "start": 4, "stop": 45},
                      "receivers": {"step": 2, "depth": 2, "start": 2, "stop": 46}},
-        "physics": {"equation": "AcousticLSRTM", "spatial_order": 4, "abcn": 10,
+        "physics": {"equation": "AcousticBorn", "spatial_order": 4, "abcn": 10,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["sh1"]},
         # uncompiled like the FWI specs above: Inductor would build C++ for

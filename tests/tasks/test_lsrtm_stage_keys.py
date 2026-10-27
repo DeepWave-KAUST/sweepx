@@ -38,7 +38,7 @@ def _spec(stage: dict) -> dict:
         "wavelet": {"kind": "ricker", "fm": 10.0},
         "geometry": {"kind": "line", "sources": {"step": 24, "depth": 2},
                      "receivers": {"step": 4, "depth": 4}},
-        "physics": {"equation": "AcousticLSRTM", "receiver_type": ["sh1"]},
+        "physics": {"equation": "AcousticBorn", "receiver_type": ["sh1"]},
         "background_model": {"name": "vp", "constant": 2500.0, "shape": [48, 48]},
         "true_model": {"name": "vp", "constant": 2500.0, "shape": [48, 48]},
         "optimizer": {"kind": "adam", "lr": 0.08},
