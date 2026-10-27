@@ -29,7 +29,7 @@ classifiers = [
 # else is a subpackage here: sweepx.io / loss / nn / opt (libraries) -> sweepx.tasks
 # (workflows) -> sweepx.agent (interface). See [tool.importlinter] for the rule.
 dependencies = [
-    "sweep-solver>=0.3.5,<0.4",
+    "sweep-solver>=0.3.7,<0.4",
     "torch>=1.13",
     "numpy>=1.20",
     "scipy>=1.8",

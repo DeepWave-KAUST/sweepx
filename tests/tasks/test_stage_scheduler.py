@@ -73,7 +73,7 @@ def _lsrtm(tmp_path, scheduler, stages=None, epochs=6, *, nt=120, **extra):
         "grid": {"dh": 10.0}, "time": {"dt": 0.001, "nt": nt},
         "wavelet": {"kind": "ricker", "fm": 10.0, "delay": 0.1, "scale": 1.0},
         "geometry": _GEOM,
-        "physics": {"equation": "AcousticLSRTM", "spatial_order": 4, "abcn": 10,
+        "physics": {"equation": "AcousticBorn", "spatial_order": 4, "abcn": 10,
                     "free_surface": False, "pml_type": "cpmlr",
                     "source_type": ["h1"], "receiver_type": ["sh1"]},
         "backend": _BACKEND,

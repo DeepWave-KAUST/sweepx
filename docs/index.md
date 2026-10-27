@@ -60,7 +60,7 @@ hide:
   <a class="sweep-new__card" href="solver/notebooks/32_rwi_acoustic_vs_lsrtm_gradient/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.5</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">Velocity from reflections</div>
-    <div class="sweep-new__desc"><code>AcousticLSRTM</code> on the CUDA core now returns the velocity gradient too: the reflection-waveform (RWI) terms of Wu &amp; Alkhalifah (2015), in 2-D and 3-D and under domain decomposition. Computed only when <code>vp</code> asks for one.</div>
+    <div class="sweep-new__desc"><code>AcousticBorn</code> on the CUDA core now returns the velocity gradient too: the reflection-waveform (RWI) terms of Wu &amp; Alkhalifah (2015), in 2-D and 3-D and under domain decomposition. Computed only when <code>vp</code> asks for one.</div>
   </a>
 
   <a class="sweep-new__card" href="solver/notebooks/30_wavefield_visco_elastic/">

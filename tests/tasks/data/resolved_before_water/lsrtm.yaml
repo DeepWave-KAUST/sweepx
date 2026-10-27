@@ -34,7 +34,7 @@ geometry:
     start: 0
     stop: null
 physics:
-  equation: AcousticLSRTM
+  equation: AcousticBorn
   spatial_order: 8
   abcn: 20
   free_surface: false

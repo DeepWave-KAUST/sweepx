@@ -161,7 +161,7 @@ def test_facade_alias_is_flagged(catalog):
 def test_topography_follows_the_step_that_reads_it(catalog):
     for name in ("Acoustic", "Elastic", "AcousticCurvilinear", "ElasticCurvilinear"):
         assert catalog[name]["topography"] is True, name
-    for name in ("AcousticVTI", "AcousticLSRTM", "DASZhao"):
+    for name in ("AcousticVTI", "AcousticBorn", "DASZhao"):
         assert catalog[name]["topography"] is False, name
 
 
