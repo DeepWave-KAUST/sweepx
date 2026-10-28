@@ -68,16 +68,16 @@ hide:
     <div class="sweep-new__desc">The pure-qP <code>AcousticVTI</code> and <code>AcousticTTI</code> of Liang et al. (2023) run on <code>impl='c'</code> with full-storage and boundary-saving gradients, and gain Born / LSRTM forms, <code>AcousticVTIBorn</code> and <code>AcousticTTIBorn</code>, on both backends.</div>
   </a>
 
+  <a class="sweep-new__card" href="solver/notebooks/45_lsrtm_elastic/">
+    <div class="sweep-new__hd"><span class="sweep-new__badge">v0.3.6</span><span class="sweep-new__date">2026-10</span></div>
+    <div class="sweep-new__name">Elastic Born</div>
+    <div class="sweep-new__desc"><code>ElasticBorn</code> models Born data for the 2-D first-order elastic equation (Li et al., 2019): the scattered field is the exact derivative of the <code>Elastic</code> step, on eager and <code>impl='c'</code>, with gradients for the vp, vs and rho perturbations and, on eager, the elastic RWI background gradient. The LSRTM equations are now named Born: <code>AcousticBorn</code>, <code>AcousticBorn3D</code>, <code>AcousticVTIBorn</code>, <code>AcousticTTIBorn</code>.</div>
+  </a>
+
   <a class="sweep-new__card" href="tasks/datasets/viking/">
     <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.1</span><span class="sweep-new__date">2026-10</span></div>
     <div class="sweep-new__name">Viking, wavelet-free</div>
     <div class="sweep-new__desc">The Viking Graben walkthrough now inverts all 1001 shots at once with frequency-selection FWI: download, index, plan, six coefficient shards and one <code>sweep-tasks run</code>. No source wavelet, and under an hour on one V100.</div>
-  </a>
-
-  <a class="sweep-new__card" href="getting-started/">
-    <div class="sweep-new__hd"><span class="sweep-new__badge">sweepx 0.4.0</span><span class="sweep-new__date">2026-10</span></div>
-    <div class="sweep-new__name">One package for the toolkit</div>
-    <div class="sweep-new__desc">The task runner, the agent and the io, loss, nn and opt libraries now ship as one package, <code>sweepx</code>, from one repository. Imports change from <code>sweep_tasks</code> to <code>sweepx.tasks</code>, and likewise for the rest; the <code>sweep-tasks</code> and <code>sweep-agent</code> commands stay as they were.</div>
   </a>
 
 </div>
