@@ -13,14 +13,18 @@ from typing import Sequence
 
 from sweepx.agent.agent import Agent
 from sweepx.agent.llm.vllm_backend import (
+    CONTEXT_TOKENS,
     DEFAULT_URL,
     MODEL_ALIASES,
+    LLMServerError,
     VLLMBackend,
     backend_hint,
     default_model_for,
     detect_endpoint,
     ensure_ollama_model,
+    is_ollama,
     resolve_model,
+    served_model,
 )
 from sweepx.agent.tools import registry
 from sweepx.agent import __version__
@@ -86,7 +90,8 @@ def _build_argparser() -> argparse.ArgumentParser:
     ps.add_argument("--port", type=int, default=8000)
     ps.add_argument("--host", default="0.0.0.0")
     ps.add_argument("--gpu-memory-utilization", type=float, default=0.85)
-    ps.add_argument("--max-model-len", type=int, default=8192)
+    ps.add_argument("--max-model-len", type=int, default=CONTEXT_TOKENS,
+                    help="Context length; the agent's prompt with the tool schemas is 9-25k tokens.")
     ps.add_argument("--tensor-parallel-size", type=int, default=1)
     ps.add_argument("--dtype", default="auto", help="float16 / bfloat16 / auto")
     ps.add_argument("--extra", nargs=argparse.REMAINDER, help="Extra flags passed to `vllm serve`.")
@@ -130,7 +135,8 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     if hint is not None:
         print("[sweep-agent] " + hint, file=sys.stderr)
         return 1
-    model = args.model or os.environ.get("SWEEP_AGENT_LLM_MODEL") or default_model_for(url)
+    model = (args.model or os.environ.get("SWEEP_AGENT_LLM_MODEL")
+             or served_model(url) or default_model_for(url))
     os.environ["SWEEP_AGENT_LLM_URL"] = url
     os.environ["SWEEP_AGENT_LLM_MODEL"] = model
     os.environ["SWEEP_AGENT_MAX_STEPS"] = str(args.max_steps)
@@ -153,6 +159,9 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     ensure_ollama_model(backend.url, backend.model_id)  # one-time auto-pull on Ollama
     agent = Agent(llm=backend, max_steps=args.max_steps, tool_selector=select_tool_names)
     print(f"[sweep-agent] model={backend.model_id}  url={backend.url}")
+    if is_ollama(backend.url):
+        print(f"[sweep-agent] Ollama cuts a prompt longer than its context without a word; "
+              f"start it with OLLAMA_CONTEXT_LENGTH={CONTEXT_TOKENS}.")
     print("[sweep-agent] type your request, Ctrl-D to exit.\n")
     warmed = False
     try:
@@ -174,11 +183,14 @@ def _cmd_chat(args: argparse.Namespace) -> int:
                 # the terminal shows progress instead of a frozen prompt.
                 steps = _with_spinner(steps, "initialising the LLM (first request may take a while)…")
                 warmed = True
-            for step in steps:
-                if step.kind == "tool" and not args.quiet:
-                    print(f"  · {step.tool_name}({step.tool_args}) → {step.tool_result_json[:200]}")
-                elif step.kind == "final":
-                    print(step.message.content or "")
+            try:
+                for step in steps:
+                    if step.kind == "tool" and not args.quiet:
+                        print(f"  · {step.tool_name}({step.tool_args}) → {step.tool_result_json[:200]}")
+                    elif step.kind == "final":
+                        print(step.message.content or "")
+            except LLMServerError as exc:
+                print(f"[sweep-agent] {exc}", file=sys.stderr)
     finally:
         backend.close()
 

@@ -43,7 +43,7 @@ untouched.
 
 ## 05 — LSRTM
 
-`equation: AcousticLSRTM` is the Born-scattering variant of the acoustic
+`equation: AcousticBorn` is the Born-scattering variant of the acoustic
 equation: the background velocity stays fixed and the unknown is reflectivity.
 The runner builds the scattered data itself as `forward(true) − forward(bg)`,
 so obs is purely the reflected wavefield. Reflectivity is O(0.1), not O(1000)

@@ -3,13 +3,13 @@
 A real local LLM does everything from natural language — inspect the inputs,
 build an AcousticCurvilinear wavefield spec with the topography, run it, and
 animate the snapshots into a GIF. The model never sees Python; it just calls
-tools. Needs a vLLM server (examples/agent/start_vllm_qwen7b.sh).
+tools. Needs an LLM server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_topography_llm.py
 
-Verified end-to-end: Qwen2.5-7B-Instruct produces
-<out>/wavefield-<ts>/output/wavefield.gif (10 frames).
+The agent animates it with one animate_wavefield call: AcousticCurvilinear, a
+source just below the surface in the middle of the model, 12 frames written to
+<out>/wavefield.gif (the air above the surface masked).
 """
 
 from __future__ import annotations

@@ -48,3 +48,23 @@ def test_topography_forward_endtoend(tmp_path):
     assert b.ok and "error" not in b.value, b.value
     r = registry.get("run_task").invoke({"yaml_path": b.value["yaml_path"], "timeout_s": 150})
     assert r.value.get("state") == "success", r.value
+
+
+def test_explicit_points_follow_the_topography(tmp_path):
+    """sweep takes physical rows, so a depth under a topography is measured
+    from the surface of its column: the x-fraction source and its receivers."""
+    pytest.importorskip("sweepx.tasks")
+    vp = tmp_path / "vp.npy"
+    np.save(vp, np.full((80, 120), 2500.0, dtype=np.float32))
+    topo = _hill_topo(tmp_path / "topo.npy", 120)
+    res = registry.get("build_forward_spec").invoke({
+        "vp_path": str(vp), "dh": 10.0, "dt": 0.001, "nt": 40,
+        "equation": "AcousticCurvilinear", "topography": topo, "free_surface": True,
+        "source_x_frac": 0.5, "source_depth": 1, "receiver_step": 10, "receiver_depth": 0,
+        "output_dir": str(tmp_path / "r"), "task_id": "topo_x",
+    })
+    assert res.ok and "error" not in res.value, res.value
+    g = res.value["spec"]["geometry"]
+    surf = np.load(topo)
+    assert [list(p) for p in g["sources"]] == [[60, int(surf[60]) + 1]]
+    assert all(z == surf[x] for x, z in g["receivers"])

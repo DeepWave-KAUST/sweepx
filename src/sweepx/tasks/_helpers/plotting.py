@@ -529,8 +529,8 @@ def _dump_receiver_rotation_qc(
 
 def _lsrtm_background_equation(lsrtm_name: str) -> str:
     mapping = {
-        "AcousticLSRTM": "Acoustic",
-        "AcousticLSRTM3D": "Acoustic3D",
+        "AcousticBorn": "Acoustic",
+        "AcousticBorn3D": "Acoustic3D",
     }
     if lsrtm_name not in mapping:
         raise ValueError(

@@ -17,13 +17,17 @@ def plot_snapshot(
     perc: float = 99.5,
     cmap: str = "RdBu_r",
     title: str | None = None,
+    aspect: str = "equal",
 ) -> Axes:
-    """Single wavefield snapshot."""
+    """Single wavefield snapshot.
+
+    ``aspect="equal"`` keeps a circular wavefront circular; ``"auto"`` stretches
+    the field to fill the axes (see :func:`compare_snapshots`)."""
     field = np.asarray(field)
     if field.ndim != 2:
         raise ValueError(f"plot_snapshot expects 2-D; got shape {field.shape}")
     if ax is None:
-        _, ax = plt.subplots(figsize=(7, 4))
+        _, ax = plt.subplots(figsize=_snapshot_figsize(field.shape))
     s = np.percentile(np.abs(field), perc) + 1e-30
     extent = None
     if dh is not None:
@@ -32,10 +36,17 @@ def plot_snapshot(
         extent = (0.0, nx * dx, nz * dz, 0.0)
         ax.set_xlabel("x (m)")
         ax.set_ylabel("z (m)")
-    ax.imshow(field, cmap=cmap, vmin=-s, vmax=s, aspect="auto", extent=extent)
+    ax.imshow(field, cmap=cmap, vmin=-s, vmax=s, aspect=aspect, extent=extent)
     if title is not None:
         ax.set_title(title)
     return ax
+
+
+def _snapshot_figsize(shape, width: float = 6.0) -> tuple[float, float]:
+    """A figure whose axes follow the field's own nz:nx, so an equal-aspect
+    snapshot fills it instead of floating in white margins."""
+    nz, nx = shape[-2:]
+    return width, max(2.5, min(width * nz / max(nx, 1) + 0.6, 9.0))
 
 
 def animate_snapshots(
@@ -61,7 +72,7 @@ def animate_snapshots(
 
     rendered: list[np.ndarray] = []
     for frame in frames:
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        fig, ax = plt.subplots(figsize=_snapshot_figsize(np.shape(frame)), dpi=100)
         plot_snapshot(frame, dh=dh, ax=ax, perc=perc, cmap=cmap)
         fig.canvas.draw()
         rgb = np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
@@ -152,7 +163,7 @@ def plot_snapshot_topography(
     ax: Axes | None = None,
     sources=None,
     receivers=None,
-    curvilinear: bool = True,
+    curvilinear: bool = False,
     perc: float = 99.0,
     cmap: str = "RdBu_r",
     title: str | None = None,
@@ -160,17 +171,19 @@ def plot_snapshot_topography(
     """Wavefield snapshot under irregular topography: air masked white, topo line
     + source (red star) / receiver (yellow ▼) markers overlaid.
 
-    ``curvilinear=True`` resamples a computational-grid field back to physical
-    coordinates (AcousticCurvilinear); ``False`` just masks the air for a field
-    already on the physical grid (image method). Source/receiver positions are
-    (x, depth_below_local_surface) pairs; the depth is added to topo[x]."""
+    sweep returns snapshots on the physical grid, curvilinear equations
+    included, so by default the air is only masked. ``curvilinear=True``
+    resamples a snapshot taken on the boundary-fitted grid
+    (``snapshot_grid='computational'``) onto the physical grid first.
+    Source/receiver positions are (x, depth_below_local_surface) pairs; the
+    depth is added to topo[x]."""
     field = np.asarray(field)
     topo = np.asarray(topo)
     phys = _curvilinear_to_physical(field, topo) if curvilinear else _mask_air(field, topo)
     if ax is None:
-        _, ax = plt.subplots(figsize=(8, 4))
+        _, ax = plt.subplots(figsize=_snapshot_figsize(phys.shape, width=8.0))
     s = np.nanpercentile(np.abs(phys), perc) + 1e-30
-    ax.imshow(phys, cmap=cmap, vmin=-s, vmax=s, aspect="auto")
+    ax.imshow(phys, cmap=cmap, vmin=-s, vmax=s, aspect="equal")
     x = np.arange(len(topo))
     ax.plot(x, topo, "k-", lw=1.3)
     ax.fill_between(x, 0, topo, color="white", zorder=2)
@@ -197,7 +210,7 @@ def animate_snapshots_topography(
     *,
     sources=None,
     receivers=None,
-    curvilinear: bool = True,
+    curvilinear: bool = False,
     fps: int = 8,
     perc: float = 99.0,
     cmap: str = "RdBu_r",
@@ -213,7 +226,7 @@ def animate_snapshots_topography(
         ) from e
     rendered: list[np.ndarray] = []
     for frame in frames:
-        fig, ax = plt.subplots(figsize=(8, 4.5), dpi=100)
+        fig, ax = plt.subplots(figsize=_snapshot_figsize(np.shape(frame), width=8.0), dpi=100)
         plot_snapshot_topography(frame, topo, ax=ax, sources=sources, receivers=receivers,
                                  curvilinear=curvilinear, perc=perc, cmap=cmap)
         fig.canvas.draw()

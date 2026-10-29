@@ -5,16 +5,21 @@
 `pip install sweepx` brings the `sweep-agent` CLI, the ~30-tool registry, the core
 solver and the production runner (`sweepx.tasks`). Discovery, inspection, plotting,
 **forward modelling (acoustic + elastic)**, **benchmark models** and FWI / LSRTM
-(`build_*_spec`, `run_task`, `run_fwi`, `run_multiscale_fwi`, …) all work.
+(`build_*_spec`, `run_task`, `run_fwi`, `run_multiscale_fwi`, …) all work. The
+simulations take the GPU when the machine has one — the CUDA kernels for the
+equations that have them, eager torch for the rest and for wavefield snapshots —
+and the CPU or Apple's MPS otherwise; `device` / `backend_impl` override that.
 
 A tool whose dependencies fail to import returns `{"error": "… is not importable"}`
 rather than crashing — the agent stays up, and tools not offered this turn are
-rejected (no hallucinated calls).
+rejected (no hallucinated calls). An argument a tool does not take is an error
+that names the tool's arguments, so a misspelt one is never dropped silently.
 
 ## LLM backends
 
-Chat needs any **OpenAI-compatible** endpoint. `chat` / `ui` are **zero-config by
-default** (auto-detect Ollama / vLLM, pick a 7B, pull on first run). To switch to
+Chat needs any **OpenAI-compatible** endpoint with a 32k-token context. `chat` /
+`ui` are **zero-config by default** (auto-detect Ollama / vLLM, use the model the
+server serves; on Ollama pick a 7B and pull it on first run). To switch to
 any other backend — a remote vLLM, a hosted endpoint, llama.cpp, LM Studio — pass
 `--url` / `--model` / `--api-key`, or set the environment variables:
 

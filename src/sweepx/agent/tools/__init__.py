@@ -8,40 +8,12 @@ JSON-serializable result. Tools self-register via :func:`register` so importing
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Type
 
 from pydantic import BaseModel, ValidationError
-
-
-# Tools that work on a base install (no ``sweepx.tasks``). When sweepx.tasks is not
-# importable, ONLY these are offered to the LLM (see ``Registry.openai_specs``), so
-# it never picks a tool that fails with "sweepx.tasks is not importable". Everything
-# else routes through ``sweepx.tasks.TaskRunner`` — the build_*_spec / run_task /
-# describe_task_schema tools and the orchestrators + plotters that call them.
-_CORE_SAFE_TOOLS = frozenset({
-    "inspect_file", "check_parameters", "make_synthetic_model", "list_equations",
-    "run_forward_sweep", "read_status", "list_artifacts",
-    "plot_velocity_model", "plot_velocity_slice", "plot_wavelet", "compare_shot_gathers",
-    "list_benchmark_models", "get_benchmark_model",
-})
-
-_sweep_tasks_ok: bool | None = None
-
-
-def _sweep_tasks_available() -> bool:
-    """Whether ``sweepx.tasks`` (the production runner) is importable — cached."""
-    global _sweep_tasks_ok
-    if _sweep_tasks_ok is None:
-        # sweepx.tasks ships in the same distribution as the agent, so this is
-        # True in any install. (In the separate-package days it gated the
-        # tasks-only tools off on a base `sweep-agent` install.)
-        spec = importlib.util.find_spec("sweepx.tasks")
-        _sweep_tasks_ok = spec is not None and spec.loader is not None
-    return _sweep_tasks_ok
 
 
 @dataclass
@@ -77,6 +49,13 @@ class Tool:
         }
 
     def invoke(self, raw_args: dict[str, Any]) -> ToolResult:
+        # An argument the tool does not take is an error, not dropped: a
+        # misspelt optional one would otherwise run on its default unnoticed.
+        unknown = sorted(set(raw_args or {}) - set(self.params_model.model_fields))
+        if unknown:
+            return ToolResult(ok=False, error=(
+                f"{self.name} takes no argument(s) {unknown}; its arguments are "
+                f"{sorted(self.params_model.model_fields)}."))
         try:
             args = self.params_model.model_validate(raw_args)
         except ValidationError as exc:
@@ -104,15 +83,9 @@ class Registry:
     def openai_specs(self, names: list[str] | None = None) -> list[dict[str, Any]]:
         """OpenAI tool specs. If ``names`` is given, only those tools (in registry
         order) — used for per-query tool subsetting to keep the small model's
-        choice space (and the prompt) small. When ``sweepx.tasks`` is not installed,
-        the tools that need it are dropped so the LLM never picks a failing path."""
-        core_only = not _sweep_tasks_available()
+        choice space (and the prompt) small."""
         keep = None if names is None else set(names)
-        return [
-            t.openai_spec()
-            for n, t in self.tools.items()
-            if (keep is None or n in keep) and (not core_only or n in _CORE_SAFE_TOOLS)
-        ]
+        return [t.openai_spec() for n, t in self.tools.items() if keep is None or n in keep]
 
     def names(self) -> list[str]:
         return list(self.tools)

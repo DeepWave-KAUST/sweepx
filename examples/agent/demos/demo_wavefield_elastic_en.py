@@ -2,9 +2,9 @@
 
 English counterpart of demo_wavefield_elastic_llm.py. From plain English the
 model recognises the three elastic parameter files need the Elastic equation,
-centres the source, and animates the P- and S-wave rings. Needs a vLLM server.
+centres the source (a vertical force, which radiates both P and S), and animates
+the P- and S-wave rings. Needs an LLM server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_wavefield_elastic_en.py
 """
 

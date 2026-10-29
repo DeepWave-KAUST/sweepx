@@ -14,10 +14,10 @@ whether a fused CUDA kernel exists for that equation, and whether **this**
 build has it compiled. That is how you find out that `backend.impl: c` will
 fall over for your equation before a three-hour job finds out for you.
 
-On sweep-solver 0.3.5 it returns **39 equations**. 26 have the fused kernel;
-the other 13 — `AcousticVTI` among them, which is why
-[16](multiparameter.md) runs on `eager` — are eager-only. Only three take `vp`
-alone (`Acoustic`, `Acoustic3D`, `AcousticCurvilinear`):
+On sweep-solver 0.3.6 it returns **43 equations**. 34 have the fused kernel;
+the other 9 — `ElasticTTI`, `Biot` and the two curvilinear equations among
+them — are eager-only. Only three take `vp` alone (`Acoustic`, `Acoustic3D`,
+`AcousticCurvilinear`):
 
 ```json
 {"name": "Elastic",       "models": ["vp", "vs", "rho"], ...}

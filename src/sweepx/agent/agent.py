@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Iterator
 
 from sweepx.agent.llm.base import BaseLLM, ChatMessage
@@ -40,6 +42,67 @@ def _looks_like_narration(text) -> bool:
     meant to call a tool but forgot to emit the call."""
     t = (text or "").strip().lower()
     return bool(t) and any(h in t for h in _ACTION_HINTS)
+
+
+# A weak model may end a turn saying "the GIF is at …/wavefield.gif" when no tool
+# made one, or name a file that does not exist. Checked once per turn on the final
+# reply: files it names must exist, and a request for a figure must have produced
+# one.
+_FIGURE_SUFFIXES = (".png", ".gif", ".mp4", ".jpg", ".jpeg", ".svg", ".pdf")
+_FILE_IN_TEXT = re.compile(r"[\w~./\\:-]+\.(?:png|gif|mp4|jpe?g|svg|pdf)\b", re.IGNORECASE)
+_FIGURE_WORDS = (
+    "plot", "figure", "image", "draw", "gif", "anim", "movie", "picture", "visuali",
+    "画", "图", "动画", "可视化",
+)
+
+
+def _figures_in(result_json: str) -> set[str]:
+    """Figure files a tool result names that exist on disk."""
+    try:
+        data = json.loads(result_json)
+    except (ValueError, TypeError):
+        return set()
+    found: set[str] = set()
+
+    def walk(v) -> None:
+        if isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+        elif isinstance(v, str) and v.lower().endswith(_FIGURE_SUFFIXES) and Path(v).expanduser().is_file():
+            found.add(str(Path(v).expanduser().resolve()))
+
+    walk(data)
+    return found
+
+
+def _missing_figures(reply: str, produced: set[str]) -> list[str]:
+    """Figure files the reply names that do not exist and no tool made."""
+    made = {Path(p).name for p in produced}    # "saved as gather.png" is fine
+    return sorted({m for m in _FILE_IN_TEXT.findall(reply or "")
+                   if not Path(m).expanduser().is_file() and Path(m).name not in made})
+
+
+def _figure_check(user_message: str, reply: str, produced: set[str]) -> str | None:
+    """A nudge when the final reply names figure files that do not exist, or the
+    user asked for a figure and no tool made one this turn; None when it is fine."""
+    missing = _missing_figures(reply, produced)
+    if missing:
+        return (
+            f"Your reply names {missing}, which do not exist: no tool wrote them. Report only "
+            "files a tool returned. If the user asked for a figure or an animation, call the "
+            "tool that makes it now; otherwise answer without file paths."
+        )
+    asked = any(w in (user_message or "").lower() for w in _FIGURE_WORDS)
+    if asked and not produced:
+        return (
+            "The user asked for a figure or an animation, but no tool made one this turn. "
+            "Call the tool that produces it now (for example run_forward_and_plot, "
+            "animate_wavefield, run_fwi or a plot_* tool) instead of describing it."
+        )
+    return None
 
 
 def _english_reply_pin(text) -> str:
@@ -177,6 +240,8 @@ class Agent:
         call_counts: dict[str, int] = {}
         tool_used = False
         nudged = False
+        figure_checked = False
+        produced: set[str] = set()
 
         for _ in range(self.max_steps):
             self._prune_history()  # keep the request under the context window
@@ -192,6 +257,18 @@ class Agent:
                     nudged = True
                     self.history.append(ChatMessage(role="user", content=_NUDGE_CALL_TOOL))
                     continue
+                nudge = None if figure_checked else _figure_check(user_message, assistant.content, produced)
+                if nudge is not None:
+                    figure_checked = True
+                    self.history.append(ChatMessage(role="user", content=nudge))
+                    continue
+                if figure_checked:
+                    # Nudged once and it still names files nobody wrote: say so,
+                    # rather than hand the user a path that does not exist.
+                    missing = _missing_figures(assistant.content, produced)
+                    if missing:
+                        assistant.content = ((assistant.content or "").rstrip()
+                                             + f"\n\n[sweep-agent] No tool wrote {', '.join(missing)} in this turn.")
                 yield AgentStep(kind="final", message=assistant)
                 return
 
@@ -221,14 +298,13 @@ class Agent:
                         )
                     }, ensure_ascii=False)
                 elif call.name not in exposed_names:
-                    # Hallucinated / gated-out tool: it was NOT offered this turn.
-                    # Don't execute it (it may need an unreleased tier) — tell the
-                    # model to pick a real one instead of leaking a dependency error.
+                    # A tool that was NOT offered this turn (hallucinated, or left
+                    # out by the per-turn selection): don't run it; name the ones
+                    # that were offered.
                     result_json = json.dumps({
                         "error": (
-                            f"'{call.name}' is not an available tool in this installation "
-                            f"(it may require the unreleased sweepx.tasks tier, which is not present). "
-                            f"Do not call it again. Available tools: {sorted(exposed_names)}."
+                            f"'{call.name}' is not offered for this request. Do not call it "
+                            f"again; pick one of the available tools: {sorted(exposed_names)}."
                         )
                     }, ensure_ascii=False)
                 elif (tool := self.tools.get(call.name)) is None:
@@ -239,6 +315,7 @@ class Agent:
                 else:
                     result = tool.invoke(call.arguments)
                     result_json = result.to_json()
+                    produced |= _figures_in(result_json)
 
                 # History keeps a trimmed copy (no giant spec dicts) to protect
                 # the context window; the yielded step carries the FULL result so

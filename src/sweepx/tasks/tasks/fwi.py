@@ -358,6 +358,7 @@ class FWIRunnerMixin:
         else:
             sources, receivers = _build_geometry_2d(
                 spec.geometry, shape, dh=spec.grid.dh, segy_cache=segy_cache,
+                topography=spec.physics.topography,
             )
             nshots = int(sources.shape[0])
 
@@ -536,7 +537,8 @@ class FWIRunnerMixin:
                 print(f"[reparam] init_optimizer_from: Adam state <- {_op} "
                       f"(tensors={len(_st)}, step={_step})", flush=True)
         else:
-            optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names)
+            optimizer = _build_optimizer(spec.optimizer, inv_by_name, required_names,
+                                         model_bounds=spec.model_bounds)
         scheduler = None
         initial_lrs = _remember_initial_lrs(optimizer)
 
@@ -979,6 +981,12 @@ class FWIRunnerMixin:
                     water_mask=_pin_mask,
                 )
                 losses.append(loss_value)
+                if not np.isfinite(loss_value):
+                    raise FloatingPointError(
+                        f"loss is {loss_value} at stage {stage_idx} epoch {epoch_global}: "
+                        f"the inversion diverged (try a smaller optimizer.lr, or "
+                        f"initial_step for lbfgs); stopping instead of carrying a "
+                        f"non-finite model on")
                 # the lr this step used, read before the scheduler moves it
                 step_lr = optimizer_lr(state["optimizer"])
                 if scheduler is not None:
@@ -1555,6 +1563,12 @@ class FWIRunnerMixin:
             int(stage_batchsize) if stage_batchsize is not None else int(spec.batchsize),
             nshots,
         )
+        if spec.optimizer.kind == "lbfgs" and global_batchsize < nshots:
+            raise ValueError(
+                f"L-BFGS builds its curvature from successive gradients of one misfit, "
+                f"but a batch of {global_batchsize} of the {nshots} shots is a new misfit "
+                f"every epoch, which sends the model to unphysical velocities. Set "
+                f"batchsize to {nshots}, or use adam / sgd for shot batches.")
 
         # Rank 0 picks the global shot indices, then broadcasts.
         if dist_info.is_root:
@@ -1698,7 +1712,11 @@ class FWIRunnerMixin:
                 if reparam_net is None:
                     zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
+            # max_iter L-BFGS iterations per epoch; the epoch's loss is the one
+            # at its start, as for every other optimizer.
             result = optimizer.step(_closure)
+            for _ in range(spec.optimizer.max_iter - 1):
+                optimizer.step(_closure)
             return float(result) if result is not None else 0.0
 
         # Adam / SGD path. Two top-level branches:

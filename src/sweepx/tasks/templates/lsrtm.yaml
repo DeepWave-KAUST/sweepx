@@ -10,7 +10,7 @@
 # LSRTM = least-squares reverse-time migration. Inverts for a REFLECTIVITY
 # image that, when Born-modeled through the smooth `background_model`,
 # best matches data generated from `true_model`. Two solvers run internally:
-# AcousticLSRTM (foreground/perturbation) + Acoustic (background).
+# AcousticBorn (foreground/perturbation) + Acoustic (background).
 #
 # ┌─ HOW TO READ THIS FILE ────────────────────────────────────────────────┐
 # │ • UNCOMMENTED = active example (Marmousi 2-D synthetic LSRTM). Runs     │
@@ -66,7 +66,7 @@ geometry:
 # ═══ Wave-equation physics ════════════════════════════════════════════════════
 
 physics:
-  equation: AcousticLSRTM            # LSRTM foreground solver (NOT plain Acoustic);
+  equation: AcousticBorn             # LSRTM foreground solver (NOT plain Acoustic);
                                      # the runner derives the Acoustic background from it
   spatial_order: 8
   abcn: 20
@@ -122,7 +122,9 @@ optimizer:
   # eps: 1.0e-16
 # ── ALTERNATIVES ──
 # optimizer: {kind: sgd, lr: 0.02, momentum: 0.9}
-# optimizer: {kind: lbfgs, lr: 1.0, max_iter: 20, line_search_fn: strong_wolfe}
+# optimizer: {kind: lbfgs, initial_step: 0.002}   # the first step in the image's units:
+#             it starts at zero, so 'auto' has no scale to take; max_iter iterations
+#             per epoch (default 1).
 
 # ═══ LR scheduler ═════════════════════════════════════════════════════════════
 # Discriminated on `kind`: constant | step | exp | cosine

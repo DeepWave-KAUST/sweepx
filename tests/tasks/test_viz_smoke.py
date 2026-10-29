@@ -68,3 +68,26 @@ def test_metrics_self_compare_is_identity():
     assert snr_db(a, a) > 100
     assert ssim(a, a) > 0.999
     assert psnr_db(a, a) > 100
+
+
+def test_topography_snapshot_is_masked_not_resampled():
+    """sweep returns curvilinear snapshots on the physical grid: the default
+    view masks the air and leaves the medium as it is."""
+    from sweepx.tasks.viz.wavefield import plot_snapshot_topography
+
+    topo = np.array([2, 3, 4, 3, 2])
+    field = np.arange(40, dtype=float).reshape(8, 5)
+    ax = plot_snapshot_topography(field, topo)
+    shown = np.ma.getdata(ax.images[0].get_array()).astype(float)
+    below = np.arange(8)[:, None] >= topo[None, :]
+    assert np.isnan(shown[~below]).all()
+    assert np.array_equal(shown[below], field[below])
+    plt.close(ax.figure)
+
+
+def test_snapshot_keeps_a_circle_round():
+    from sweepx.tasks.viz.wavefield import plot_snapshot
+
+    ax = plot_snapshot(np.zeros((40, 80)))
+    assert ax.get_aspect() == 1.0          # was "auto": a 1:2 field stretched to the axes
+    plt.close(ax.figure)

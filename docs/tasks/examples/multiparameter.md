@@ -1,7 +1,7 @@
 # Anisotropic and elastic
 
-Every other example pins `equation: Acoustic` or `Acoustic3D` — two of the 39
-equations sweep-solver 0.3.5 registers, and two of only three that take `vp`
+Every other example pins `equation: Acoustic` or `Acoustic3D` — two of the 43
+equations sweep-solver 0.3.6 registers, and two of only three that take `vp`
 alone. These two show the pattern for all the rest:
 
 * **`models:` must list every model the equation declares**, by name, and the

@@ -124,7 +124,6 @@ plugins:
               - "!^FIELD_SPECS$"
               - "!^MODEL_SPECS$"
               - "!^default_pml_type$"
-              - "!^supports_apm$"
 
 # Top-level tabs. Home is the SWEEPX hero; each package is imported from its
 # own repo. Order here = tab order.

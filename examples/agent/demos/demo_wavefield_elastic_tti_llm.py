@@ -4,10 +4,9 @@ Mirrors the notebook ``10_wavefield_elastic_tti.ipynb`` (shrunk so it runs on a
 CPU in seconds) but driven by natural language. The ElasticTTI equation needs
 EIGHT model files — vp0, vs0, rho and the Thomsen parameters epsilon/delta/gamma
 plus the tilt angles theta/phi (radians). The model inspects them, recognises
-this is elastic-TTI, and animates the tilted P/S wavefronts in one shot. Needs a
-vLLM server (examples/agent/start_vllm_qwen7b.sh).
+this is elastic-TTI, and animates the tilted P/S wavefronts in one shot. Needs an
+LLM server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_wavefield_elastic_tti_llm.py
 
 NOTE: ElasticTTI is the heaviest single-wavefield demo here (8 models). The

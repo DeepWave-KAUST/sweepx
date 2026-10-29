@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from sweepx.agent.tools import register
-from sweepx.agent.tools.build_forward import _physics_source_fields, _resolve_geometry
+from sweepx.agent.tools.build_forward import _absolute_paths, _physics_source_fields, _resolve_geometry
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -68,16 +68,25 @@ class BuildFwiParams(BaseModel):
     source_step: int = Field(50, ge=1)
     source_depth: int = Field(1, ge=0)
     receiver_step: int = Field(1, ge=1)
-    receiver_depth: int = Field(18, ge=0)
+    receiver_depth: int = Field(4, ge=0)
 
     # --- inversion --------------------------------------------------------
     optimizer: Literal["adam", "sgd", "lbfgs"] = Field("adam", description="Optimizer.")
-    lr: float = Field(10.0, gt=0, description="Learning rate. For vp with Adam O(10) m/s/step is typical; LBFGS uses ~1.")
+    lr: float = Field(
+        10.0, gt=0,
+        description=(
+            "Step size in m/s. Adam/SGD: the learning rate (O(10) for vp). L-BFGS: the size of "
+            "its first step (O(10)); later steps come from the curvature."
+        ),
+    )
     loss: Literal["mse", "l1", "huber", "trace_cosine"] = Field("mse", description="Misfit functional.")
     epochs: int = Field(30, ge=1, description="Number of inversion iterations.")
-    batchsize: int = Field(1, ge=1, description="Shots per batch.")
-    vp_min: float | None = Field(None, description="Lower clamp on vp (m/s) after each step, e.g. 1500.")
-    vp_max: float | None = Field(None, description="Upper clamp on vp (m/s), e.g. 4700.")
+    batchsize: int | None = Field(
+        None, ge=1,
+        description="Shots per epoch. None = every shot: each epoch is one full-gradient step (L-BFGS needs that).",
+    )
+    vp_min: float | None = Field(None, description="Lower clamp on vp (m/s) after each step. None = 0.75 x the initial model's minimum.")
+    vp_max: float | None = Field(None, description="Upper clamp on vp (m/s). None = 1.75 x the initial model's maximum.")
 
     # --- physics / backend ------------------------------------------------
     spatial_order: int = Field(8)
@@ -86,17 +95,28 @@ class BuildFwiParams(BaseModel):
     source_type: list[str] | None = Field(None, description="Source field components; None = equation defaults (Elastic→sxx/szz, etc.).")
     receiver_type: list[str] | None = Field(None, description="Receiver field components; None = equation defaults.")
     pml_type: str | None = Field(None, description="PML kind. Leave None: each equation has one (acoustic→cpmlr, Elastic/VTI-3D→cpmls) and sweep refuses any other.")
-    backend_impl: Literal["eager", "c"] = Field("eager")
+    backend_impl: Literal["auto", "eager", "c"] = Field(
+        "auto",
+        description="`auto` (default) = the CUDA kernels (`c`) on an NVIDIA GPU for an equation that has them, else `eager`.",
+    )
     use_compile: bool = Field(False, description="torch.compile the eager step (needs sweep.torch + inductor). Default off.")
 
     # --- io ---------------------------------------------------------------
     output_dir: str = Field("./sweep_runs")
     task_id: str | None = Field(None)
-    device: str = Field("cpu", description="Simulation device: 'cpu', 'cuda' (NVIDIA GPU) or 'mps' (Apple Silicon GPU). Defaults to cpu because the GPU is usually held by the LLM. Use 'cuda' only when an NVIDIA GPU is free; on a Mac use 'mps' — 'cuda' is NOT available there and will fail.")
+    device: str = Field("auto", description="Simulation device: 'auto' (default: the NVIDIA GPU if there is one, else Apple's MPS, else the CPU), 'cuda', 'mps' or 'cpu'. A local LLM server may hold most of the same GPU; if the run runs out of GPU memory, lower the server's share or pass 'cpu'.")
     seed: int = Field(0)
     show_every: int = Field(10)
     save_yaml: bool = Field(True)
     extra: dict[str, Any] | None = Field(None, description="Deep-merged overrides for FWISpec fields not exposed here (stages, data_plan, reparam, scheduler, ...).")
+
+
+def _shot_count(geometry: dict[str, Any], shape: tuple[int, ...]) -> int:
+    """Shots in a geometry from _resolve_geometry: a line, or explicit points."""
+    if geometry["kind"] == "line":
+        src = geometry["sources"]
+        return len(range(src.get("start", 0), src.get("stop") or shape[-1], src["step"]))
+    return len(geometry["sources"])
 
 
 def _resolve_init_models(p: BuildFwiParams) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -177,8 +197,11 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
     except ImportError as exc:
         return {"error": f"sweepx.tasks is not importable: {exc}"}
 
-    from sweepx.agent.tools.build_forward import _device_unavailable_reason, _resolve_nt
+    from sweepx.agent.tools.build_forward import (
+        _auto_device, _auto_impl, _device_unavailable_reason, _resolve_nt,
+    )
 
+    args.device = _auto_device(args.device)
     dev_err = _device_unavailable_reason(args.device)
     if dev_err is not None:
         return {"error": dev_err}
@@ -190,25 +213,32 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
     init_block, err = _resolve_init_models(args)
     if err is not None:
         return err
+    args.backend_impl = _auto_impl(args.backend_impl, args.device, args.equation)
     obs, obs_kind, err = _resolve_obs(args)
     if err is not None:
         return err
 
     import numpy as _np
     try:
-        init_shape = tuple(_np.load(args.init_model_path, mmap_mode="r").shape)
+        init = _np.load(args.init_model_path, mmap_mode="r")
     except Exception as exc:
         return {"error": f"could not read shape of init_model_path '{args.init_model_path}': {exc}"}
+    init_shape = tuple(init.shape)
     try:
         geometry = _resolve_geometry(args, init_shape)
     except ValueError as exc:
         return {"error": str(exc)}
+    # Safe defaults: every shot each epoch, and vp kept in a band around the
+    # starting model (a free model can run off to unphysical, even negative, vp).
+    batchsize = args.batchsize if args.batchsize is not None else _shot_count(geometry, init_shape)
+    vp_min = args.vp_min if args.vp_min is not None else round(0.75 * float(init.min()), 1)
+    vp_max = args.vp_max if args.vp_max is not None else round(1.75 * float(init.max()), 1)
 
     delay = args.wavelet_delay if args.wavelet_delay is not None else 1.0 / args.fm
     opt = {
         "adam": {"kind": "adam", "lr": args.lr},
         "sgd": {"kind": "sgd", "lr": args.lr},
-        "lbfgs": {"kind": "lbfgs", "lr": args.lr},
+        "lbfgs": {"kind": "lbfgs", "initial_step": args.lr},
     }[args.optimizer]
 
     spec: dict[str, Any] = {
@@ -232,24 +262,19 @@ def build_fwi_spec(args: BuildFwiParams) -> dict[str, Any]:
         "optimizer": opt,
         "loss": {"kind": args.loss},
         "epochs": args.epochs,
-        "batchsize": args.batchsize,
+        "batchsize": batchsize,
         "show_every": args.show_every,
         **init_block,
     }
     if args.backend_impl == "eager":
         spec["backend"]["eager_options"] = {"use_compile": args.use_compile}
-    if args.vp_min is not None or args.vp_max is not None:
-        b: dict[str, Any] = {"enabled": True}
-        if args.vp_min is not None:
-            b["min"] = args.vp_min
-        if args.vp_max is not None:
-            b["max"] = args.vp_max
-        spec["model_bounds"] = {"vp": b}
+    spec["model_bounds"] = {"vp": {"enabled": True, "min": vp_min, "max": vp_max}}
     if args.task_id is not None:
         spec["task_id"] = args.task_id
     if args.extra:
         spec = _deep_merge(spec, args.extra)
 
+    spec = _absolute_paths(spec)
     try:
         spec_obj = FWISpec.model_validate(spec)
     except Exception as exc:

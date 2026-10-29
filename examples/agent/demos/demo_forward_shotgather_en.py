@@ -2,10 +2,9 @@
 
 English-language counterpart of demo_forward_shotgather_llm.py. The local LLM
 inspects the velocity model, runs a forward simulation, and plots the synthetic
-shot gather — all from a plain-English request, no tool/equation names. Needs a
-vLLM server (examples/agent/start_vllm_qwen7b.sh).
+shot gather — all from a plain-English request, no tool/equation names. Needs an
+LLM server (examples/agent/start_vllm_qwen7b.sh).
 
-    export SWEEP_AGENT_LLM_URL=http://localhost:8001/v1
     python examples/agent/demos/demo_forward_shotgather_en.py
 """
 

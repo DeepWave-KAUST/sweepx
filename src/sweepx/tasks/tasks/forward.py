@@ -103,7 +103,8 @@ class ForwardRunnerMixin:
             spec.physics, spec.backend, shape, spec.grid.dh, spec.time.dt, spec.time.nt, dev
         )
         wavelet = _build_wavelet(spec.wavelet, spec.time)
-        sources, receivers = _build_geometry_2d(spec.geometry, shape)
+        sources, receivers = _build_geometry_2d(spec.geometry, shape,
+                                                topography=spec.physics.topography)
         models = _solver_models_in_order(equation_cls, spec.models, base_dir=None, dev=dev)
 
         print(f"[forward] equation={spec.physics.equation} shape={shape} "
@@ -179,7 +180,8 @@ class ForwardRunnerMixin:
             spec.physics, spec.backend, shape, spec.grid.dh, spec.time.dt, spec.time.nt, dev
         )
         wavelet = _build_wavelet(spec.wavelet, spec.time)
-        sources, receivers = _build_geometry_2d(spec.geometry, shape)
+        sources, receivers = _build_geometry_2d(spec.geometry, shape,
+                                                topography=spec.physics.topography)
         models = _solver_models_in_order(equation_cls, spec.models, base_dir=None, dev=dev)
 
         print(f"[wavefield] equation={spec.physics.equation} shape={shape} "
@@ -211,8 +213,12 @@ class ForwardRunnerMixin:
         out_dir = task_dir / "output"
         record_path = out_dir / "record.npy"
         snapshots_path = out_dir / "snapshots.npy"
+        sources_path = out_dir / "sources.npy"
+        receivers_path = out_dir / "receivers.npy"
         np.save(record_path, record_np)
         np.save(snapshots_path, snapshots_np)
+        np.save(sources_path, sources)
+        np.save(receivers_path, receivers)
         # After both saves (see _run_forward). The snapshots are taken inside
         # the grid, PML included, so they also name the field and the time
         # step where the blow-up shows, which the record alone cannot.
@@ -231,7 +237,7 @@ class ForwardRunnerMixin:
                         "field": field_names}),
         )
 
-        artifacts: list[Path] = [record_path, snapshots_path]
+        artifacts: list[Path] = [record_path, snapshots_path, sources_path, receivers_path]
         if spec.plot:
             try:
                 # Background for the snapshots: the velocity model the wave is

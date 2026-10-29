@@ -109,6 +109,7 @@ def _inspect_segy(path: Path) -> dict[str, Any]:
         n_traces = f.tracecount
         n_samples = f.samples.size
         dt_us = int(f.bin[segyio.BinField.Interval])
+        geometry = _segy_geometry(f, segyio)
     return {
         "format": "segy",
         "ntraces": n_traces,
@@ -116,7 +117,34 @@ def _inspect_segy(path: Path) -> dict[str, Any]:
         "dt_seconds": dt_us / 1e6,
         "total_duration_seconds": (n_samples - 1) * dt_us / 1e6,
         "size_mb": round(path.stat().st_size / 1024 / 1024, 3),
-        "hint": "SEG-Y shot data — typically observed seismic; needs --geometry info to map to shots",
+        **geometry,
+        "hint": "SEG-Y shot data — typically observed seismic; the geometry is read from the trace headers",
+    }
+
+
+def _segy_geometry(f, segyio) -> dict[str, Any]:
+    """Shots, receivers per shot and the x extents, from the trace headers
+    (SourceX / GroupX, scaled by SourceGroupScalar). Empty when the headers
+    carry no coordinates."""
+    tf = segyio.TraceField
+    sx = np.asarray(f.attributes(tf.SourceX)[:], dtype=float)
+    sy = np.asarray(f.attributes(tf.SourceY)[:], dtype=float)
+    gx = np.asarray(f.attributes(tf.GroupX)[:], dtype=float)
+    scal = np.asarray(f.attributes(tf.SourceGroupScalar)[:], dtype=float)
+    if not (np.any(sx) or np.any(gx)):
+        return {"geometry": "no source/receiver coordinates in the trace headers"}
+    factor = np.where(scal < 0, 1.0 / np.abs(np.where(scal == 0, 1.0, scal)),
+                      np.where(scal > 0, scal, 1.0))
+    sx, sy, gx = sx * factor, sy * factor, gx * factor
+    shots, per_shot = np.unique(np.stack([sx, sy], axis=1), axis=0, return_counts=True)
+    offset = np.abs(gx - sx)
+    return {
+        "n_shots": int(len(shots)),
+        "receivers_per_shot": [int(per_shot.min()), int(per_shot.max())],
+        "source_x_range": [float(sx.min()), float(sx.max())],
+        "receiver_x_range": [float(gx.min()), float(gx.max())],
+        "offset_range": [float(offset.min()), float(offset.max())],
+        "coordinate_units": "as in the headers (SourceGroupScalar applied)",
     }
 
 

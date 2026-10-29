@@ -16,6 +16,7 @@ def plot_shot(
     *,
     dt: float | None = None,
     dh: float | None = None,
+    x=None,
     ax: Axes | None = None,
     perc: float = 99.0,
     cmap: str = SEISMIC_CMAP,
@@ -31,7 +32,10 @@ def plot_shot(
     dt
         Time sample interval (s). Used for y-axis extent.
     dh
-        Receiver spacing (m). Used for x-axis extent.
+        Receiver spacing (m). Used for x-axis extent, counted from 0.
+    x
+        The receivers' positions (m), in trace order; the axis then runs from
+        the first to the last. Takes precedence over ``dh``.
     perc
         Percentile for symmetric clipping; ``99.0`` is a good default.
     """
@@ -43,7 +47,14 @@ def plot_shot(
     s = np.percentile(np.abs(data), perc)
     nt, nrec = data.shape
     extent: tuple[float, float, float, float] | None = None
-    if dt is not None and dh is not None:
+    if x is not None:
+        x = np.asarray(x, dtype=float)
+        if x.shape != (nrec,):
+            raise ValueError(f"plot_shot: x has shape {x.shape}, the gather {nrec} traces")
+        extent = (float(x[0]), float(x[-1]), nt * dt if dt is not None else float(nt), 0.0)
+        ax.set_xlabel("receiver x (m)")
+        ax.set_ylabel("time (s)" if dt is not None else "time step")
+    elif dt is not None and dh is not None:
         extent = (0.0, nrec * dh, nt * dt, 0.0)
         ax.set_xlabel("offset (m)")
         ax.set_ylabel("time (s)")
