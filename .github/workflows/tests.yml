@@ -37,7 +37,7 @@ jobs:
           - {name: nn, args: tests/nn}
           - {name: opt, args: tests/opt}
           - {name: agent, args: tests/agent}
-          - {name: skill, args: tests/test_skill_snippets.py}   # every code block of skills/sweepx
+          - {name: skill, args: tests/test_skill_snippets.py tests/test_skill_install.py}   # skills/sweepx: every code block, and the installer
           - name: tasks-plan
             args: >-
               tests/tasks/test_plan_streaming_rank_sync.py
