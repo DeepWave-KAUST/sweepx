@@ -135,6 +135,7 @@ nav:
   # groups in extra.tab_menus). Page URLs stay /tasks/, /loss/, ...
   - sweepx:
     - sweepx/index.md
+    - AI assistants (Agent Skills): sweepx/agent-skills.md
     - Tasks:
       - tasks/index.md
       - Getting started:

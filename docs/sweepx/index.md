@@ -56,6 +56,9 @@ The toolkit on top of the [`sweep`](../solver/index.md) engine: one package,
 
 </div>
 
+To have an AI coding assistant write sweepx tasks with the real schema, install
+the [sweepx Agent Skill](agent-skills.md).
+
 ## How the modules depend on each other
 
 ```
