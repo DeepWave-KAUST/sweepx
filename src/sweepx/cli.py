@@ -2,6 +2,7 @@
 
     sweepx tasks run examples/tasks/synthetic/09_forward_constant_box.yaml
     sweepx agent chat
+    sweepx skill install
     sweepx --version
 
 ``sweep-tasks`` and ``sweep-agent`` stay installed as the same commands.
@@ -15,6 +16,7 @@ import sys
 COMMANDS = {
     "tasks": ("sweepx.tasks.cli", "YAML task runner (same as `sweep-tasks`)"),
     "agent": ("sweepx.agent.cli", "natural-language agent (same as `sweep-agent`)"),
+    "skill": ("sweepx.skill", "install the Agent Skills for Claude Code / Codex"),
 }
 
 

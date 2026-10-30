@@ -15,10 +15,12 @@ This is not the [Agent](../agent/index.md) module. `sweep-agent` is a chat
 front end that runs a local LLM inside sweepx; the skill is documentation that
 an assistant you already use reads while it helps you write code.
 
-The skill is written for the current release (0.4.1, with sweep 0.3.6). It is
-not part of the wheel; take it from the repository. For the solver itself
-(equations, propagators, boundaries, gradients and memory), the sweep
-repository has a companion skill, `skills/sweep-solver`; install both.
+The skill is written for the current release. For the solver itself
+(equations, propagators, boundaries, gradients and memory), sweep-solver has a
+companion skill, `sweep-solver`; `sweepx skill install` installs both. From
+sweepx 0.4.2 the wheel carries the sweepx skill, and from sweep-solver 0.3.7
+the solver's wheel carries its own; with older releases, take them from the
+repositories.
 
 ## Contents
 
@@ -39,42 +41,46 @@ repository has a companion skill, `skills/sweep-solver`; install both.
 The assistant reads `SKILL.md` first and opens a reference file only when the
 task needs it.
 
-## Get the folder
+## Install
 
-Clone only the skill:
+Run the command on the machine where the assistant runs (for a session on a
+cluster, on the cluster):
+
+```bash
+sweepx skill install
+```
+
+It copies `sweepx` and `sweep-solver` to `~/.claude/skills/` for Claude Code
+and to `~/.agents/skills/` for Codex, for each of the two it finds for your
+user (its `~/.claude`, `~/.agents` or `~/.codex` folder, or its command on
+`PATH`). Run it again after upgrading to update the copies. An assistant reads
+skills from these folders and nothing is registered, so a skill copied before
+the assistant is installed is picked up once it is; a session that is already
+running may need a restart.
+
+| Command | What it does |
+|---|---|
+| `sweepx skill install` | install for the assistants found; with none found, install nothing and list the options |
+| `sweepx skill install --for claude` / `--for codex` / `--for all` | install for those, found or not |
+| `sweepx skill install --project [DIR]` | install into `DIR/.claude/skills/` or `DIR/.agents/skills/` (default: the current directory), which is what a cloud session working on that repository sees |
+| `sweepx skill zip [-o DIR]` | write `sweepx.zip` and `sweep-solver.zip` for **Claude.ai**: upload them in the skills section of the settings |
+| `sweepx skill path` | print where the installed packages keep the skills |
+
+An existing folder is replaced only when it is the same skill; any other
+folder of that name, or a symlink, is left alone with an error. With
+sweep-solver 0.3.6, which carries no skill, only `sweepx` is installed and the
+command says so.
+
+**From the repository** (older releases, or other assistants): clone only
+the skill and copy the folder, keeping its name `sweepx`, to one of the
+folders above. Other assistants can be given `SKILL.md` and left to open the
+reference files it points to.
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse https://github.com/DeepWave-KAUST/sweepx.git sweepx-skill
 git -C sweepx-skill sparse-checkout set skills/sweepx
-```
-
-The folder is then `sweepx-skill/skills/sweepx`. A full clone of the
-repository works as well.
-
-## Install
-
-Copy the folder, keeping its name `sweepx`, to where your assistant looks for
-skills.
-
-**Claude Code**: for all your projects, or only for one project:
-
-```bash
 mkdir -p ~/.claude/skills && cp -r sweepx-skill/skills/sweepx ~/.claude/skills/
-mkdir -p .claude/skills && cp -r sweepx-skill/skills/sweepx .claude/skills/   # run in the project
 ```
-
-**Codex**: the same, with `~/.agents/skills/` or the project's
-`.agents/skills/`.
-
-**Claude.ai**: zip the folder and upload the zip in the skills section of the
-settings.
-
-```bash
-cd sweepx-skill/skills && zip -r sweepx.zip sweepx
-```
-
-**Other assistants**: give them `SKILL.md` and let them open the reference
-files it points to.
 
 ## Use
 
@@ -88,7 +94,7 @@ multiscale FWI task for Marmousi with a water layer".
 Before running a task it wrote, the assistant can check it without running it:
 
 ```bash
-python ~/.claude/skills/sweepx/scripts/validate_spec.py task.yaml --preflight
+python "$(sweepx skill path | head -1)"/scripts/validate_spec.py task.yaml --preflight
 ```
 
 ## Keeping it correct

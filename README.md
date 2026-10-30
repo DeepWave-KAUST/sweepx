@@ -54,6 +54,11 @@ sweep-agent chat                   # or: sweepx agent chat
 >>> load the Marmousi benchmark model and run a forward — show the shot gather
 ```
 
+For AI coding assistants, `sweepx skill install` installs the
+[Agent Skills](https://sweepx.deepwave.group/sweepx/agent-skills/) ([`skills/sweepx/`](skills/sweepx/)
+and the solver's `sweep-solver`) that teach Claude Code or Codex the task schema and the
+libraries' APIs; `sweepx skill zip` makes the zips for Claude.ai.
+
 ## Development
 
 ```bash
