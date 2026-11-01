@@ -39,11 +39,12 @@ The optimizer internally calls `torch.autograd.grad(loss, params, create_graph=T
 to build the gradient with the graph alive, then differentiates the
 $g \cdot v$ inner product to get $H v$.
 
-The Hessian-vector products are double backward passes through the
-solver, so the solver must be twice differentiable. With sweep that is
-`impl='eager'` with `torch.compile` off; the setup's default solver
-(`impl='c'` on a GPU) returns a gradient without an autograd graph, and the
-compiled eager step does not support a double backward either:
+With the default `hessian="autograd"` the Hessian-vector products are
+double backward passes through the solver, so the solver must be twice
+differentiable. With sweep that is `impl='eager'` with `torch.compile` off;
+the setup's default solver (`impl='c'` on a GPU) returns a gradient without
+an autograd graph, and the compiled eager step does not support a double
+backward either (`hessian="difference"`, below, runs with both):
 
 ```python
 from sweep.propagator.options import EagerOptions, Full
@@ -54,7 +55,8 @@ solver = PropTorch(Acoustic(device=dev), shape=(96, 128), dh=10.0, dt=1e-3, devi
                    impl="eager", memory=Full(), eager_options=EagerOptions(use_compile=False))
 ```
 
-With `impl='c'`, `step()` raises a `RuntimeError` that names the solver. It
+With `impl='c'` and the default `hessian="autograd"`, `step()` raises a
+`RuntimeError` that names the solver and `hessian="difference"`. It
 cannot catch every case: with a nonlinear parameterization such as
 [`SigmoidBounds`](../parameterization/bounds.md), the gradient keeps a graph
 through the parameterization, the Hessian-vector product runs, and it is
@@ -63,6 +65,37 @@ The eager solver is much slower than `impl='c'`: on a V100 the 5-epoch
 examples of the Truncated Newton, Truncated Gauss-Newton and Trust-Region
 pages took 12-14 minutes each, against under a second for the L-BFGS
 example on `impl='c'`.
+
+### First derivatives only: `hessian="difference"`
+
+`hessian="difference"` takes each Hessian-vector product as a central
+difference of two gradients, $(g(\theta + e v) - g(\theta - e v)) / (2e)$,
+with $e$ chosen so that no parameter changes by more than `rel_step` (default
+$10^{-2}$) of its own largest magnitude. It needs first derivatives only, so
+it runs with the setup's `impl='c'` solver (and with boundary saving or the
+compiled eager step):
+
+```python
+opt = sweepx.opt.optim.TruncatedNewton([vp], bounds=(1500.0, 5500.0), max_inner_iter=5,
+                                       hessian="difference")
+```
+
+On a V100 the 5-epoch example below took 3.2 s this way, against 11 minutes
+with the eager solver and `hessian="autograd"`. The two routes differ on the
+outermost ring of cells, where sweep returns the cropped gradient of the
+edge-padded model: a difference differentiates that gradient, a double
+backward gives a symmetric product. A preconditioner that keeps the ring
+fixed brings them together and helped both: with
+`preconditioner=lambda g, p: g * inner` (`inner` zero on the outermost ring,
+one inside) the example reached a misfit of 1.82 with `impl='c'` in 3.5 s and
+1.72 with the eager solver and autograd in 12.5 minutes, against 2.71 and
+2.26 without it. A probe may leave `bounds`; where the loss is not finite
+there, the product is taken one-sided on the side inside the box.
+
+The difference needs a gradient that is smooth on the scale of the step. The
+qP equations of sweep (`AcousticVTI`, `AcousticTTI` and their Born pair) do
+not have one where epsilon differs from delta: the difference of their
+gradients grows as the step shrinks, and `sweep.autodiff` refuses it.
 
 ## API
 
@@ -78,6 +111,8 @@ sweepx.opt.optim.TruncatedNewton(
     c1=1e-4, c2=0.9,
     alpha_init=1.0, alpha_max=10.0,
     max_ls_iter=25,
+    hessian="autograd",             # "autograd" | "difference"
+    rel_step=1e-2,                  # difference step, relative to each parameter's peak
 )
 ```
 

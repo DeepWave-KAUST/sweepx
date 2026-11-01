@@ -27,11 +27,16 @@ trust boundary doubles the radius (capped at ``max_radius``).
 Like `TruncatedNewton` and `TruncatedGaussNewton`, `TrustRegion.step()`
 takes a `loss_fn` returning the loss tensor **without calling backward**.
 
-The Hessian-vector products are double backward passes through the
-solver, so the solver must be twice differentiable. With sweep that is
-`impl='eager'` with `torch.compile` off; the setup's default solver
-(`impl='c'` on a GPU) returns a gradient without an autograd graph, and the
-compiled eager step does not support a double backward either:
+With the default `hessian="autograd"` the Hessian-vector products are
+double backward passes through the solver, so the solver must be twice
+differentiable. With sweep that is `impl='eager'` with `torch.compile` off;
+the setup's default solver (`impl='c'` on a GPU) returns a gradient without
+an autograd graph, and the compiled eager step does not support a double
+backward either. `hessian="difference"` takes each product from two
+gradients instead and runs with `impl='c'`: on a V100 the 5-epoch example
+below took 2.7 s that way, against 12 minutes with the eager solver (see
+[Truncated Newton](newton.md#first-derivatives-only-hessiandifference) for
+the step and the outermost ring of cells). The eager solver:
 
 ```python
 from sweep.propagator.options import EagerOptions, Full
@@ -96,6 +101,8 @@ sweepx.opt.optim.TrustRegion(
     radius_grow=2.0,                # delta *= this on grow
     max_inner_iter=50,              # Steihaug-CG cap (TTR)
     cg_tol=1e-2,                    # Steihaug-CG residual tolerance (TTR)
+    hessian="autograd",             # "autograd" | "difference"
+    rel_step=1e-2,                  # difference step, relative to each parameter's peak
 )
 ```
 

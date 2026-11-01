@@ -22,10 +22,11 @@ $L = \tfrac{1}{2}\|r\|^2$ and computes both $g$ and the GN matrix-vector
 product internally via JVP / VJP. As with `TruncatedNewton`, **do not
 call `backward` inside `residual_fn`**.
 
-The JVP is a double backward through the residual, so the solver must be
-twice differentiable. With sweep that is `impl='eager'` with `torch.compile`
-off; the setup's default solver (`impl='c'` on a GPU) refuses a second
-backward over the same graph with a `RuntimeError`:
+With the default `jacobian="autograd"` the JVP is a double backward through
+the residual, so the solver must be twice differentiable. With sweep that is
+`impl='eager'` with `torch.compile` off; the setup's default solver
+(`impl='c'` on a GPU) refuses a second backward over the same graph with a
+`RuntimeError` (`jacobian="difference"` below runs with it):
 
 ```python
 from sweep.propagator.options import EagerOptions, Full
@@ -58,6 +59,15 @@ As for Truncated Newton, the inner CG solves for the step, so the line search
 starts at $\alpha = 1$ in parameter units; trials are projected onto
 `bounds` before they are evaluated.
 
+`jacobian="difference"` takes $J v$ from two residuals at
+$\theta \pm e v$ (no gradient) and $J^T (J v)$ from the backward of a fresh
+residual, first derivatives only, so the example runs with the setup's
+`impl='c'` solver: on a V100 it took 2.6 s, against 14 minutes with the eager
+solver and the default `jacobian="autograd"`. As on the
+[Truncated Newton](newton.md) page, keep the outermost ring of cells fixed
+with a preconditioner when comparing the two: with it the misfits after 5
+epochs were 1.73 (`impl='c'`, difference) and 1.82 (eager, autograd).
+
 ## API
 
 ```python
@@ -73,6 +83,8 @@ sweepx.opt.optim.TruncatedGaussNewton(
     c1=1e-4, c2=0.9,
     alpha_init=1.0, alpha_max=10.0,
     max_ls_iter=25,
+    jacobian="autograd",             # "autograd" | "difference"
+    rel_step=1e-2,                   # difference step, relative to each parameter's peak
 )
 ```
 

@@ -57,12 +57,15 @@ physical model. Gradients flow through `forward` automatically via PyTorch
 autograd. Step sizes are now in latent units (here `latent` is the logit of
 the normalized velocity), not in m/s.
 
-The Newton-type and trust-region optimizers still need a twice-differentiable
-solver (`impl='eager'` without `torch.compile`). With sweep's `impl='c'` and
-this parameterization they do not fail: the gradient keeps a graph through
-the sigmoid, so the Hessian-vector product runs, but it misses the solver's
-curvature (on the setup model it pointed nearly orthogonally to the eager
-one). See [Truncated Newton](../optimizers/newton.md#calling-convention-closure-must-not-call-backward).
+With their default autograd products the Newton-type and trust-region
+optimizers need a twice-differentiable solver (`impl='eager'` without
+`torch.compile`). With sweep's `impl='c'` and this parameterization they do
+not fail: the gradient keeps a graph through the sigmoid, so the
+Hessian-vector product runs, but it misses the solver's curvature (on the
+setup model it pointed nearly orthogonally to the eager one).
+`hessian="difference"` (`jacobian="difference"` for Gauss-Newton) takes the
+products from first derivatives only, so it does not depend on that graph.
+See [Truncated Newton](../optimizers/newton.md#calling-convention-closure-must-not-call-backward).
 
 ## When to use which
 

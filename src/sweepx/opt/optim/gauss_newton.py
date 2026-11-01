@@ -8,9 +8,12 @@ Hessian by dropping the second-derivative-of-residual term ``sum r_i H_i``.
 Truncated GN is the standard Newton-type method for FWI's least-squares
 data misfit (Metivier et al. 2013). It is matrix-free: each inner CG iter
 needs one ``J v`` (a JVP) and one ``J^T u`` (a VJP), both available via
-PyTorch autograd. The JVP is a double backward through the residual, so with
-sweep the solver must be ``impl='eager'`` without ``torch.compile``
-(``impl='c'`` refuses a second backward over the same graph).
+PyTorch autograd. With ``jacobian='autograd'`` (default) the JVP is a double
+backward through the residual, so with sweep the solver must be
+``impl='eager'`` without ``torch.compile`` (``impl='c'`` refuses a second
+backward over the same graph). ``jacobian='difference'`` takes ``J v`` from
+two residuals at ``theta +- e v`` instead and ``J^T (J v)`` from a fresh
+residual's backward, which runs with every solver a gradient runs with.
 
 References:
     Metivier, L., Brossier, R., Virieux, J., and Operto, S. (2013).
@@ -33,6 +36,7 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.linalg.cg import cg
+from sweepx.opt.optim._difference import check_rel_step, check_route, residual_difference
 from sweepx.opt.optim._wolfe_step import wolfe_step
 
 
@@ -42,7 +46,9 @@ class TruncatedGaussNewton(Optimizer):
     Args:
         params: iterable of parameter tensors / param-groups.
         bounds: optional ``(lo, hi)`` box; every line-search trial point is
-            projected onto it.
+            projected onto it; with ``jacobian="difference"``, where a probe
+            outside it gives a residual that is not finite, the product is
+            taken one-sided on the side inside.
         preconditioner: optional callable used inside the inner CG.
         damping: Levenberg-Marquardt damping added to ``J^T J``: solves
             ``(J^T J + damping I) d = -g``. Defaults to 0.0 (pure GN).
@@ -50,6 +56,15 @@ class TruncatedGaussNewton(Optimizer):
         forcing_constant: tolerance used when ``forcing="constant"``.
         max_inner_iter: PCG iteration cap per outer step.
         c1, c2, alpha_init, alpha_max, max_ls_iter: Wolfe parameters.
+        jacobian: ``"autograd"`` (default): ``J v`` by a double backward
+            through the residual, exact, needs a residual autograd can
+            differentiate twice. ``"difference"``: ``J v`` from two residuals
+            at ``theta +- e v`` and ``J^T (J v)`` from the backward of a fresh
+            residual -- three forwards and one backward per inner iteration,
+            with every solver a gradient runs with (sweep's ``impl='c'``,
+            boundary saving, the compiled eager step).
+        rel_step: for ``jacobian="difference"``, the largest change of a
+            parameter relative to its own largest magnitude.
 
     Calling convention:
         ``opt.step(residual_fn)`` where ``residual_fn`` returns the residual
@@ -57,8 +72,9 @@ class TruncatedGaussNewton(Optimizer):
         ``L = 0.5 ||r||^2`` and ``g = J^T r`` internally and uses ``J^T J``
         as the curvature matrix. **Do not call ``backward`` inside
         ``residual_fn``** - the autograd graph must remain intact for the
-        JVP / VJP machinery, and it must support a double backward (sweep:
-        ``impl='eager'`` with ``EagerOptions(use_compile=False)``).
+        JVP / VJP machinery, and with ``jacobian="autograd"`` it must support a
+        double backward (sweep: ``impl='eager'`` with
+        ``EagerOptions(use_compile=False)``).
     """
 
     def __init__(
@@ -76,6 +92,8 @@ class TruncatedGaussNewton(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        jacobian: str = "autograd",
+        rel_step: float = 1e-2,
     ) -> None:
         if forcing not in ("eisenstat_walker", "constant"):
             raise ValueError(f"unknown forcing: {forcing!r}")
@@ -83,6 +101,8 @@ class TruncatedGaussNewton(Optimizer):
             raise ValueError("max_inner_iter must be >= 1")
         if damping < 0.0:
             raise ValueError("damping must be non-negative")
+        self.jacobian = check_route("jacobian", jacobian)
+        self.rel_step = check_rel_step(rel_step)
         super().__init__(params, dict())
         self.bounds = bounds
         self.preconditioner = preconditioner
@@ -142,8 +162,9 @@ class TruncatedGaussNewton(Optimizer):
                 raise RuntimeError("residual must depend on params with requires_grad=True")
             loss = 0.5 * (residual ** 2).sum()
             # Gradient g = J^T r computed via standard backward on the loss.
+            autograd_jvp = self.jacobian == "autograd"
             grads_list = torch.autograd.grad(
-                loss, params, create_graph=False, retain_graph=True,
+                loss, params, create_graph=False, retain_graph=autograd_jvp,
             )
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
         g_norm = float(g_flat.norm())
@@ -155,22 +176,36 @@ class TruncatedGaussNewton(Optimizer):
             return loss
 
         # Build matvec: J^T J v + damping * v.
-        # JVP J v computed as a double-backward through the residual (Pearlmutter trick),
-        # then the VJP J^T (J v) brings us back to parameter space.
-        upstream = torch.zeros_like(residual, requires_grad=True)
-        adjoint_grads = torch.autograd.grad(
-            residual, params, grad_outputs=upstream,
-            create_graph=True, retain_graph=True,
-        )
+        # 'autograd': JVP J v computed as a double-backward through the residual
+        # (Pearlmutter trick), then the VJP J^T (J v) brings us back to parameter
+        # space.  'difference': J v from two residuals at theta +- e v, J^T (J v)
+        # from the backward of a fresh residual (a solver whose backward frees its
+        # graph, e.g. sweep's impl='c', cannot go through the first one twice).
+        upstream = adjoint_grads = None
+        if autograd_jvp:
+            upstream = torch.zeros_like(residual, requires_grad=True)
+            adjoint_grads = torch.autograd.grad(
+                residual, params, grad_outputs=upstream,
+                create_graph=True, retain_graph=True,
+            )
 
         def matvec(v_flat: Tensor) -> Tensor:
             v_list = self._unflatten(v_flat, params)
-            with torch.enable_grad():
-                inner_v = sum((g * v).sum() for g, v in zip(adjoint_grads, v_list))
-                jvp = torch.autograd.grad(inner_v, upstream, retain_graph=True)[0]
-                jt_jv = torch.autograd.grad(residual, params, grad_outputs=jvp,
-                                            retain_graph=True)
-            out = self._flatten_list([t.detach() for t in jt_jv])
+            if autograd_jvp:
+                with torch.enable_grad():
+                    inner_v = sum((g * v).sum() for g, v in zip(adjoint_grads, v_list))
+                    jvp = torch.autograd.grad(inner_v, upstream, retain_graph=True)[0]
+                    jt_jv = torch.autograd.grad(residual, params, grad_outputs=jvp,
+                                                retain_graph=True)
+                out = self._flatten_list([t.detach() for t in jt_jv])
+            else:
+                jvp = residual_difference(residual_fn, params, v_list, self.rel_step, self.bounds)
+                if jvp is None:
+                    out = torch.zeros_like(v_flat)
+                else:
+                    with torch.enable_grad():
+                        jt_jv = torch.autograd.grad(residual_fn(), params, grad_outputs=jvp)
+                    out = self._flatten_list([t.detach() for t in jt_jv])
             if self.damping > 0.0:
                 out = out + self.damping * v_flat
             return out

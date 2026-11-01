@@ -34,9 +34,10 @@ Every optimizer in `sweepx.opt`:
    `backward()`, and return the loss. The exceptions are `TruncatedNewton`
    and `TrustRegion`, whose `step()` requires a `loss_fn`, and
    `TruncatedGaussNewton`, whose `step()` requires a `residual_fn`; neither
-   calls `backward()`, and the loss must be twice differentiable (sweep:
-   `impl='eager'` without `torch.compile`). SAM's base optimizer must not
-   need a closure.
+   calls `backward()`. With their default autograd products the loss must be
+   twice differentiable (sweep: `impl='eager'` without `torch.compile`);
+   `hessian="difference"` / `jacobian="difference"` need first derivatives
+   only. SAM's base optimizer must not need a closure.
 3. Accepts an optional `bounds=(lo, hi)` argument (all but SAM, which uses
    its base's); if provided, parameters are projected to the box after each
    update, and line-search and trust-region trial points are projected
