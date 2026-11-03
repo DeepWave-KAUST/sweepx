@@ -159,7 +159,9 @@ def test_facade_alias_is_flagged(catalog):
 
 
 def test_topography_follows_the_step_that_reads_it(catalog):
-    for name in ("Acoustic", "Elastic", "AcousticCurvilinear", "ElasticCurvilinear"):
+    # Not Elastic: sweep after 0.3.6 removed its staircase (topography= raises),
+    # so the answer depends on the installed sweep.
+    for name in ("Acoustic", "AcousticCurvilinear", "ElasticCurvilinear"):
         assert catalog[name]["topography"] is True, name
     for name in ("AcousticVTI", "AcousticBorn", "DASZhao"):
         assert catalog[name]["topography"] is False, name
