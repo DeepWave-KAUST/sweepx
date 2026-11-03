@@ -82,6 +82,10 @@ extra:
 
 plugins:
   - search
+  # Download every external asset (Google Fonts, Material's mermaid from unpkg)
+  # at build time and serve it from the site: foreign CDNs are unreliable from
+  # mainland China.
+  - privacy
   # Pull each package's docs/ from its own repo at build time. The nav uses
   # `!import <repo-url>` entries below; this plugin resolves them.
   - multirepo:
@@ -275,12 +279,15 @@ markdown_extensions:
   - toc:
       permalink: true
 
+# KaTeX is vendored (the npm 0.16.9 dist files, woff2 fonts only) rather than
+# left to the privacy plugin: katex.min.css loads its fonts by relative URL,
+# which the plugin does not follow, so the math fonts would go missing.
 extra_css:
   - stylesheets/extra.css
-  - https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css
+  - assets/vendor/katex-0.16.9/katex.min.css
 
 extra_javascript:
-  - https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js
-  - https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js
+  - assets/vendor/katex-0.16.9/katex.min.js
+  - assets/vendor/katex-0.16.9/contrib/auto-render.min.js
   - javascripts/katex.js
 
