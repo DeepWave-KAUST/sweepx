@@ -1,2 +1,6 @@
 sim.npz
+sem_topo.npz
+sem_topo.png
+sem_aniso3d.npz
+sem_aniso3d*.png
 frames/
