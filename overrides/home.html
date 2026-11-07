@@ -50,11 +50,60 @@
     </div>
   </div>
 
-  {# Wide animated wavefield panel below the hero CTAs (GIF — universal). #}
+  {# Wide animated panel below the hero CTAs: one shot's forward wavefield,
+     residual, adjoint wavefield and gradient, simulated with sweep
+     (tools/landing_hero). The frames carry no text: the step labels are HTML,
+     highlighted from the video's clock (data-start, in seconds, matches
+     PHASES in render.py). The poster is the gradient frame; it is all a
+     reader with reduced motion sees. #}
   <div class="sweep-hero-panel">
-    <img src="{{ 'figures/landing/hero_anim.gif' | url }}?v=4"
-         alt="SWEEP — animated wavefield"
-         decoding="async">
+    <div class="sweep-hero-panel__card">
+      <ol class="sweep-hero-steps">
+        <li data-start="0"><span>01</span> forward <i>u(x, t)</i></li>
+        <li data-start="3.6"><span>02</span> residual <i>d &minus; d<sub>obs</sub></i></li>
+        <li data-start="4.7"><span>03</span> adjoint <i>&lambda;(x, t)</i></li>
+        <li data-start="8.5"><span>04</span> gradient <i>&part;L/&part;v</i></li>
+      </ol>
+      <video autoplay muted loop playsinline preload="auto" width="1840" height="530"
+             poster="{{ 'figures/landing/hero_loop_poster.jpg' | url }}"
+             aria-label="Forward wavefield, data residual, adjoint wavefield and gradient for one shot">
+        <source src="{{ 'figures/landing/hero_loop.webm' | url }}" type="video/webm">
+        <source src="{{ 'figures/landing/hero_loop.mp4' | url }}" type="video/mp4">
+      </video>
+    </div>
+    <script>
+      (function () {
+        var card = document.currentScript.previousElementSibling;
+        var v = card.querySelector("video");
+        var steps = card.querySelectorAll(".sweep-hero-steps li");
+        var starts = Array.prototype.map.call(steps, function (li) {
+          return parseFloat(li.dataset.start);
+        });
+        var current = -1;
+        function mark(t) {
+          var k = 0;
+          while (k + 1 < starts.length && t >= starts[k + 1]) k++;
+          if (k === current) return;
+          if (current >= 0) steps[current].classList.remove("is-active");
+          steps[k].classList.add("is-active");
+          current = k;
+        }
+        function tick() {
+          mark(v.currentTime);
+          if (!v.paused) requestAnimationFrame(tick);
+        }
+        if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          v.removeAttribute("autoplay");
+          v.pause();
+          mark(Infinity);
+          return;
+        }
+        // until playback starts the poster (the gradient frame) is showing
+        mark(Infinity);
+        v.addEventListener("play", tick);
+        if (!v.paused) tick();
+      })();
+    </script>
   </div>
 {% endblock %}
 
