@@ -87,6 +87,7 @@ from sweepx.tasks._helpers.solver_build import (
     _cfl_check,
     _resolve_modeling_inputs,
 )
+from sweepx.tasks._helpers.stage_grid import _stage_grid_shape
 from sweepx.tasks._helpers.stages import (
     _bandpass_syn_torch,
     _normalise_stage_list,
@@ -104,7 +105,7 @@ from sweepx.tasks.progress import band_desc, optimizer_lr, progress_for
 
 
 def _build_grad_smoother(spec, dev):
-    """Return a closure that Gaussian-smooths a vp gradient tensor.
+    """Return a closure that Gaussian-smooths a model's gradient tensor.
 
     Separable (depthwise) Gaussian along each spatial axis, reflect-padded so
     the field edges aren't pulled toward zero. Handles 2-D (nz, nx) and 3-D
@@ -180,6 +181,54 @@ def _build_grad_smoother(spec, dev):
         return _depth_mask_(g)
 
     return _smooth
+
+
+def _grad_smooth_blocks(gs, names) -> dict:
+    """The ``grad_smooth`` block each inverted grid model is smoothed with,
+    by model name: the one block of a one-model run (the schema refuses it
+    for several), else the enabled ``per_model`` entries."""
+    if gs is None or not gs.enabled:
+        return {}
+    if gs.per_model is None:
+        return dict.fromkeys(names, gs)
+    return {n: b for n, b in gs.per_model.items() if b.enabled}
+
+
+def _check_grad_smooth(spec, shape, names) -> None:
+    """Refuse a ``grad_smooth`` setting this model would not get.
+
+    ``sigma_y_cells`` smooths the y axis of a 3-D model. The mask rows are rows
+    of the grid each stage runs on (a stage's ``dh_m`` changes how many it
+    has): a ``mask_below_row`` with no row below it zeroes nothing, and a
+    ``mask_above_row`` past the last row zeroes the whole gradient.
+    """
+    per_model = spec.grad_smooth.per_model is not None
+    stages = _normalise_stage_list(spec)
+    for name, gs in _grad_smooth_blocks(spec.grad_smooth, names).items():
+        key = f"grad_smooth.per_model.{name}" if per_model else "grad_smooth"
+        if len(shape) == 2 and float(gs.sigma_y_cells) > 0:
+            raise ValueError(
+                f"{key}.sigma_y_cells={gs.sigma_y_cells} is for 3-D models; "
+                f"this model is 2-D {tuple(shape)} (z, x), so it would be "
+                "ignored. Drop it.")
+        dh0 = dh = float(spec.grid.dh)
+        for i, stage in enumerate(stages):
+            if stage.dh_m is not None:
+                dh = float(stage.dh_m)
+            nz = _stage_grid_shape(shape, dh0, dh)[0]
+            bad = []
+            if gs.mask_below_row >= nz - 1:
+                bad.append(f"mask_below_row={gs.mask_below_row} has no row "
+                           "below it to zero")
+            if gs.mask_above_row >= nz:
+                bad.append(f"mask_above_row={gs.mask_above_row} zeroes every row")
+            if bad:
+                where = f"stage {i} runs on" if spec.stages else "the model is"
+                raise ValueError(
+                    f"{key}: {where} a {dh:g} m grid of {nz} rows, so "
+                    + " and ".join(bad) + ". The mask rows count rows of the "
+                    "grid each stage runs on; fit them to every stage's grid, "
+                    "or drop them.")
 
 
 class FWIRunnerMixin:
@@ -400,6 +449,9 @@ class FWIRunnerMixin:
         if dist_info.is_root:
             print(f"[fwi] shape={shape} nshots={nshots} inverted_models={required_names} "
                   f"world_size={dist_info.world_size}")
+        # grad_smooth settings this model would not get, before obs are made.
+        if spec.grad_smooth is not None and spec.grad_smooth.enabled:
+            _check_grad_smooth(spec, shape, required_names)
 
         # 4a) The water layer (`water:`), on the inversion's own frame: the
         # starting model's grid, cropped like the models were.
@@ -604,17 +656,17 @@ class FWIRunnerMixin:
                       f"vmin={diff_prior.vmin:.0f} vmax={diff_prior.vmax:.0f} "
                       f"ckpt={_diff_spec.ckpt_path.name}")
 
-        # Gaussian gradient smoother (tomographic preconditioner). Built once as
-        # separable 1-D kernels; applied to the grid-mode vp gradient each step.
-        _gsmooth_spec = getattr(spec, "grad_smooth", None)
-        _gsmooth = None
-        if _gsmooth_spec is not None and bool(getattr(_gsmooth_spec, "enabled", True)):
-            _gsmooth = _build_grad_smoother(_gsmooth_spec, dev)
+        # Gaussian gradient smoothers (tomographic preconditioner), one per
+        # smoothed grid model with its own block: built once as separable 1-D
+        # kernels, applied on the epochs that block's ``every`` divides (the
+        # schema refuses grad_smooth with reparam and L-BFGS).
+        _gsmooth = {}         # model name -> (smoother, every)
+        for _name, _gs in _grad_smooth_blocks(spec.grad_smooth, required_names).items():
+            _gsmooth[_name] = (_build_grad_smoother(_gs, dev), int(_gs.every))
             if dist_info.is_root:
-                print(f"[fwi] grad_smooth (Gaussian) ON: sigma_z="
-                      f"{_gsmooth_spec.sigma_z_cells} sigma_x="
-                      f"{_gsmooth_spec.sigma_x_cells} sigma_y="
-                      f"{_gsmooth_spec.sigma_y_cells} every={_gsmooth_spec.every}")
+                print(f"[fwi] grad_smooth (Gaussian) ON for {_name}: sigma_z="
+                      f"{_gs.sigma_z_cells} sigma_x={_gs.sigma_x_cells} "
+                      f"sigma_y={_gs.sigma_y_cells} every={_gs.every}")
 
         # 7) Resume from checkpoint if requested. Rank 0 loads + broadcasts state.
         # Two modes:
@@ -975,7 +1027,10 @@ class FWIRunnerMixin:
                     diff_apply=_diff_apply,
                     diff_sds_t=diff_sds_t,
                     diff_seed=epoch_global,
-                    grad_smoother=_gsmooth,
+                    # each model's on the epochs its ``every`` divides, counted
+                    # over the run
+                    grad_smoothers={_n: _sm for _n, (_sm, _every) in _gsmooth.items()
+                                    if epoch_global % _every == 0},
                     state_for_dump=state,
                     take_qc_snapshot=_take_qc_snap,
                     water_mask=_pin_mask,
@@ -1529,7 +1584,7 @@ class FWIRunnerMixin:
                         diff_weight_mode: str = "relative",
                         diff_kind: str = "red", diff_apply: bool = False,
                         diff_sds_t=(0.02, 0.5), diff_seed: int = 0,
-                        grad_smoother=None, grad_smooth_every: int = 1,
+                        grad_smoothers: dict | None = None,
                         water_mask=None) -> float:
         """One outer optimizer step.
 
@@ -1866,18 +1921,20 @@ class FWIRunnerMixin:
                     diff_prior, diff_kind, diff_weight, diff_weight_mode,
                     diff_sds_t, diff_seed, _dleaves, _drender, dist_info,
                 )
-            # Gaussian gradient smoothing (grid-mode vp only), just before the
-            # step so it smooths the FINAL (data + TV) gradient.
-            if grad_smoother is not None and reparam_net is None:
-                _vp = inv_by_name.get("vp")
-                if _vp is not None and _vp.grad is not None:
-                    with torch.no_grad():
-                        _vp.grad.copy_(grad_smoother(_vp.grad))
-                    # Re-apply the water freeze AFTER smoothing: a Gaussian
-                    # z-conv smears gradient from the free cells back into the
-                    # water, which optimizer.step would then update. Cheap
-                    # re-zero.
-                    zero_water_grad_(inv_in_order, water_mask)
+            # Gaussian gradient smoothing, each model with its own smoother
+            # (``grad_smoothers``: model name -> the smoother due this step),
+            # just before the step so it smooths the FINAL (data + TV) gradient.
+            if grad_smoothers and reparam_net is None:
+                with torch.no_grad():
+                    for _name, _smooth in grad_smoothers.items():
+                        _g = inv_by_name[_name].grad
+                        if _g is not None:
+                            _g.copy_(_smooth(_g))
+                # Re-apply the water freeze AFTER smoothing: a Gaussian
+                # z-conv smears gradient from the free cells back into the
+                # water, which optimizer.step would then update. Cheap
+                # re-zero.
+                zero_water_grad_(inv_in_order, water_mask)
             if _TPROF: _sync(); _t_reduce = _t.perf_counter()
             optimizer.step()
             if _TPROF:
