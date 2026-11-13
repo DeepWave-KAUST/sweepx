@@ -981,7 +981,7 @@ class DiffusionPriorSpec(_Forbid):
 
 
 class GradSmoothSpec(_Forbid):
-    """Gaussian smoothing of the vp gradient before the optimizer step.
+    """Gaussian smoothing of the grid models' gradients before the optimizer step.
 
     The classic tomographic gradient preconditioner: a single-band
     finite-frequency traveltime (e.g. ``cc_traveltime``) kernel back-projects
@@ -994,7 +994,7 @@ class GradSmoothSpec(_Forbid):
     ``sigma_z_cells`` / ``sigma_x_cells`` are the Gaussian stddevs in grid
     cells (z = depth axis, x = the fast lateral axis; ``sigma_y_cells`` used
     only in 3-D). A sigma of ~half the dominant wavelength in cells is a good
-    starting point. Applied to the grid-mode vp gradient only (reparam nets
+    starting point. Applied to grid models only, one block per model (reparam nets
     are smooth by construction). ``every`` applies it on every N-th step.
     """
 
@@ -1003,18 +1003,62 @@ class GradSmoothSpec(_Forbid):
     sigma_x_cells: float = Field(ge=0, default=4.0)
     sigma_y_cells: float = Field(ge=0, default=0.0)
     every: int = Field(ge=1, default=1)
-    # Optional depth window (in grid rows) OUTSIDE which the vp gradient is
+    # Optional depth window (in grid rows) OUTSIDE which each gradient is
     # zeroed, applied after smoothing. Use to confine a reflection-traveltime
     # update to the overburden: a single reflector's finite-frequency kernel
     # leaks spurious high-wavenumber junk BELOW the reflector (nothing to
     # invert there) — masking rows below the reflector removes it without
     # injecting any structure. -1 = no limit on that side.
-    mask_above_row: int = -1     # zero gradient for z-rows < this
-    mask_below_row: int = -1     # zero gradient for z-rows > this
+    mask_above_row: int = Field(ge=-1, default=-1)  # zero gradient for z-rows < this
+    mask_below_row: int = Field(ge=-1, default=-1)  # zero gradient for z-rows > this
     # Linear taper width (rows) at the mask boundary. A hard cutoff makes the
     # gradient pile up at the boundary row (a spurious velocity band); a taper
     # spreads and removes it. 0 = hard cutoff.
-    mask_taper_rows: int = 0
+    mask_taper_rows: int = Field(ge=0, default=0)
+    # A run that inverts several models (vp / vs / rho, ...) gives each its own
+    # block here, keyed by model name; a model left out is not smoothed, and
+    # the settings above stay at their defaults. A one-model run may write its
+    # block either way.
+    per_model: dict[str, GradSmoothSpec] | None = None
+
+    @model_validator(mode="after")
+    def _per_model_alone(self):
+        # With per_model every model has its own block, so a setting on the
+        # outer one would be ignored. By value: a config_resolved.yaml spells
+        # each out at its default.
+        if self.per_model is None:
+            return self
+        if not self.per_model:
+            raise ValueError(
+                "grad_smooth.per_model is empty: name each model to smooth with "
+                "its block, or drop grad_smooth")
+        shared = [f"{n}={getattr(self, n)!r}"
+                  for n, f in GradSmoothSpec.model_fields.items()
+                  if n not in ("enabled", "per_model") and getattr(self, n) != f.default]
+        if shared:
+            raise ValueError(
+                f"grad_smooth sets {', '.join(shared)} beside per_model, which "
+                "gives each model its own block, so they would be ignored. Move "
+                "them into the per_model entries.")
+        nested = [m for m, b in self.per_model.items() if b.per_model is not None]
+        if nested:
+            raise ValueError(
+                f"grad_smooth.per_model.{nested[0]} has a per_model of its own; "
+                "an entry is one model's block")
+        return self
+
+    @model_validator(mode="after")
+    def _taper_needs_a_mask(self):
+        # Without a mask row there is no edge to taper. By value: a
+        # config_resolved.yaml spells the taper out at its default 0.
+        if (self.mask_taper_rows > 0 and self.mask_above_row <= 0
+                and self.mask_below_row < 0):
+            raise ValueError(
+                f"grad_smooth.mask_taper_rows={self.mask_taper_rows} tapers the "
+                "edge of the depth mask, but neither mask_above_row (> 0) nor "
+                "mask_below_row (>= 0) sets one, so it would be ignored. Drop "
+                "it, or set the mask row it should taper.")
+        return self
 
 
 class WaterSpec(_Forbid):
@@ -2663,6 +2707,60 @@ class FWISpec(BaseTaskSpec):
                 "data_plan set them; that run ignored them too.")
         return self
 
+    @model_validator(mode="after")
+    def _grad_smooth_on_the_conventional_grid(self):
+        # The conventional loop smooths each inverted grid model's gradient
+        # with its block just before an Adam / SGD step. Under reparam the step
+        # trains the network's weights, and L-BFGS steps from its own closure,
+        # which never smooths: either way the block would be dropped. A block
+        # switched off asks for nothing; plan streaming refuses grad_smooth
+        # itself, and frequency selection does not read per_model.
+        gs = self.grad_smooth
+        if gs is None or not gs.enabled or _plan_streaming_on(self):
+            return self
+        if (self.source_encoding is not None and self.source_encoding.enabled
+                and self.source_encoding.mode == "frequency_selection"):
+            if gs.per_model is not None:
+                raise ValueError(
+                    "fwi: grad_smooth.per_model is read only by the conventional "
+                    "path; source_encoding.mode='frequency_selection' would "
+                    "ignore it. Drop it.")
+            return self
+        why = []
+        if self.reparam is not None:
+            why.append("with reparam (the network renders vp and the optimizer "
+                       "steps its weights, so there is no grid gradient to "
+                       "smooth: drop grad_smooth, or invert on the grid)")
+        if self.optimizer.kind == "lbfgs":
+            why.append("with optimizer.kind='lbfgs' (L-BFGS steps from its own "
+                       "closure, which never smooths the gradient: use adam or "
+                       "sgd, or drop grad_smooth)")
+        if why:
+            raise ValueError(
+                "fwi: the conventional path would ignore grad_smooth "
+                + " and ".join(why) + ". The config_resolved.yaml of an earlier "
+                "such run records grad_smooth as set, though that run went "
+                "without it.")
+        # The grid models are the init models (the run refuses any other set).
+        refs = (self.init_models if self.init_models is not None
+                else [self.init_model] if self.init_model is not None else [])
+        names = [r.name for r in refs]
+        if gs.per_model is None and len(names) > 1:
+            raise ValueError(
+                f"fwi: this run inverts {', '.join(names)}, so grad_smooth takes "
+                "one block per model: grad_smooth: {per_model: {"
+                + ", ".join(f"{n}: {{...}}" for n in names) + "}}, and a model "
+                "left out is not smoothed. Earlier runs smoothed vp alone with "
+                "the one block (nothing when the equation has no vp); to keep "
+                "that, move its settings under per_model: {vp: ...}.")
+        unknown = [n for n in (gs.per_model or {}) if n not in names]
+        if unknown:
+            raise ValueError(
+                f"fwi: grad_smooth.per_model names {', '.join(unknown)}, which "
+                f"this run does not invert (it inverts {', '.join(names)}), so "
+                "that block would be ignored. Drop it.")
+        return self
+
     # With ``stages`` the run is the stages' epochs: the conventional and
     # frequency-selection paths require this to be their sum.
     epochs: int = Field(ge=1)
@@ -2758,10 +2856,13 @@ class FWISpec(BaseTaskSpec):
     # into vp (or net params in reparam mode), exactly like smooth_regularization.
     diffusion_prior: DiffusionPriorSpec | None = None
 
-    # Optional Gaussian smoothing of the vp gradient before the optimizer
-    # step (tomographic gradient preconditioner). See :class:`GradSmoothSpec`.
-    # Turns an oscillatory single-band traveltime kernel into a smooth,
-    # low-wavenumber background update. Grid-mode only.
+    # Optional Gaussian smoothing of the grid models' gradients before the
+    # optimizer step (tomographic gradient preconditioner). See
+    # :class:`GradSmoothSpec`. Turns an oscillatory single-band traveltime
+    # kernel into a smooth, low-wavenumber background update. The conventional
+    # path smooths each inverted grid model with its own block (the one block
+    # of a one-model run, ``per_model`` for several), on the epochs its
+    # ``every`` divides, and refuses it with reparam or L-BFGS.
     grad_smooth: GradSmoothSpec | None = None
 
     @field_validator("local_model_window", mode="before")

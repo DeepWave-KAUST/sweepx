@@ -112,7 +112,7 @@ Selected by `task_type: fwi`.
 | `receiver_smoothing` | [ReceiverSmoothingSpec](#receiversmoothingspec) \| null | `null` | Optional lateral averaging of neighbouring receivers, applied to BOTH obs and syn right before the loss. |
 | `smooth_regularization` | [SmoothRegSpec](#smoothregspec) \| null | `null` | Optional Sobolev / TV-style smoothness regularizer on vp. |
 | `diffusion_prior` | [DiffusionPriorSpec](#diffusionpriorspec) \| null | `null` | Optional plug-and-play DDPM diffusion prior on vp. |
-| `grad_smooth` | [GradSmoothSpec](#gradsmoothspec) \| null | `null` | Optional Gaussian smoothing of the vp gradient before the optimizer step (tomographic gradient preconditioner). |
+| `grad_smooth` | [GradSmoothSpec](#gradsmoothspec) \| null | `null` | Optional Gaussian smoothing of the grid models' gradients before the optimizer step (tomographic gradient preconditioner). |
 
 ## LSRTMSpec
 
@@ -399,7 +399,7 @@ Plug-and-play DDPM diffusion prior added to the FWI objective.
 
 ## GradSmoothSpec
 
-Gaussian smoothing of the vp gradient before the optimizer step.
+Gaussian smoothing of the grid models' gradients before the optimizer step.
 
 | field | type | default | note |
 |---|---|---|---|
@@ -411,6 +411,7 @@ Gaussian smoothing of the vp gradient before the optimizer step.
 | `mask_above_row` | int | `-1` | zero gradient for z-rows < this |
 | `mask_below_row` | int | `-1` | zero gradient for z-rows > this |
 | `mask_taper_rows` | int | `0` | Linear taper width (rows) at the mask boundary. |
+| `per_model` | dict[str, [GradSmoothSpec](#gradsmoothspec)] \| null | `null` | A run that inverts several models (vp / vs / rho, ...) gives each its own block here, keyed by model name; a model left out is not smoothed, and the settings above stay at their defaults. |
 
 ## IlluminationPreconditionSpec
 

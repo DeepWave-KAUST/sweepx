@@ -21,7 +21,7 @@ one model is inverted). The rest of `sweepx.opt` (L-BFGS-B, NCG, Newton, SOAP,
 | `scheduler: {kind: constant \| step \| exp \| cosine}` | `step_size`/`gamma`, `gamma`, `t_max`/`eta_min` | one schedule over the global epoch of all stages; stage `lr_scale` sets each stage's base |
 | `model_bounds: {vp: {min, max, enabled}}` | per model name | in-place clamp after every step |
 | `illumination_precondition: {enabled, epsilon, exponent: 0.5, relative_epsilon}` | | divides the gradient by `(S*R + eps)^exponent`; needs `impl: c` illumination. `relative_epsilon` (e.g. 1e-3) is safer than an absolute `epsilon` |
-| `grad_smooth: {sigma_z_cells, sigma_x_cells, sigma_y_cells, every, mask_above_row, ...}` | | Gaussian-smooths the vp gradient (grid mode) |
+| `grad_smooth: {sigma_z_cells, sigma_x_cells, sigma_y_cells, every, mask_above_row, ...}` | one block per model: `per_model: {vp: {...}, vs: {...}}` when several are inverted (one left out is not smoothed) | Gaussian-smooths each grid model's gradient on the epochs its `every` divides; mask rows count rows of each stage's grid; refused with `reparam` or `lbfgs` |
 | `smooth_regularization: {weight, order, x/y/z_weight, velocity_scale_m_s}` | | adds `weight * TV(vp)` to the loss |
 
 Under `reparam:` the optimizer kind/eps/betas apply but `lr` comes from
