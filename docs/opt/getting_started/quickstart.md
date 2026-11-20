@@ -91,9 +91,11 @@ for epoch in range(cfg["epochs"]):
 
 The Newton-type optimizers differ: `TruncatedNewton` and `TrustRegion` take a
 `loss_fn` that returns the loss **without** calling `backward()`,
-`TruncatedGaussNewton` takes a `residual_fn` that returns the residual, and
-all three need a solver that can be differentiated twice (sweep's
-`impl='eager'` without `torch.compile`). See
+`TruncatedGaussNewton` takes a `residual_fn` that returns the residual. Their
+default products differentiate the solver twice (sweep's `impl='eager'`
+without `torch.compile`); with `hessian="difference"` (`jacobian="difference"`
+for Gauss-Newton) they take them from first derivatives and run with
+`impl='c'`. See
 [Truncated Newton](../optimizers/newton.md),
 [Truncated Gauss-Newton](../optimizers/gauss_newton.md) and
 [Trust-Region](../optimizers/trust_region.md).

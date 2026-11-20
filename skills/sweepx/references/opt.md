@@ -38,8 +38,8 @@ Every class subclasses `torch.optim.Optimizer`.
 | `Lion`, `Shampoo`, `SOAP` | optional closure | adaptive; Shampoo's per-cell change is smaller than `lr` |
 | `SteepestDescent` | closure only with `line_search` | `lr` multiplies the raw gradient |
 | `NCG`, `LBFGS`, `LBFGSB` | closure | set `initial_step=` (parameter units) or the first line search barely moves |
-| `TruncatedNewton`, `TrustRegion` | `loss_fn` (no `backward()` inside) | need a twice-differentiable solver: `impl='eager'`, no `torch.compile` |
-| `TruncatedGaussNewton` | `residual_fn` | same |
+| `TruncatedNewton`, `TrustRegion` | `loss_fn` (no `backward()` inside) | default `hessian="autograd"` needs a twice-differentiable solver (`impl='eager'`, no `torch.compile`); `hessian="difference"` (two gradients per H v, `rel_step=1e-2`) runs with `impl='c'`, not with sweep's qP equations |
+| `TruncatedGaussNewton` | `residual_fn` | same, with `jacobian="difference"` (J v from two residuals) |
 | `SAM(base)` | closure | base must not need a closure |
 
 All but SAM accept `bounds=(lo, hi)` (iterates and line-search trials are

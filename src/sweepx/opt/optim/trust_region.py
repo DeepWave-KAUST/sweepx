@@ -11,9 +11,10 @@ Two flavours share one outer driver:
   accepted step. Cheap (2-D analytic solve) and surprisingly competitive
   on FWI.
 
-Both require Hessian-vector products through autograd (loss_fn must NOT
-call backward, and the loss must be twice differentiable: with sweep,
-``impl='eager'`` without ``torch.compile``), and both adjust the trust radius
+Both take Hessian-vector products (loss_fn must NOT call backward): through
+autograd by default, where the loss must be twice differentiable (with sweep,
+``impl='eager'`` without ``torch.compile``), or with ``hessian='difference'``
+from two gradients, which runs with every solver. Both adjust the trust radius
 according to the standard ``rho = actual / predicted`` recipe (Nocedal &
 Wright Algorithm 4.1).
 
@@ -41,6 +42,7 @@ from sweepx.opt._utils import (
     write_flat_to_params,
 )
 from sweepx.opt.linalg.cg import steihaug_cg
+from sweepx.opt.optim._difference import check_rel_step, check_route, gradient_difference
 from sweepx.opt.optim.newton import NOT_TWICE_DIFFERENTIABLE
 
 
@@ -51,7 +53,9 @@ class TrustRegion(Optimizer):
         params: iterable of parameter tensors / param-groups.
         variant: ``"ttr"`` (Steihaug-CG) or ``"astr"`` (2-D subspace).
         bounds: optional ``(lo, hi)`` projected box; the trial point is
-            projected before it is evaluated.
+            projected before it is evaluated; with ``hessian="difference"``,
+            where a probe outside it gives a loss that is not finite, the
+            product is taken one-sided on the side inside.
         preconditioner: optional callable used inside Steihaug-CG (TTR only).
         initial_radius: initial trust radius: the Euclidean norm of the step
             over all optimized parameters, in parameter units. It therefore
@@ -65,11 +69,16 @@ class TrustRegion(Optimizer):
             that hit the trust boundary.
         max_inner_iter: cap on Steihaug-CG iterations (TTR only).
         cg_tol: relative residual tolerance for Steihaug-CG (TTR only).
+        hessian: ``"autograd"`` (default, double backward, exact) or
+            ``"difference"`` (central difference of two gradients, any
+            solver); see :class:`~sweepx.opt.optim.TruncatedNewton`.
+        rel_step: for ``hessian="difference"``, the largest change of a
+            parameter relative to its own largest magnitude.
 
     Calling convention:
         ``opt.step(loss_fn)`` where ``loss_fn`` returns the loss tensor
-        WITHOUT calling backward. The loss must be twice differentiable
-        through autograd (sweep: ``impl='eager'`` with
+        WITHOUT calling backward. With ``hessian="autograd"`` the loss must be
+        twice differentiable through autograd (sweep: ``impl='eager'`` with
         ``EagerOptions(use_compile=False)``, not ``impl='c'``).
     """
 
@@ -88,9 +97,13 @@ class TrustRegion(Optimizer):
         radius_grow: float = 2.0,
         max_inner_iter: int = 50,
         cg_tol: float = 1e-2,
+        hessian: str = "autograd",
+        rel_step: float = 1e-2,
     ) -> None:
         if variant not in ("ttr", "astr"):
             raise ValueError(f"unknown variant: {variant!r}")
+        self.hessian = check_route("hessian", hessian)
+        self.rel_step = check_rel_step(rel_step)
         if not (0.0 < initial_radius <= max_radius):
             raise ValueError("require 0 < initial_radius <= max_radius")
         super().__init__(params, dict())
@@ -210,10 +223,11 @@ class TrustRegion(Optimizer):
         if not all(p.requires_grad for p in params):
             raise RuntimeError("All optimized parameters must require grad.")
 
-        # 1. Loss + grad with graph for HVP.
+        # 1. Loss + grad, with its graph for an autograd HVP.
+        autograd_hvp = self.hessian == "autograd"
         with torch.enable_grad():
             loss = loss_fn()
-            grads_list = torch.autograd.grad(loss, params, create_graph=True)
+            grads_list = torch.autograd.grad(loss, params, create_graph=autograd_hvp)
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
         g_norm = float(g_flat.norm())
         if not (math.isfinite(float(loss.detach())) and math.isfinite(g_norm)):
@@ -222,11 +236,14 @@ class TrustRegion(Optimizer):
             )
         if g_norm == 0.0:
             return loss
-        if not any(g.requires_grad for g in grads_list):
+        if autograd_hvp and not any(g.requires_grad for g in grads_list):
             raise RuntimeError(NOT_TWICE_DIFFERENTIABLE.format(owner="TrustRegion"))
 
         def matvec(v_flat: Tensor) -> Tensor:
             v_list = self._unflatten(v_flat, params)
+            if not autograd_hvp:
+                return self._flatten_list(gradient_difference(loss_fn, params, v_list, self.rel_step,
+                                                              self.bounds))
             with torch.enable_grad():
                 inner = sum((g * v).sum() for g, v in zip(grads_list, v_list))
                 hv = torch.autograd.grad(inner, params, retain_graph=True)

@@ -13,9 +13,11 @@ Unlike the rest of sweepx.opt's optimizers, ``TruncatedNewton.step()`` takes
 a ``loss_fn`` that **must not call backward** - the optimizer needs the
 intact autograd graph to build Hessian-vector products. A standard
 ``zero_grad / forward / backward / return loss`` closure would discard the
-graph too early. The loss must also be twice differentiable through autograd:
-with sweep that means ``impl='eager'`` without ``torch.compile``; the native
-``impl='c'`` gradient has no graph.
+graph too early. With ``hessian='autograd'`` (default) the loss must also be
+twice differentiable through autograd: with sweep that means ``impl='eager'``
+without ``torch.compile``; the native ``impl='c'`` gradient has no graph.
+``hessian='difference'`` takes each Hessian-vector product from two gradients
+instead and runs with every solver a gradient runs with.
 
 References:
     Nash, S. G. (2000). "A survey of truncated-Newton methods."
@@ -41,6 +43,7 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.linalg.cg import cg
+from sweepx.opt.optim._difference import check_rel_step, check_route, gradient_difference
 from sweepx.opt.optim._wolfe_step import wolfe_step
 
 # Raised when create_graph=True returns gradients without an autograd graph.
@@ -49,7 +52,10 @@ NOT_TWICE_DIFFERENTIABLE = (
     "without an autograd graph, so Hessian-vector products cannot be formed. "
     "This happens when the loss goes through an operation without double-"
     "backward support, e.g. sweep's native impl='c' propagator: build the "
-    "solver with impl='eager' and eager_options=EagerOptions(use_compile=False)."
+    "solver with impl='eager' and eager_options=EagerOptions(use_compile=False), "
+    "or pass hessian='difference' to take each Hessian-vector product from two "
+    "gradients, which runs with every solver whose gradient is smooth (not with "
+    "sweep's qP equations)."
 )
 
 
@@ -59,7 +65,9 @@ class TruncatedNewton(Optimizer):
     Args:
         params: iterable of parameter tensors / param-groups.
         bounds: optional ``(lo, hi)`` box; every line-search trial point is
-            projected onto it.
+            projected onto it; with ``hessian="difference"``, where a probe
+            outside it gives a loss that is not finite, the product is taken
+            one-sided on the side inside.
         preconditioner: optional callable ``(grad, param) -> grad`` used as
             the inner-CG preconditioner. Same contract as in
             :mod:`sweepx.opt.precond`.
@@ -67,13 +75,23 @@ class TruncatedNewton(Optimizer):
         forcing_constant: tolerance used when ``forcing="constant"``.
         max_inner_iter: cap on PCG iterations per Newton step.
         c1, c2, alpha_init, alpha_max, max_ls_iter: Wolfe parameters.
+        hessian: ``"autograd"`` (default): each Hessian-vector product is a
+            double backward, exact, and needs a loss autograd can
+            differentiate twice. ``"difference"``: each one is a central
+            difference of two gradients at ``theta +- e v``, which runs with
+            every solver a gradient runs with (sweep's ``impl='c'``, boundary
+            saving, the compiled eager step).
+        rel_step: for ``hessian="difference"``, the largest change of a
+            parameter relative to its own largest magnitude (``e`` is chosen
+            so that no parameter changes by more).
 
     Calling convention:
         ``opt.step(loss_fn)`` where ``loss_fn`` takes no arguments and returns
         the loss as a tensor that requires_grad. **Do not call ``backward``
-        inside ``loss_fn``** - the optimizer needs the graph intact. The loss
-        must be twice differentiable through autograd (sweep: ``impl='eager'``
-        with ``EagerOptions(use_compile=False)``, not ``impl='c'``).
+        inside ``loss_fn``** - the optimizer needs the graph intact. With
+        ``hessian="autograd"`` the loss must be twice differentiable through
+        autograd (sweep: ``impl='eager'`` with
+        ``EagerOptions(use_compile=False)``, not ``impl='c'``).
     """
 
     def __init__(
@@ -90,9 +108,13 @@ class TruncatedNewton(Optimizer):
         alpha_init: float = 1.0,
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
+        hessian: str = "autograd",
+        rel_step: float = 1e-2,
     ) -> None:
         if forcing not in ("eisenstat_walker", "constant"):
             raise ValueError(f"unknown forcing: {forcing!r}")
+        self.hessian = check_route("hessian", hessian)
+        self.rel_step = check_rel_step(rel_step)
         if max_inner_iter < 1:
             raise ValueError("max_inner_iter must be >= 1")
         super().__init__(params, dict())
@@ -147,11 +169,12 @@ class TruncatedNewton(Optimizer):
         if not all(p.requires_grad for p in params):
             raise RuntimeError("All optimized parameters must require grad for HVP.")
 
-        # 1. Loss + first gradient with create_graph=True for HVP.
+        # 1. Loss + first gradient, with create_graph=True for an autograd HVP.
+        autograd_hvp = self.hessian == "autograd"
         with torch.enable_grad():
             loss = loss_fn()
             grads_list = torch.autograd.grad(
-                loss, params, create_graph=True, allow_unused=False,
+                loss, params, create_graph=autograd_hvp, allow_unused=False,
             )
         g_flat = self._flatten_list([g.detach() for g in grads_list]).clone()
         g_norm = float(g_flat.norm())
@@ -161,12 +184,15 @@ class TruncatedNewton(Optimizer):
             )
         if g_norm == 0.0:
             return loss
-        if not any(g.requires_grad for g in grads_list):
+        if autograd_hvp and not any(g.requires_grad for g in grads_list):
             raise RuntimeError(NOT_TWICE_DIFFERENTIABLE.format(owner="TruncatedNewton"))
 
         # 2. Build matvec for the inner CG: H @ v.
         def matvec(v_flat: Tensor) -> Tensor:
             v_list = self._unflatten(v_flat, params)
+            if not autograd_hvp:
+                hv = gradient_difference(loss_fn, params, v_list, self.rel_step, self.bounds)
+                return self._flatten_list(hv)
             with torch.enable_grad():
                 inner = sum((g * v).sum() for g, v in zip(grads_list, v_list))
                 hv = torch.autograd.grad(inner, params, retain_graph=True)
