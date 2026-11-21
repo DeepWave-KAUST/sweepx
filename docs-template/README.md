@@ -66,3 +66,10 @@ gives it to them:
 
 This site builds from each package's development branch, so a feature stays
 `dev` until it is released.
+
+Above it, under the animated hero, up to three **spotlight** tiles give the
+newest additions a large picture. They are data, not HTML: the `spotlight`
+list under `extra` in `mkdocs.yml` (badge `release`, `topic`, `title`, `text`,
+`links`, and an `image`, `math` or a `code` block; see the comment there). Replace
+them when you rotate the strip. Their images are drawn in the site palette
+from `sweep` runs by the scripts in `tools/landing_hero/`.

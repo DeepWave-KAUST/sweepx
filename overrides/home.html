@@ -50,11 +50,60 @@
     </div>
   </div>
 
-  {# Wide animated wavefield panel below the hero CTAs (GIF — universal). #}
+  {# Wide animated panel below the hero CTAs: one shot's forward wavefield,
+     residual, adjoint wavefield and gradient, simulated with sweep
+     (tools/landing_hero). The frames carry no text: the step labels are HTML,
+     highlighted from the video's clock (data-start, in seconds, matches
+     PHASES in render.py). The poster is the gradient frame; it is all a
+     reader with reduced motion sees. #}
   <div class="sweep-hero-panel">
-    <img src="{{ 'figures/landing/hero_anim.gif' | url }}?v=4"
-         alt="SWEEP — animated wavefield"
-         decoding="async">
+    <div class="sweep-hero-panel__card">
+      <ol class="sweep-hero-steps">
+        <li data-start="0"><span>01</span> forward <i>u(x, t)</i></li>
+        <li data-start="3.6"><span>02</span> residual <i>d &minus; d<sub>obs</sub></i></li>
+        <li data-start="4.7"><span>03</span> adjoint <i>&lambda;(x, t)</i></li>
+        <li data-start="8.5"><span>04</span> gradient <i>&part;L/&part;v</i></li>
+      </ol>
+      <video autoplay muted loop playsinline preload="auto" width="1840" height="530"
+             poster="{{ 'figures/landing/hero_loop_poster.jpg' | url }}"
+             aria-label="Forward wavefield, data residual, adjoint wavefield and gradient for one shot">
+        <source src="{{ 'figures/landing/hero_loop.webm' | url }}" type="video/webm">
+        <source src="{{ 'figures/landing/hero_loop.mp4' | url }}" type="video/mp4">
+      </video>
+    </div>
+    <script>
+      (function () {
+        var card = document.currentScript.previousElementSibling;
+        var v = card.querySelector("video");
+        var steps = card.querySelectorAll(".sweep-hero-steps li");
+        var starts = Array.prototype.map.call(steps, function (li) {
+          return parseFloat(li.dataset.start);
+        });
+        var current = -1;
+        function mark(t) {
+          var k = 0;
+          while (k + 1 < starts.length && t >= starts[k + 1]) k++;
+          if (k === current) return;
+          if (current >= 0) steps[current].classList.remove("is-active");
+          steps[k].classList.add("is-active");
+          current = k;
+        }
+        function tick() {
+          mark(v.currentTime);
+          if (!v.paused) requestAnimationFrame(tick);
+        }
+        if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          v.removeAttribute("autoplay");
+          v.pause();
+          mark(Infinity);
+          return;
+        }
+        // until playback starts the poster (the gradient frame) is showing
+        mark(Infinity);
+        v.addEventListener("play", tick);
+        if (!v.paused) tick();
+      })();
+    </script>
   </div>
 {% endblock %}
 
@@ -66,6 +115,58 @@
 {% block container %}
   <div class="md-content" data-md-component="content">
     <article class="md-content__inner md-typeset sweep-home-body">
+      {# Spotlight tiles, from extra.spotlight in mkdocs.yml #}
+      {% if config.extra.spotlight %}
+      <section class="sweep-spot">
+        {% for item in config.extra.spotlight %}
+        <div class="sweep-spot__tile{% if item.wide %} sweep-spot__tile--wide{% endif %}">
+          <div class="sweep-spot__text">
+            <div class="sweep-spot__badge">
+              <span class="sweep-spot__chip{% if item.release == 'dev' %} sweep-spot__chip--dev{% endif %}">{{ item.release }}</span>
+              {{ item.topic }}
+            </div>
+            <h2 class="sweep-spot__title">{{ item.title }}</h2>
+            <p class="sweep-spot__desc">{{ item.text }}</p>
+            <div class="sweep-spot__links">
+              {% for link in item.links %}
+              <a href="{{ link.url | url }}">{{ link.label }}<span aria-hidden="true"> ›</span></a>
+              {% endfor %}
+            </div>
+          </div>
+          {% if item.image %}
+          <figure class="sweep-spot__media">
+            <picture>
+              {% if item.image_narrow %}
+              <source media="(max-width: 600px)" srcset="{{ item.image_narrow | url }}">
+              {% endif %}
+              <img src="{{ item.image | url }}" alt="{{ item.alt }}" loading="lazy" decoding="async">
+            </picture>
+            {% if item.caption_narrow %}
+            <figcaption>
+              <span class="sweep-spot__cap-wide">{{ item.caption }}</span>
+              <span class="sweep-spot__cap-narrow">{{ item.caption_narrow }}</span>
+            </figcaption>
+            {% else %}
+            <figcaption>{{ item.caption }}</figcaption>
+            {% endif %}
+          </figure>
+          {% endif %}
+          {% if item.math %}
+          <figure class="sweep-spot__formula">
+            {% for tex in item.math %}
+            <div class="sweep-spot__math">\[ {{ tex }} \]</div>
+            {% endfor %}
+            <figcaption>{{ item.caption }}</figcaption>
+          </figure>
+          {% endif %}
+          {% if item.code %}
+          <pre class="sweep-spot__code"><code>{% for line in item.code %}{{ line | e }}
+{% endfor %}</code></pre>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </section>
+      {% endif %}
       {{ page.content }}
     </article>
   </div>

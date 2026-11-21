@@ -76,6 +76,73 @@ extra:
         Loss: misfit functions, from L2 to optimal transport
         NN: neural reparameterizations and priors
         Opt: FWI optimizers and preconditioners
+  # Spotlight tiles under the home-page hero (overrides/home.html): the few
+  # newest additions worth a picture (an `image`, `math` -- LaTeX lines that
+  # the page's KaTeX renders -- or a `code` block), at most three. The first
+  # spans the row when `wide` is set; `image_narrow` / `caption_narrow`
+  # replace a tile's image and caption on phones. `release` is a version,
+  # `dev` for what is merged but not on PyPI, or `docs` (as in the "What's
+  # new" list of docs/index.md, which stays the full record). Replace them at
+  # each release. Images are WebP in docs/figures/landing/new/, made by the
+  # scripts in tools/landing_hero/.
+  spotlight:
+    - release: dev
+      topic: 3-D SEM
+      title: Anisotropic spectral elements in 3-D
+      text: >-
+        <code>ElasticVTISEM3D</code> and <code>ElasticTTISEM3D</code> take
+        Thomsen's parameters and a tilted symmetry axis, with the C-PML, free
+        surface and gradients of the isotropic solver; <code>impl='c'</code>
+        runs them on CUDA.
+      image: figures/landing/new/sem_aniso3d.webp
+      image_narrow: figures/landing/new/sem_aniso3d_tilted.webp
+      alt: Vertical particle velocity on the x-z plane of an isotropic, a VTI and a tilted medium
+      caption: vz on the x-z plane through the force · isotropic, VTI, tilted 40°
+      caption_narrow: vz on the x-z plane through the force · tilted 40°
+      wide: true
+      links:
+        - label: Notebook
+          url: solver/notebooks/60_sem_tti3d/
+        - label: SEM guide
+          url: solver/user-guide/sem/
+    - release: dev
+      topic: Examples
+      title: Spectral elements, one notebook per topic
+      text: >-
+        Eight short notebooks: the mesh and time step, equations and models,
+        sources and receivers, boundaries, gradients and memory, fluid-solid,
+        3-D, and VTI and Biot rocks.
+      image: figures/landing/new/sem_topography.webp
+      image_narrow: figures/landing/new/sem_topography_narrow.webp
+      alt: Vertical particle velocity under a two-hill surface, on a spectral-element mesh that follows the surface
+      caption: vz at 0.3 s under two hills · the mesh follows the surface
+      links:
+        - label: SEM examples
+          url: solver/examples/sem/
+        - label: First notebook
+          url: solver/notebooks/50_sem_mesh_and_time_step/
+    - release: docs
+      topic: Reference
+      title: The governing equations on every equation page
+      text: >-
+        Each equation's API page now states what it solves: the equations,
+        with every symbol tied to a model or wavefield name, the time
+        stepping, the boundary conditions and the references.
+      math:
+        - |-
+          \begin{aligned}
+          \frac{\partial^2 p}{\partial t^2}
+            &= v_p^2 \left( \frac{\partial^2 p}{\partial x^2}
+                           + \frac{\partial^2 p}{\partial z^2} \right) \\[6pt]
+          p^{n+1} &= 2p^{n} - p^{n-1} \\
+            &\quad + \Delta t^2\, v_p^2 \left( \delta_{xx} + \delta_{zz} \right) p^{n}
+          \end{aligned}
+      caption: Acoustic · p is the wavefield h1 and vp the model vp
+      links:
+        - label: Acoustic
+          url: solver/api/equations/acoustic/
+        - label: All equations
+          url: solver/api/equations/
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/DeepWave-KAUST
