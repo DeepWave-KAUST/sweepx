@@ -26,7 +26,7 @@ theme:
   name: material
   custom_dir: overrides
   logo: assets/logo/sweep-icon-transparent.svg
-  favicon: assets/logo/sweep-icon-32.png
+  favicon: assets/logo/sweep-icon-96.png
   font:
     text: Inter Tight
     code: JetBrains Mono
