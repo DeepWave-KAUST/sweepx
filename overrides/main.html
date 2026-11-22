@@ -10,6 +10,13 @@
 
 {% block extrahead %}
   {{ super() }}
+  {#- Material's own <link rel="icon"> is theme.favicon (96 px). Search
+      engines want a square icon in multiples of 48 px and also look for
+      /favicon.ico (docs/favicon.ico: 16, 32 and 48 px). -#}
+  <link rel="icon" type="image/png" sizes="48x48" href="{{ 'assets/logo/sweep-icon-48.png' | url }}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ 'assets/logo/sweep-icon-192.png' | url }}">
+  <link rel="icon" type="image/svg+xml" href="{{ 'assets/logo/sweep-icon-transparent.svg' | url }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/logo/apple-touch-icon.png' | url }}">
   {# — Inter Tight via Google Fonts, only weights we use — #}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
