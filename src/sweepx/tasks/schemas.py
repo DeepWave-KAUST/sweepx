@@ -1857,7 +1857,14 @@ class OptimizerLBFGS(_Forbid):
     model's own units (m/s for vp); ``"auto"`` is 1% of the mean |model|. Later
     steps take their scale from the curvature pairs, times ``lr`` (1 = the
     quasi-Newton step). torch's L-BFGS took steps in gradient units, which on a
-    velocity model in m/s either stalled or diverged."""
+    velocity model in m/s either stalled or diverged.
+
+    ``reuse_accepted_grad`` (default True) starts each iteration from the loss
+    and gradient the previous line search computed at the model it accepted,
+    instead of running all shots there again: one forward + adjoint fewer per
+    iteration, also across epochs of a stage. Within a stage the shots are
+    then summed in the order of the stage's first epoch. ``False`` recomputes
+    at every iteration, as before."""
 
     kind: Literal["lbfgs"] = "lbfgs"
     lr: float = Field(1.0, gt=0)  # one shared multiplier (no per-model splits)
@@ -1865,6 +1872,7 @@ class OptimizerLBFGS(_Forbid):
     max_iter: int = Field(1, ge=1)
     history_size: int = Field(10, ge=1)
     line_search_fn: Literal["strong_wolfe"] = "strong_wolfe"
+    reuse_accepted_grad: bool = True
 
     @field_validator("initial_step")
     @classmethod

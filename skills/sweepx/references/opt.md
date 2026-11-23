@@ -17,7 +17,7 @@ one model is inverted). The rest of `sweepx.opt` (L-BFGS-B, NCG, Newton, SOAP,
 |---|---|---|
 | `optimizer: {kind: adam, lr, eps: 1e-22, betas: [0.9, 0.999]}` | `lr` scalar or `{vp: 20, vs: 5}` per inverted model | default choice; grid `lr` ≈ m/s per step (5–50) |
 | `optimizer: {kind: sgd, lr, momentum: 0.9, nesterov, weight_decay}` | per-model `lr` dict allowed | `lr` multiplies the raw gradient (tiny for velocities) |
-| `optimizer: {kind: lbfgs, lr: 1.0, initial_step: auto, max_iter: 1, history_size: 10}` | single `lr` (multiplies the quasi-Newton step) | `initial_step` = first step in model units (`auto` = 1% of mean \|model\|; set it for LSRTM, whose image starts at 0); `max_iter` iterations per epoch; needs `batchsize` ≥ shot count; refused under torchrun (`--nproc-per-node > 1`). Since 0.4.1; before, `torch.optim.LBFGS` took steps in gradient units |
+| `optimizer: {kind: lbfgs, lr: 1.0, initial_step: auto, max_iter: 1, history_size: 10}` | single `lr` (multiplies the quasi-Newton step) | `initial_step` = first step in model units (`auto` = 1% of mean \|model\|; set it for LSRTM, whose image starts at 0); `max_iter` iterations per epoch; `reuse_accepted_grad` (default true) starts each iteration, also across a stage's epochs, from the last line-search gradient: one forward + adjoint fewer per iteration (`false` = recompute, as before); needs `batchsize` ≥ shot count; refused under torchrun (`--nproc-per-node > 1`). Since 0.4.1; before, `torch.optim.LBFGS` took steps in gradient units |
 | `scheduler: {kind: constant \| step \| exp \| cosine}` | `step_size`/`gamma`, `gamma`, `t_max`/`eta_min` | one schedule over the global epoch of all stages; stage `lr_scale` sets each stage's base |
 | `model_bounds: {vp: {min, max, enabled}}` | per model name | in-place clamp after every step |
 | `illumination_precondition: {enabled, epsilon, exponent: 0.5, relative_epsilon}` | | divides the gradient by `(S*R + eps)^exponent`; needs `impl: c` illumination. `relative_epsilon` (e.g. 1e-3) is safer than an absolute `epsilon` |
@@ -37,7 +37,7 @@ Every class subclasses `torch.optim.Optimizer`.
 | `AdamFWI(params, lr, variant="adam", eps=1e-22)` | optional closure | `lr` ≈ change per step in parameter units |
 | `Lion`, `Shampoo`, `SOAP` | optional closure | adaptive; Shampoo's per-cell change is smaller than `lr` |
 | `SteepestDescent` | closure only with `line_search` | `lr` multiplies the raw gradient |
-| `NCG`, `LBFGS`, `LBFGSB` | closure | set `initial_step=` (parameter units) or the first line search barely moves |
+| `NCG`, `LBFGS`, `LBFGSB` | closure | set `initial_step=` (parameter units) or the first line search barely moves; `reuse_accepted_grad=True` (default) reuses the accepted point's gradient for the same closure object, so pass a new closure or call `invalidate_grad_cache()` when the misfit changes |
 | `TruncatedNewton`, `TrustRegion` | `loss_fn` (no `backward()` inside) | default `hessian="autograd"` needs a twice-differentiable solver (`impl='eager'`, no `torch.compile`); `hessian="difference"` (two gradients per H v, `rel_step=1e-2`) runs with `impl='c'`, not with sweep's qP equations |
 | `TruncatedGaussNewton` | `residual_fn` | same, with `jacobian="difference"` (J v from two residuals) |
 | `SAM(base)` | closure | base must not need a closure |

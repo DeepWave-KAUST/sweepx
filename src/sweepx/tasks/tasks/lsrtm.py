@@ -26,7 +26,9 @@ from sweepx.tasks._helpers.optimizer import (
     _apply_stage_lr_scale,
     _bind_stage_scheduler,
     _build_optimizer,
+    _release_stage_closure,
     _remember_initial_lrs,
+    _stage_closure,
 )
 from sweepx.tasks._helpers.plotting import (
     _lsrtm_background_equation,
@@ -204,6 +206,8 @@ class LSRTMRunnerMixin:
             remaining = stage.epochs - already_done_in_stage
             if remaining <= 0:
                 continue
+            # A held L-BFGS closure keeps the previous stage's wavelet alive.
+            _release_stage_closure(optimizer)
             stage_wavelet = (_build_wavelet(stage.wavelet, spec.time)
                              if stage.wavelet is not None else wavelet)
             _apply_stage_lr_scale(optimizer, initial_lrs, stage.lr_scale)
@@ -276,6 +280,7 @@ class LSRTMRunnerMixin:
                 break
 
         stopper.uninstall()
+        _release_stage_closure(optimizer)
 
         # Final outputs (rank 0 only).
         artifacts: list[Path] = []
@@ -350,11 +355,21 @@ class LSRTMRunnerMixin:
                     acc_loss += float(loss_t.detach().cpu())
                 zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
+            closure = _closure
+            if global_batchsize == nshots:
+                # Every shot: the same misfit as an earlier epoch of this stage
+                # -> that epoch's closure, so the optimizer reuses its last
+                # line-search gradient. A shot batch is a new misfit each epoch.
+                closure = _stage_closure(
+                    optimizer, lambda: _closure,
+                    (optimizer, spec, lsrtm_solver, wavelet, sources, receivers, vp, ref,
+                     obs, data_mask, water_mask),
+                    (global_norm, global_batchsize, str(dev)))
             # max_iter L-BFGS iterations per epoch; the epoch's loss is the one
             # at its start, as for every other optimizer.
-            result = optimizer.step(_closure)
+            result = optimizer.step(closure)
             for _ in range(spec.optimizer.max_iter - 1):
-                optimizer.step(_closure)
+                optimizer.step(closure)
             return float(result) if result is not None else 0.0
 
         optimizer.zero_grad()

@@ -529,6 +529,7 @@ L-BFGS with a strong-Wolfe line search (``sweepx.opt.optim.LBFGS``).
 | `max_iter` | int | `1` |  |
 | `history_size` | int | `10` |  |
 | `line_search_fn` | `'strong_wolfe'` | `'strong_wolfe'` |  |
+| `reuse_accepted_grad` | bool | `true` |  |
 
 ## OptimizerSGD
 
