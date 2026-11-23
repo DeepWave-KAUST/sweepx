@@ -41,13 +41,15 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.optim._wolfe_step import (
+    AcceptedGradMixin,
     check_initial_step,
+    closure_evaluate,
     scaled_bracket,
     wolfe_step,
 )
 
 
-class LBFGS(Optimizer):
+class LBFGS(AcceptedGradMixin, Optimizer):
     """Limited-memory BFGS with bounds, restart, and optional preconditioning.
 
     ``step()`` always requires a closure (matches :class:`torch.optim.LBFGS`).
@@ -79,6 +81,12 @@ class LBFGS(Optimizer):
         restart_every: optional periodic cold restart.
         strict_descent: if True (default), reject steps whose initial
             ``phi'(0) >= 0`` and fall back to ``-g`` for that iteration.
+        reuse_accepted_grad: if True (default), start each step from the loss
+            and gradient the previous line search computed at the point it
+            accepted, instead of calling the closure there again (one closure
+            call fewer per step). Requires the same closure object and bitwise
+            equal parameters; see :meth:`invalidate_grad_cache` for closures
+            whose objective changes between steps.
     """
 
     def __init__(
@@ -97,6 +105,7 @@ class LBFGS(Optimizer):
         initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
         strict_descent: bool = True,
+        reuse_accepted_grad: bool = True,
     ) -> None:
         if history_size < 1:
             raise ValueError(f"history_size must be >= 1, got {history_size}")
@@ -116,6 +125,7 @@ class LBFGS(Optimizer):
         self.initial_step = check_initial_step(initial_step)
         self.restart_every = restart_every
         self.strict_descent = strict_descent
+        self._init_grad_cache(reuse_accepted_grad)
 
         self._s_hist: Deque[Tensor] = deque(maxlen=history_size)
         self._y_hist: Deque[Tensor] = deque(maxlen=history_size)
@@ -202,8 +212,7 @@ class LBFGS(Optimizer):
         if closure is None:
             raise RuntimeError("LBFGS requires a closure (line search needs to evaluate phi).")
 
-        with torch.enable_grad():
-            loss = closure()
+        loss = self._start_loss(closure)
 
         x0 = flat_params(self.param_groups).clone()
         g = flat_grads(self.param_groups).clone()
@@ -231,21 +240,19 @@ class LBFGS(Optimizer):
         if init_dphi >= 0.0:
             return loss
 
-        def evaluate():
-            with torch.enable_grad():
-                ll = closure()
-            return float(ll.detach()), flat_grads(self.param_groups)
-
         if self.initial_step is not None and not self._s_hist:
             alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
         else:
             alpha0, alpha_max = self.alpha_init, self.alpha_max
-        wolfe_step(
-            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+        _, accepted = wolfe_step(
+            self.param_groups, closure_evaluate(self.param_groups, closure),
+            x0, d, init_loss, init_dphi,
             bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
             c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
             owner="LBFGS", step_hints=True, initial_step=self.initial_step,
+            keep_accepted=self.reuse_accepted_grad,
         )
+        self._keep_accepted(closure, accepted)
 
         # Cache iteration-k state so iteration-(k+1) can form (s_k, y_k).
         self._prev_x = x0

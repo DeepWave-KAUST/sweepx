@@ -39,13 +39,15 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.optim._wolfe_step import (
+    AcceptedGradMixin,
+    closure_evaluate,
     check_initial_step,
     scaled_bracket,
     wolfe_step,
 )
 
 
-class LBFGSB(Optimizer):
+class LBFGSB(AcceptedGradMixin, Optimizer):
     """Bound-constrained limited-memory BFGS.
 
     Args:
@@ -67,6 +69,12 @@ class LBFGSB(Optimizer):
         restart_every: optional periodic cold restart.
         active_tol: tolerance when comparing parameters to the bound (in
             the units of the parameter; default 0).
+        reuse_accepted_grad: if True (default), start each step from the loss
+            and gradient the previous line search computed at the point it
+            accepted, instead of calling the closure there again (one closure
+            call fewer per step). Requires the same closure object and bitwise
+            equal parameters; see :meth:`invalidate_grad_cache` for closures
+            whose objective changes between steps.
     """
 
     def __init__(
@@ -85,6 +93,7 @@ class LBFGSB(Optimizer):
         initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
         active_tol: float = 0.0,
+        reuse_accepted_grad: bool = True,
     ) -> None:
         if bounds is None:
             raise ValueError("LBFGSB requires bounds=(lo, hi); use LBFGS for unconstrained.")
@@ -94,6 +103,7 @@ class LBFGSB(Optimizer):
             raise ValueError("history_size must be >= 1")
         super().__init__(params, dict())
         self.lo, self.hi = bounds
+        self._init_grad_cache(reuse_accepted_grad)
         self.history_size = history_size
         self.preconditioner = preconditioner
         self.c1 = c1
@@ -201,8 +211,7 @@ class LBFGSB(Optimizer):
         # Make sure we start from a feasible iterate.
         self._project_params()
 
-        with torch.enable_grad():
-            loss = closure()
+        loss = self._start_loss(closure)
         x0 = flat_params(self.param_groups).clone()
         g = flat_grads(self.param_groups).clone()
 
@@ -230,22 +239,19 @@ class LBFGSB(Optimizer):
             # Nothing to do this iteration.
             return loss
 
-        def evaluate():
-            with torch.enable_grad():
-                ll = closure()
-            return float(ll.detach()), flat_grads(self.param_groups)
-
         if self.initial_step is not None and not self._s_hist:
             alpha0, alpha_max = scaled_bracket(self.initial_step, d, self.alpha_init, self.alpha_max)
         else:
             alpha0, alpha_max = self.alpha_init, self.alpha_max
         # Projected line search: every trial is clamped onto the box.
-        wolfe_step(
-            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+        _, accepted = wolfe_step(
+            self.param_groups, closure_evaluate(self.param_groups, closure), x0, d, init_loss, init_dphi,
             bounds=(self.lo, self.hi), alpha_init=alpha0, alpha_max=alpha_max,
             c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
             owner="LBFGSB", step_hints=True, initial_step=self.initial_step,
+            keep_accepted=self.reuse_accepted_grad,
         )
+        self._keep_accepted(closure, accepted)
 
         self._prev_x = x0
         self._prev_g = g

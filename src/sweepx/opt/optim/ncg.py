@@ -28,13 +28,15 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.optim._wolfe_step import (
+    AcceptedGradMixin,
+    closure_evaluate,
     check_initial_step,
     scaled_bracket,
     wolfe_step,
 )
 
 
-class NCG(Optimizer):
+class NCG(AcceptedGradMixin, Optimizer):
     """Nonlinear Conjugate Gradient with Polak-Ribiere+ and a strong-Wolfe line search.
 
     Args:
@@ -63,6 +65,12 @@ class NCG(Optimizer):
             gradients, such as a velocity model in m/s.
         restart_every: if set, force ``d = -P g`` every ``N`` iterations as
             an extra safety reset on top of PR+'s automatic restart.
+        reuse_accepted_grad: if True (default), start each step from the loss
+            and gradient the previous line search computed at the point it
+            accepted, instead of calling the closure there again (one closure
+            call fewer per step). Requires the same closure object and bitwise
+            equal parameters; see :meth:`invalidate_grad_cache` for closures
+            whose objective changes between steps.
 
     Notes:
         ``step()`` always requires a closure. Without a closure the line
@@ -83,6 +91,7 @@ class NCG(Optimizer):
         max_ls_iter: int = 25,
         initial_step: Optional[float] = None,
         restart_every: Optional[int] = None,
+        reuse_accepted_grad: bool = True,
     ) -> None:
         if line_search != "strong_wolfe":
             raise ValueError(f"unsupported line_search: {line_search!r}")
@@ -90,6 +99,7 @@ class NCG(Optimizer):
             raise ValueError("restart_every must be positive or None")
         super().__init__(params, dict())
         self.bounds = bounds
+        self._init_grad_cache(reuse_accepted_grad)
         self.preconditioner = preconditioner
         self.line_search = line_search
         self.c1 = c1
@@ -129,8 +139,7 @@ class NCG(Optimizer):
         if closure is None:
             raise RuntimeError("NCG requires a closure (line search needs to evaluate phi).")
 
-        with torch.enable_grad():
-            loss = closure()
+        loss = self._start_loss(closure)
 
         x0 = flat_params(self.param_groups).clone()
         g = flat_grads(self.param_groups).clone()
@@ -170,11 +179,6 @@ class NCG(Optimizer):
         if init_dphi >= 0.0:
             return loss
 
-        def evaluate():
-            with torch.enable_grad():
-                ll = closure()
-            return float(ll.detach()), flat_grads(self.param_groups)
-
         if self.initial_step is None:
             alpha0, alpha_max = self.alpha_init, self.alpha_max
         else:
@@ -182,12 +186,14 @@ class NCG(Optimizer):
             if self._prev_alpha_dphi is not None:
                 # Nocedal & Wright eq. 3.60, inside the same bracket.
                 alpha0 = min(self._prev_alpha_dphi / init_dphi, alpha_max)
-        alpha_star = wolfe_step(
-            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+        alpha_star, accepted = wolfe_step(
+            self.param_groups, closure_evaluate(self.param_groups, closure), x0, d, init_loss, init_dphi,
             bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
             c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
             owner="NCG", step_hints=True, initial_step=self.initial_step,
+            keep_accepted=self.reuse_accepted_grad,
         )
+        self._keep_accepted(closure, accepted)
         self._prev_alpha_dphi = alpha_star * init_dphi if alpha_star > 0.0 else None
 
         # Cache the gradient at the *start* of this step, so the next step

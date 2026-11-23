@@ -47,11 +47,14 @@ sweepx.opt.optim.NCG(
     max_ls_iter=25,
     initial_step=None,               # first trial of the first search, parameter units
     restart_every=None,              # optional periodic safety restart
+    reuse_accepted_grad=True,        # start from the line search's last evaluation
 )
 ```
 
 A closure is **required** for every `step()` call (the line search needs to
-evaluate $\phi(\alpha)$ and $\phi'(\alpha)$).
+evaluate $\phi(\alpha)$ and $\phi'(\alpha)$). `reuse_accepted_grad` saves
+one closure call per step; see
+[L-BFGS-FWI](lbfgs.md#reusing-the-accepted-points-gradient).
 
 Diagnostic attributes:
 - `opt.last_beta` - the PR+ coefficient used most recently (0.0 means restart).

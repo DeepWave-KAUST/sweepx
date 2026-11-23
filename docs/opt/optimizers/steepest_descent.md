@@ -55,6 +55,7 @@ sweepx.opt.optim.SteepestDescent(
     alpha_init=1.0, alpha_max=10.0, # Wolfe step bracket, multiplies d = -P g
     max_ls_iter=25,                 # Wolfe iteration cap
     initial_step=None,              # first trial, parameter units (line search only)
+    reuse_accepted_grad=None,       # True with the line search (line search only)
 )
 ```
 
@@ -86,7 +87,9 @@ for _ in range(cfg["epochs"]):
 ```
 
 (b) SD with the strong-Wolfe line search, closure required; `initial_step`
-sizes the first trial in m/s:
+sizes the first trial in m/s. Each step starts from the line search's last
+evaluation instead of a second closure call there; see
+[L-BFGS-FWI](lbfgs.md#reusing-the-accepted-points-gradient):
 
 ```python
 vp = init_vp.clone().requires_grad_(True)

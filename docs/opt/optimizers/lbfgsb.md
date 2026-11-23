@@ -40,12 +40,15 @@ sweepx.opt.optim.LBFGSB(
     initial_step=None,              # first trial without history, parameter units
     restart_every=None,
     active_tol=0.0,
+    reuse_accepted_grad=True,
 )
 ```
 
 A closure is required. `preconditioner` and `initial_step` work as in
 [L-BFGS-FWI](lbfgs.md): $H_0 = \gamma_k P$, and `initial_step` sizes the
 first trial of a search that has no stored pairs, in parameter units.
+`reuse_accepted_grad` saves one closure call per step, as in
+[L-BFGS-FWI](lbfgs.md#reusing-the-accepted-points-gradient).
 
 ## Drop-in usage
 
