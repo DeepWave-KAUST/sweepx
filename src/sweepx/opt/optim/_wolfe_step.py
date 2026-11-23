@@ -8,13 +8,14 @@ unchanged is reported instead of passing silently.
 from __future__ import annotations
 
 import math
+import types
 import warnings
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import torch
 from torch import Tensor
 
-from sweepx.opt._utils import write_flat_to_params
+from sweepx.opt._utils import flat_grads, flat_params, iter_params, write_flat_to_params
 from sweepx.opt.linesearch.wolfe import strong_wolfe
 
 # Appended to the warnings of the optimizers that take ``initial_step``, when
@@ -51,9 +52,134 @@ def scaled_bracket(initial_step: float, d: Tensor, alpha_init: float,
     return alpha0, alpha0 * (alpha_max / alpha_init)
 
 
+def closure_evaluate(param_groups, closure) -> Callable[[], Tuple[Tensor, Tensor, tuple]]:
+    """``evaluate()`` for :func:`wolfe_step` from a closure that fills ``.grad``.
+
+    Returns ``(loss, flat_grad, grad_is_none)``; the last item records which
+    parameters were left without a ``.grad``, so :class:`AcceptedGradCache`
+    can restore ``.grad`` exactly as the closure left it.
+    """
+
+    def evaluate():
+        with torch.enable_grad():
+            loss = closure()
+        none = tuple(p.grad is None for p in iter_params(param_groups))
+        return loss.detach(), flat_grads(param_groups), none
+
+    return evaluate
+
+
+def _same_closure(a, b) -> bool:
+    # Bound methods are rebuilt on every attribute access; they compare equal
+    # when they bind the same function to the same object.
+    return a is b or (isinstance(a, types.MethodType) and a == b)
+
+
+class AcceptedGradCache:
+    """Loss and gradient at the point the last line search accepted.
+
+    The line search has already evaluated the closure at the point it accepts,
+    so the next ``step()`` need not evaluate it again there. :meth:`load`
+    reuses the stored result only when the parameters are bitwise equal to the
+    stored point and the same closure is passed; anything else clears it.
+    """
+
+    def __init__(self) -> None:
+        self.clear()
+
+    def clear(self) -> None:
+        self._x: Optional[Tensor] = None
+        self._loss: Optional[Tensor] = None
+        self._grad: Optional[Tensor] = None
+        self._none: Optional[tuple] = None
+        self._closure = None
+
+    def store(self, param_groups, closure, accepted) -> None:
+        """Keep ``accepted`` (``closure_evaluate``'s result at the current
+        parameters, or ``None``)."""
+        if accepted is None:
+            self.clear()
+            return
+        self._loss, self._grad, self._none = accepted
+        self._x = flat_params(param_groups)
+        self._closure = closure
+
+    def load(self, param_groups, closure) -> Optional[Tensor]:
+        """Write the stored gradient into ``.grad`` and return the stored loss,
+        or return ``None`` (and clear) when it does not apply."""
+        if self._x is None:
+            return None
+        if not (_same_closure(closure, self._closure)
+                and torch.equal(flat_params(param_groups), self._x)):
+            self.clear()
+            return None
+        offset = 0
+        for p, none in zip(iter_params(param_groups), self._none):
+            n = p.numel()
+            if none:
+                p.grad = None
+            else:
+                g = self._grad[offset : offset + n].view_as(p)
+                if p.grad is None:
+                    p.grad = g.clone()
+                else:
+                    p.grad.copy_(g)
+            offset += n
+        return self._loss
+
+
+class AcceptedGradMixin:
+    """``reuse_accepted_grad`` for the closure-based line-search optimizers.
+
+    The line search evaluates the closure at the point it accepts, so with
+    ``reuse_accepted_grad=True`` (the default) that loss and gradient become
+    the next ``step()``'s starting loss and gradient instead of a second
+    closure call there. This saves one closure call (a full forward and
+    adjoint in FWI) per step. They are reused only when the next ``step()``
+    gets the same closure object and the parameters are bitwise equal to the
+    accepted point, and only when the accepted point was the line search's
+    last trial; otherwise the closure is called as before. The closure's last
+    call before a step is therefore always at the point the step starts from,
+    so whatever the closure updates as a side effect (e.g. a preconditioner
+    refreshed from the illumination of each backward) is the same as without
+    reuse. With a deterministic closure the iterates are bitwise identical.
+
+    The closure must also be a fixed function of the parameters while it
+    is reused. A closure that draws a new shot batch on each call, or reads a
+    frequency band or other setting that changes between steps, needs
+    ``reuse_accepted_grad=False``, a new closure object per change, or
+    :meth:`invalidate_grad_cache` after each change. The cache costs one extra
+    copy of the parameters and the gradient.
+    """
+
+    def _init_grad_cache(self, reuse_accepted_grad: bool) -> None:
+        self.reuse_accepted_grad = bool(reuse_accepted_grad)
+        self._grad_cache = AcceptedGradCache()
+
+    def invalidate_grad_cache(self) -> None:
+        """Drop the stored loss and gradient, so the next ``step()`` calls the
+        closure at its starting point. Call it after changing what the closure
+        computes (shot batch, frequency band, data, loss) without changing the
+        closure object or the parameters."""
+        self._grad_cache.clear()
+
+    def _start_loss(self, closure):
+        """Loss at the current parameters with their gradient in ``.grad``."""
+        if self.reuse_accepted_grad:
+            loss = self._grad_cache.load(self.param_groups, closure)
+            if loss is not None:
+                return loss
+        with torch.enable_grad():
+            return closure()
+
+    def _keep_accepted(self, closure, accepted) -> None:
+        if self.reuse_accepted_grad:
+            self._grad_cache.store(self.param_groups, closure, accepted)
+
+
 def wolfe_step(
     param_groups,
-    evaluate: Callable[[], Tuple[float, Tensor]],
+    evaluate: Callable[[], Tuple[Any, ...]],
     x0: Tensor,
     d: Tensor,
     init_loss: float,
@@ -68,13 +194,22 @@ def wolfe_step(
     owner: str,
     step_hints: bool = False,
     initial_step: Optional[float] = None,
-) -> float:
-    """Run the strong-Wolfe search along ``d`` from ``x0``; return ``alpha*``.
+    keep_accepted: bool = False,
+) -> Tuple[float, Optional[tuple]]:
+    """Run the strong-Wolfe search along ``d`` from ``x0``.
 
     ``evaluate()`` computes the loss and the flat gradient at the parameters
-    currently written into ``param_groups``. ``step_hints`` adds advice on
-    ``initial_step`` / ``alpha_max`` to the warnings (for the optimizers that
-    take ``initial_step``).
+    currently written into ``param_groups`` and returns them as the first two
+    items of a tuple. ``step_hints`` adds advice on ``initial_step`` /
+    ``alpha_max`` to the warnings (for the optimizers that take
+    ``initial_step``).
+
+    Returns ``(alpha*, accepted)``. With ``keep_accepted``, ``accepted`` is
+    the tuple ``evaluate()`` returned at ``x0 + alpha* d`` when that was the
+    last trial (the usual case), so the caller can reuse it as the next
+    iterate's loss and gradient; it is ``None`` otherwise (``alpha* == 0``, or
+    the search fell back to an earlier trial) and always without
+    ``keep_accepted``.
     """
 
     def trial(alpha: float) -> Tensor:
@@ -83,16 +218,25 @@ def wolfe_step(
             x.clamp_(bounds[0], bounds[1])
         return x
 
+    last = None
+
     def eval_alpha(alpha: float):
+        nonlocal last
         write_flat_to_params(param_groups, trial(alpha))
-        loss, grad = evaluate()
-        return loss, float(torch.dot(grad, d))
+        out = evaluate()
+        if keep_accepted:
+            last = (alpha, out)
+        return float(out[0]), float(torch.dot(out[1], d))
 
     alpha_star, _ = strong_wolfe(
         eval_alpha, init_loss, init_dphi,
         alpha_init=alpha_init, alpha_max=alpha_max,
         c1=c1, c2=c2, max_iter=max_iter,
     )
+    # Only the last trial: then the closure's last call was at the accepted
+    # point, as it would be if the caller called it there again.
+    accepted = last[1] if last is not None and last[0] == alpha_star else None
+    last = None
     x_star = trial(alpha_star)
     write_flat_to_params(param_groups, x_star)
     d_max = float(d.abs().max())
@@ -121,4 +265,4 @@ def wolfe_step(
             RuntimeWarning,
             stacklevel=3,
         )
-    return alpha_star
+    return alpha_star, accepted

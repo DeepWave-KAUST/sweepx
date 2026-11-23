@@ -65,6 +65,7 @@ sweepx.opt.optim.LBFGS(
     initial_step=None,               # first trial without history, parameter units
     restart_every=None,
     strict_descent=True,             # fall back to -g if curvature lies
+    reuse_accepted_grad=True,        # start from the line search's last evaluation
 )
 ```
 
@@ -103,11 +104,30 @@ for _ in range(cfg["epochs"]):
     opt.step(closure)
 ```
 
-`step()` calls the closure at the current model first, so the direction is
-always preconditioned with the illumination of that model. The illumination
+The closure's last call before every `step()` is at the model the step starts
+from (the line search's accepted point, or a fresh call there), so the
+direction is always preconditioned with the illumination of that model. The illumination
 maps exist only on sweep's native backend (`impl='c'`); see the
 [pseudo-Hessian page](../preconditioners/pseudo_hessian.md) for why they are
 normalized and how `eps` is chosen.
+
+## Reusing the accepted point's gradient
+
+The line search already runs the closure (a forward and an adjoint) at the
+point it accepts. With `reuse_accepted_grad=True` (the default) the next
+`step()` starts from that loss and gradient instead of running the closure
+there a second time, which saves one closure call per step. Nothing else
+changes: with a deterministic closure the iterates are bitwise identical.
+
+The stored result is used only when the next `step()` gets the same closure
+object, the parameters are bitwise equal to the accepted point, and the
+accepted point was the line search's last trial; otherwise the closure is
+called as before. The closure must therefore compute the same objective from
+one step to the next. If it draws a new shot batch on each call, or reads a
+frequency band or another setting you change between steps, pass a new
+closure object after each change, call `opt.invalidate_grad_cache()`, or set
+`reuse_accepted_grad=False`. The cache holds one extra copy of the parameters
+and of the gradient.
 
 ## When to use
 

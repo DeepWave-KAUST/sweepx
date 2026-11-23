@@ -53,6 +53,7 @@ def _build_optimizer(opt_spec, inv_tensors_by_name, required_names, model_bounds
             history_size=opt_spec.history_size,
             bounds=bounds,
             initial_step=_lbfgs_initial_step(opt_spec.initial_step, params_in_order),
+            reuse_accepted_grad=opt_spec.reuse_accepted_grad,
         )
     raise ValueError(f"Unknown optimizer kind '{kind}'.")
 
@@ -78,6 +79,43 @@ def _task_lbfgs_class():
             return super().step(closure)
 
     return _TaskLBFGS
+
+
+def _stage_closure(optimizer, build, key_objects, key_values=()):
+    """The L-BFGS closure for this epoch.
+
+    sweepx.opt's L-BFGS reuses the line search's last loss and gradient as the
+    next step's start only for the same closure object. A task builds its
+    closure inside each epoch's step, so the closure an earlier epoch built is
+    returned again when it computes the same misfit: the same
+    ``key_objects`` (compared by identity; the closure holds them, so none can
+    be freed and its id reused) and equal ``key_values``. Otherwise, or when
+    the optimizer does not reuse gradients, ``build()`` makes a new one. The
+    caller passes only full-batch misfits: a held closure keeps the shot order
+    it was built with."""
+    if not getattr(optimizer, "reuse_accepted_grad", False):
+        return build()
+    key_objects, key_values = tuple(key_objects), tuple(key_values)
+    held = getattr(optimizer, "_task_closure", None)
+    if (held is not None and len(held[0]) == len(key_objects)
+            and all(a is b for a, b in zip(held[0], key_objects))
+            and held[1] == key_values):
+        return held[2]
+    closure = build()
+    optimizer._task_closure = (key_objects, key_values, closure)
+    return closure
+
+
+def _release_stage_closure(optimizer):
+    """Drop the closure :func:`_stage_closure` holds and the optimizer's cached
+    gradient, so the previous stage's data are not kept alive into the next."""
+    if optimizer is None:
+        return
+    if hasattr(optimizer, "_task_closure"):
+        del optimizer._task_closure
+    invalidate = getattr(optimizer, "invalidate_grad_cache", None)
+    if invalidate is not None:
+        invalidate()
 
 
 def _lbfgs_initial_step(initial_step, params):
@@ -120,6 +158,11 @@ def _build_reparam_optimizer(opt_spec, net_params, lr: float):
             nesterov=opt_spec.nesterov, weight_decay=opt_spec.weight_decay,
         )
     if kind == "lbfgs":
+        if "reuse_accepted_grad" in opt_spec.model_fields_set:
+            raise ValueError(
+                "optimizer.reuse_accepted_grad is a setting of sweepx.opt's L-BFGS; a "
+                "reparam network's weights are stepped by torch.optim.LBFGS, which "
+                "has no such option; remove it.")
         if "initial_step" in opt_spec.model_fields_set:
             raise ValueError(
                 "optimizer.initial_step sizes the first step in the model's units and "

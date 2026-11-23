@@ -13,13 +13,15 @@ from sweepx.opt._utils import (
     iter_params,
 )
 from sweepx.opt.optim._wolfe_step import (
+    AcceptedGradMixin,
+    closure_evaluate,
     check_initial_step,
     scaled_bracket,
     wolfe_step,
 )
 
 
-class SteepestDescent(Optimizer):
+class SteepestDescent(AcceptedGradMixin, Optimizer):
     """Plain steepest descent (gradient descent) with FWI-friendly extras.
 
     Two operating modes share the same class:
@@ -59,6 +61,13 @@ class SteepestDescent(Optimizer):
             (default) starts every search at ``alpha_init``, which does not
             move parameters with tiny gradients, such as a velocity model in
             m/s. Only valid with ``line_search="strong_wolfe"``.
+        reuse_accepted_grad: with ``line_search="strong_wolfe"``, start each
+            step from the loss and gradient the previous line search computed
+            at the point it accepted, instead of calling the closure there
+            again (one closure call fewer per step). ``None`` (default) means
+            True with the line search; requires the same closure object and
+            bitwise equal parameters, see :meth:`invalidate_grad_cache`. Only
+            valid with ``line_search="strong_wolfe"``.
 
     References:
         Nocedal, J., and Wright, S. J. (2006). Numerical Optimization, 2nd ed.,
@@ -79,6 +88,7 @@ class SteepestDescent(Optimizer):
         alpha_max: float = 10.0,
         max_ls_iter: int = 25,
         initial_step: Optional[float] = None,
+        reuse_accepted_grad: Optional[bool] = None,
     ) -> None:
         if lr <= 0.0:
             raise ValueError(f"lr must be positive, got {lr}")
@@ -89,10 +99,18 @@ class SteepestDescent(Optimizer):
                 "initial_step sizes the line search; with line_search=None the "
                 "step is lr * P g (pass line_search='strong_wolfe' or drop initial_step)"
             )
+        if line_search is None and reuse_accepted_grad is not None:
+            raise ValueError(
+                "reuse_accepted_grad reuses the line search's last evaluation; with "
+                "line_search=None there is none (pass line_search='strong_wolfe' or "
+                "drop reuse_accepted_grad)"
+            )
         super().__init__(params, dict(lr=lr))
         self.bounds = bounds
         self.preconditioner = preconditioner
         self.line_search = line_search
+        self._init_grad_cache(
+            line_search is not None and (reuse_accepted_grad is None or reuse_accepted_grad))
         self.c1 = c1
         self.c2 = c2
         self.alpha_init = alpha_init
@@ -155,8 +173,7 @@ class SteepestDescent(Optimizer):
             raise RuntimeError(
                 "SteepestDescent with line_search='strong_wolfe' requires a closure."
             )
-        with torch.enable_grad():
-            loss = closure()
+        loss = self._start_loss(closure)
 
         x0 = flat_params(self.param_groups).clone()
         n = x0.numel()
@@ -173,11 +190,6 @@ class SteepestDescent(Optimizer):
                 # Even -g is not descent (numerical zero gradient); skip step.
                 return loss
 
-        def evaluate():
-            with torch.enable_grad():
-                ll = closure()
-            return float(ll.detach()), flat_grads(self.param_groups)
-
         if self.initial_step is None:
             alpha0, alpha_max = self.alpha_init, self.alpha_max
         else:
@@ -186,11 +198,13 @@ class SteepestDescent(Optimizer):
                 # Nocedal & Wright eq. 3.60, inside the same bracket.
                 alpha0 = min(self._prev_alpha_dphi / init_dphi, alpha_max)
         # Leaves the parameters at the projected x0 + alpha* d.
-        alpha_star = wolfe_step(
-            self.param_groups, evaluate, x0, d, init_loss, init_dphi,
+        alpha_star, accepted = wolfe_step(
+            self.param_groups, closure_evaluate(self.param_groups, closure), x0, d, init_loss, init_dphi,
             bounds=self.bounds, alpha_init=alpha0, alpha_max=alpha_max,
             c1=self.c1, c2=self.c2, max_iter=self.max_ls_iter,
             owner="SteepestDescent", step_hints=True, initial_step=self.initial_step,
+            keep_accepted=self.reuse_accepted_grad,
         )
+        self._keep_accepted(closure, accepted)
         self._prev_alpha_dphi = alpha_star * init_dphi if alpha_star > 0.0 else None
         return loss

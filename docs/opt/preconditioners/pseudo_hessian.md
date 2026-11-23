@@ -67,9 +67,9 @@ the model; after a forward without gradient they are `None`, and between a
 forward and its `backward()` they are zeros. The eager backend never fills
 them: setting `compute_illumination` on it has no effect.
 
-Refresh the preconditioner in the closure, right after `backward()`: every
-`step()` calls the closure at the current model first, so the direction is
-preconditioned with the maps of the model it starts from.
+Refresh the preconditioner in the closure, right after `backward()`: the
+closure's last call before every `step()` is at the model the step starts
+from, so the direction is preconditioned with the maps of that model.
 
 ```python
 import sweepx.opt

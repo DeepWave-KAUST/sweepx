@@ -48,7 +48,9 @@ from sweepx.tasks._helpers.optimizer import (
     _bind_stage_scheduler,
     _build_optimizer,
     _build_reparam_optimizer,
+    _release_stage_closure,
     _remember_initial_lrs,
+    _stage_closure,
 )
 def _MASK_WINDOW(spec):
     """True when loss.data_mask_path should be applied MUTE-THEN-MISFIT.
@@ -911,6 +913,8 @@ class FWIRunnerMixin:
             if remaining <= 0:
                 continue
 
+            # A held L-BFGS closure keeps the previous stage's obs alive.
+            _release_stage_closure(state.get("optimizer"))
             # Free GPU memory held by the previous stage's solver / state
             # before allocating the next one — boundary buffers / wavefield
             # caches can hold hundreds of MB to many GB.
@@ -1121,6 +1125,7 @@ class FWIRunnerMixin:
                 break
 
         stopper.uninstall()
+        _release_stage_closure(state.get("optimizer"))
 
         # Stage loop done — keep references aligned for the final-outputs step.
         inv_by_name = state["inv_by_name"]
@@ -1767,11 +1772,20 @@ class FWIRunnerMixin:
                 if reparam_net is None:
                     zero_water_grad_(inv_in_order, water_mask)
                 return torch.tensor(acc_loss / global_norm if global_norm else 0.0)
+            # The same misfit as an earlier epoch of this stage -> that epoch's
+            # closure, so the optimizer reuses its last line-search gradient
+            # (L-BFGS always takes every shot, see the batchsize check above).
+            closure = _stage_closure(
+                optimizer, lambda: _closure,
+                (optimizer, spec, solver, wavelet, sources, receivers, obs, data_mask,
+                 water_mask, syn_bandpass, reparam_net, local_window_ctx, inv_by_name,
+                 inv_in_order, *inv_in_order),
+                (stage_dt, global_norm, global_batchsize, str(dev)))
             # max_iter L-BFGS iterations per epoch; the epoch's loss is the one
             # at its start, as for every other optimizer.
-            result = optimizer.step(_closure)
+            result = optimizer.step(closure)
             for _ in range(spec.optimizer.max_iter - 1):
-                optimizer.step(_closure)
+                optimizer.step(closure)
             return float(result) if result is not None else 0.0
 
         # Adam / SGD path. Two top-level branches:
