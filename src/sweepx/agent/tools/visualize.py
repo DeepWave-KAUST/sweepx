@@ -17,9 +17,35 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sweepx.agent.tools import register
+
+
+def _out_doc(default_name: str, where: str = "<task_dir>/output") -> str:
+    return (f"Where to save the figure. Omit for {where}/{default_name}; a bare file name "
+            f"goes under {where}/; any other path is used as given.")
+
+
+def _out_file(out_path: str | None, default_dir: Path, default_name: str) -> Path:
+    """The figure path: ``default_dir/default_name`` when omitted, ``default_dir/<name>``
+    for a bare file name, else ``out_path`` (a directory gets ``default_name``)."""
+    if not out_path:
+        out = default_dir / default_name
+    else:
+        p = Path(out_path).expanduser()
+        out = default_dir / p if (p.parent == Path(".") and not out_path.startswith(".")) else p
+        if out_path.endswith("/") or out.is_dir():
+            out = out / default_name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out.resolve()  # absolute: a relative path invites the model to re-root it
+
+
+def _exactly_one(model, *names: str):
+    given = [n for n in names if getattr(model, n) is not None]
+    if len(given) != 1:
+        raise ValueError(f"give exactly one of {', '.join(names)} (got {given or 'none'}).")
+    return model
 
 
 def _require_matplotlib():
@@ -88,7 +114,7 @@ def _load_snaps(task_dir: str, abcn: int, free_surface: bool, shot: int, field: 
     if not path.is_file():
         raise FileNotFoundError(
             f"no snapshots.npy under {task_dir}/output — is this a WAVEFIELD task? "
-            f"(forward tasks have no snapshots; use build_wavefield_spec with snapshot_times)"
+            f"(forward tasks have no snapshots; use build_forward_spec with snapshot_times)"
         )
     snap = np.load(path)  # (n_snap, n_field, nshots, nch, nz_pad, nx_pad)
     arr = snap[:, field, shot, 0]
@@ -108,7 +134,7 @@ class PlotWavefieldParams(BaseModel):
     snapshot_index: int = Field(-1, description="Which snapshot to plot (index into snapshot_times; -1 = last).")
     shot: int = Field(0, description="Which shot's wavefield (default 0).")
     field: int = Field(0, description="Which wavefield component (default 0 = main field).")
-    out_name: str = Field("wavefield.png", description="Output PNG filename, saved under <task_dir>/output/.")
+    out_path: str | None = Field(None, description=_out_doc("wavefield.png"))
     title: str | None = Field(None, description="Plot title.")
 
 
@@ -133,7 +159,7 @@ def plot_wavefield(args: PlotWavefieldParams) -> dict[str, Any]:
 
     frame = wf[args.snapshot_index]
     rd = resolve_task_dir(args.task_dir)
-    out = rd / "output" / args.out_name
+    out = _out_file(args.out_path, rd / "output", "wavefield.png")
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
     viz.plot_snapshot(frame, ax=ax, title=args.title or "wavefield snapshot")
     fig.savefig(out, dpi=130)
@@ -188,72 +214,36 @@ def compare_wavefields(args: CompareWavefieldsParams) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# make_wavefield_gif
+# render_wavefield_gif (animate_wavefield's renderer)
 # ---------------------------------------------------------------------------
 
-class MakeGifParams(BaseModel):
-    task_dir: str = Field(..., description="Wavefield task directory from run_task.")
-    abcn: int = Field(..., description="PML thickness used in the run.")
-    free_surface: bool = Field(False, description="Whether the run used a free surface.")
-    shot: int = Field(0)
-    field: int = Field(0)
-    out_name: str = Field("wavefield.gif", description="Output GIF (or .mp4) filename, saved under <task_dir>/output/.")
-    fps: int = Field(8, ge=1, le=30, description="Frames per second.")
-    topography_path: str | None = Field(
-        None,
-        description=(
-            "Path to the 1-D topography .npy used in the run. When set, the wavefield is shown on "
-            "the PHYSICAL grid (air above the surface masked white) with the topography line + "
-            "source/receiver markers overlaid — like the curvilinear notebook figure."
-        ),
-    )
-    curvilinear: bool = Field(
-        False,
-        description="Leave False: sweep returns every snapshot on the physical grid, curvilinear equations included. True only for a snapshot taken on the boundary-fitted grid (snapshot_grid='computational'). Only used when topography_path is set.",
-    )
-    sources: list[list[int]] | None = Field(
-        None,
-        description="Optional source markers as [[x, depth_below_surface], ...] (overlaid on the topo figure).",
-    )
-    receivers: list[list[int]] | None = Field(
-        None,
-        description="Optional receiver markers as [[x, depth_below_surface], ...].",
-    )
-
-
-@register(
-    name="make_wavefield_gif",
-    description=(
-        "Animate all snapshots of a wavefield task into a GIF/MP4 (via sweepx.tasks.viz animate_snapshots). "
-        "Returns the saved path. Use after a wavefield run with several snapshot_times — e.g. to show "
-        "propagation under topography."
-    ),
-    params_model=MakeGifParams,
-)
-def make_wavefield_gif(args: MakeGifParams) -> dict[str, Any]:
+def render_wavefield_gif(task_dir: str, *, abcn: int, free_surface: bool, shot: int, field: int,
+                         out_path: str | None, fps: int, topography_path: str | None = None,
+                         curvilinear: bool = False, sources=None, receivers=None) -> dict[str, Any]:
+    """Animate every snapshot of a wavefield run into a GIF/MP4 (animate_wavefield's renderer)."""
     # Topography/curvilinear: the un-padded top row IS the free surface, so never
     # crop it — regardless of the free_surface flag the caller passed.
-    fs = True if args.topography_path else args.free_surface
+    fs = True if topography_path else free_surface
     try:
-        wf = _load_snaps(args.task_dir, args.abcn, fs, args.shot, args.field)
+        wf = _load_snaps(task_dir, abcn, fs, shot, field)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if wf.shape[0] < 2:
         return {"error": "need >= 2 snapshots for a GIF; re-run with more snapshot_times."}
     from sweepx.tasks.viz import wavefield as viz
 
-    rd = resolve_task_dir(args.task_dir)
-    out = rd / "output" / args.out_name
+    rd = resolve_task_dir(task_dir)
+    out = _out_file(out_path, rd / "output", "wavefield.gif")
     try:
-        if args.topography_path:
-            topo = np.load(args.topography_path)
+        if topography_path:
+            topo = np.load(topography_path)
             viz.animate_snapshots_topography(
                 list(wf), topo, str(out),
-                sources=args.sources, receivers=args.receivers,
-                curvilinear=args.curvilinear, fps=args.fps,
+                sources=sources, receivers=receivers,
+                curvilinear=curvilinear, fps=fps,
             )
         else:
-            viz.animate_snapshots(list(wf), str(out), fps=args.fps)
+            viz.animate_snapshots(list(wf), str(out), fps=fps)
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
     return {"gif_path": str(out), "task_dir_used": str(rd), "n_frames": int(wf.shape[0])}
@@ -280,57 +270,71 @@ def _receiver_x(task_dir: Path, shot: int, dh: float | None, nrec: int) -> np.nd
 
 
 class PlotShotGatherParams(BaseModel):
-    task_dir: str = Field(..., description="Forward / FWI task directory from run_task — must contain output/record.npy.")
+    task_dir: str | None = Field(None, description="A run_task forward / FWI task directory (reads its output/record.npy). Give this OR npy_path.")
+    npy_path: str | None = Field(None, description="A record .npy file (observed or synthetic): (nshots,nt,nrec,nch), (nshots,nt,nrec) or (nt,nrec). Give this OR task_dir.")
     shot: int = Field(0, description="Which shot to display (default 0).")
     channel: int = Field(0, description="Which channel/component (default 0).")
     dt: float | None = Field(None, description="Time step (s) for the time axis — pass the dt used in the run.")
-    dh: float | None = Field(None, description="Grid spacing (m) of the run; with the task's receivers.npy it gives the receivers' x positions.")
+    dh: float | None = Field(None, description="Receiver spacing (m) for the x axis (with a task_dir, its receivers.npy gives the exact positions).")
     wiggle: bool = Field(False, description="Wiggle display instead of image (good for < ~50 traces).")
-    out_name: str = Field("shot_gather.png", description="Output PNG filename under <task_dir>/output/.")
+    out_path: str | None = Field(None, description=_out_doc("shot_gather.png", "<task_dir>/output (or ./sweep_runs for npy_path)"))
     title: str | None = Field(None, description="Plot title.")
+
+    @model_validator(mode="after")
+    def check_one_source(self):
+        return _exactly_one(self, "task_dir", "npy_path")
 
 
 @register(
     name="plot_shot_gather",
     description=(
-        "Plot a shot gather (synthetic seismic record) from a forward/FWI task's record.npy — image "
-        "display by default, or wiggle. Drawn via sweepx.tasks.viz. Use after a forward run when the user "
-        "wants to SEE the record / shot gather / 炮记录. Returns the saved image path."
+        "Plot a shot gather — image display by default, or wiggle — from a run_task forward/FWI task_dir "
+        "or straight from a record .npy file (observed or synthetic data). Not needed after "
+        "run_forward_sweep, which already returns its gather as image_path. Returns the image path "
+        "and the displayed (nt, nrec) shape."
     ),
     params_model=PlotShotGatherParams,
 )
 def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
-    rd = resolve_task_dir(args.task_dir, marker="record.npy")
-    path = rd / "output" / "record.npy"
-    if not path.is_file():
-        return {"error": f"no record.npy under {args.task_dir}/output (run a forward task first)"}
-    rec = np.load(path)
-    if rec.ndim == 4:        # (nshots, nt, nrec, nchannel)
-        arr = rec[args.shot, :, :, args.channel]
-    elif rec.ndim == 3:      # (nshots, nt, nrec)
-        arr = rec[args.shot]
-    elif rec.ndim == 2:      # (nt, nrec)
-        arr = rec
+    rd = None
+    if args.task_dir is not None:
+        rd = resolve_task_dir(args.task_dir, marker="record.npy")
+        path = rd / "output" / "record.npy"
+        if not path.is_file():
+            return {"error": f"no record.npy under {args.task_dir}/output: pass the task_dir run_task returned "
+                             f"(run_forward_sweep already saved its gather; see its image_path)"}
+        out = _out_file(args.out_path, rd / "output", "shot_gather.png")
     else:
-        return {"error": f"unexpected record shape {rec.shape}"}
+        path = Path(args.npy_path).expanduser()
+        if not path.is_file():
+            return {"error": f"data file not found: {args.npy_path}"}
+        out = _out_file(args.out_path, Path("sweep_runs"), f"{path.stem}_gather.png")
+    try:
+        arr = _record_to_2d(np.load(path), args.shot, args.channel)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
     from sweepx.tasks.viz import seismic
 
-    out = rd / "output" / args.out_name
+    x = _receiver_x(rd, args.shot, args.dh, arr.shape[1]) if rd is not None else None
+    if x is None and args.dh:
+        x = np.arange(arr.shape[1]) * float(args.dh)
     fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
     if args.wiggle:
         seismic.plot_wiggle(arr, dt=args.dt, ax=ax)
         if args.title:
             ax.set_title(args.title)
     else:
-        seismic.plot_shot(arr, dt=args.dt, x=_receiver_x(rd, args.shot, args.dh, arr.shape[1]),
-                          ax=ax, title=args.title or "shot gather")
+        seismic.plot_shot(arr, dt=args.dt, x=x, ax=ax, title=args.title or "shot gather")
     fig.savefig(out, dpi=130)
     plt.close(fig)
-    return {"image_path": str(out), "task_dir_used": str(rd), "shape": list(arr.shape)}
+    res = {"image_path": str(out), "shape": list(arr.shape)}
+    if rd is not None:
+        res["task_dir_used"] = str(rd)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -338,64 +342,112 @@ def plot_shot_gather(args: PlotShotGatherParams) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 class PlotModelParams(BaseModel):
-    task_dir: str = Field(..., description="FWI / migration task directory from run_task — must contain output/inverted_vp.npy (or a model .npy via model_name).")
-    true_model_path: str | None = Field(None, description="Path to the ground-truth vp .npy, to show alongside + a residual panel. Optional.")
-    init_model_path: str | None = Field(None, description="Path to the initial/starting vp .npy, to show as the left panel. Optional.")
-    model_name: str = Field("inverted_vp.npy", description="Which model file under <task_dir>/output to read (default the FWI result).")
+    model_path: str | None = Field(None, description="A model .npy to show — (nz,nx), or (nz,ny,nx) drawn as three orthogonal slices. Give this OR task_dir.")
+    task_dir: str | None = Field(None, description="An FWI / migration task directory from run_task: shows <task_dir>/output/<model_name> (the inverted model). Give this OR model_path.")
+    model_name: str = Field("inverted_vp.npy", description="With task_dir: which model file under <task_dir>/output to read.")
+    true_model_path: str | None = Field(None, description="Ground-truth model .npy, shown alongside with a residual panel (2-D). Optional.")
+    init_model_path: str | None = Field(None, description="Initial/starting model .npy, shown as the left panel (2-D). Optional.")
     dh: float | None = Field(None, description="Grid spacing (m) for physical axes; samples if omitted.")
-    out_name: str = Field("model_comparison.png", description="Output PNG filename under <task_dir>/output/.")
-    title: str | None = Field(None, description="Figure suptitle.")
+    out_path: str | None = Field(None, description=_out_doc("model.png", "<task_dir>/output (or ./sweep_runs for model_path)"))
+    title: str | None = Field(None, description="Figure title.")
+    cbar_label: str = Field("vp (m/s)", description="Colour-bar label.")
+
+    @model_validator(mode="after")
+    def check_one_source(self):
+        return _exactly_one(self, "model_path", "task_dir")
 
 
 @register(
     name="plot_model",
     description=(
-        "Plot velocity models side by side from an FWI/migration run — typically initial vs inverted vs "
-        "true, with an inverted−true residual panel — on a shared colour scale (via sweepx.tasks.viz). Use after "
-        "an FWI run when the user wants to SEE the inverted model / result / 反演结果. Pass "
-        "true_model_path and init_model_path (the same files you gave the builder) for the full comparison. "
-        "Returns the saved image path."
+        "Plot a velocity/parameter model: a model .npy file (to SEE a model before running anything / "
+        "看看这个模型), or the inverted model of an FWI/migration task_dir. Add init_model_path and/or "
+        "true_model_path for initial vs inverted vs true panels with an inverted−true residual on a "
+        "shared colour scale (反演结果). 3-D models are drawn as three orthogonal slices. Returns the "
+        "image path, the shape and the value range."
     ),
     params_model=PlotModelParams,
 )
 def plot_model(args: PlotModelParams) -> dict[str, Any]:
-    rd = resolve_task_dir(args.task_dir, marker=args.model_name)
-    inv_path = rd / "output" / args.model_name
-    if not inv_path.is_file():
-        return {"error": f"no {args.model_name} under {args.task_dir}/output (run an FWI/migration task first)"}
-    inverted = np.load(inv_path)
-    if inverted.ndim != 2:
-        return {"error": f"plot_model supports 2-D models; got shape {inverted.shape}"}
-
-    panels: list = []
-    labels: list[str] = []
-    if args.init_model_path:
-        try:
-            panels.append(np.load(args.init_model_path)); labels.append("initial")
-        except Exception as exc:
-            return {"error": f"could not load init_model_path: {exc}"}
-    panels.append(inverted); labels.append("inverted")
-    true_arr = None
-    if args.true_model_path:
-        try:
-            true_arr = np.load(args.true_model_path)
-        except Exception as exc:
-            return {"error": f"could not load true_model_path: {exc}"}
-        panels.append(true_arr); labels.append("true")
-
-    _, _mpl_err = _require_matplotlib()
+    rd = None
+    if args.task_dir is not None:
+        rd = resolve_task_dir(args.task_dir, marker=args.model_name)
+        main_path = rd / "output" / args.model_name
+        if not main_path.is_file():
+            return {"error": f"no {args.model_name} under {args.task_dir}/output (run an FWI/migration task first)"}
+        out = _out_file(args.out_path, rd / "output", "model.png")
+        main_label = "inverted"
+    else:
+        main_path = Path(args.model_path).expanduser()
+        if not main_path.is_file():
+            return {"error": f"model file not found: {args.model_path}"}
+        out = _out_file(args.out_path, Path("sweep_runs"), f"{main_path.stem}.png")
+        main_label = "model"
+    arr = np.load(main_path)
+    plt, _mpl_err = _require_matplotlib()
     if _mpl_err is not None:
         return _mpl_err
-    from sweepx.tasks.viz import model as vizmodel
+    res = {"image_path": str(out), "shape": list(arr.shape),
+           "vp_min": float(np.nanmin(arr)), "vp_max": float(np.nanmax(arr))}
+    if rd is not None:
+        res["task_dir_used"] = str(rd)
 
-    out = rd / "output" / args.out_name
-    dh = (args.dh, args.dh) if args.dh else None
-    residual = (inverted, true_arr) if true_arr is not None else None
-    try:
-        vizmodel.compare_models(panels, labels, str(out), dh=dh, residual=residual, suptitle=args.title)
-    except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
-    return {"image_path": str(out), "task_dir_used": str(rd), "panels": labels, "shape": list(inverted.shape)}
+    if args.init_model_path or args.true_model_path:
+        if arr.ndim != 2:
+            return {"error": f"the initial/true comparison supports 2-D models; got shape {arr.shape}"}
+        panels, labels, true_arr = [], [], None
+        try:
+            if args.init_model_path:
+                panels.append(np.load(args.init_model_path)); labels.append("initial")
+            panels.append(arr); labels.append(main_label)
+            if args.true_model_path:
+                true_arr = np.load(args.true_model_path)
+                panels.append(true_arr); labels.append("true")
+        except Exception as exc:
+            return {"error": f"could not load a comparison model: {exc}"}
+        from sweepx.tasks.viz import model as vizmodel
+
+        dh = (args.dh, args.dh) if args.dh else None
+        residual = (arr, true_arr) if true_arr is not None else None
+        try:
+            vizmodel.compare_models(panels, labels, str(out), dh=dh, residual=residual, suptitle=args.title)
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        return {**res, "panels": labels}
+
+    if arr.ndim == 2:
+        # Plain matplotlib heat-map — NO sweepx.tasks needed.
+        nz, nx = arr.shape
+        extent = [0, nx * args.dh, nz * args.dh, 0] if args.dh else [0, nx, nz, 0]
+        unit = "m" if args.dh else "samples"
+        fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+        im = ax.imshow(arr, aspect="auto", cmap="jet", extent=extent)
+        ax.set_title(args.title or f"{main_label} {arr.shape}")
+        ax.set_xlabel(f"x ({unit})")
+        ax.set_ylabel(f"depth ({unit})")
+        fig.colorbar(im, ax=ax, label=args.cbar_label)
+    elif arr.ndim == 3:
+        try:
+            from sweepx.tasks.viz import model as vizmodel
+            dh = args.dh or 1.0
+            fig, _axes = vizmodel.plot_vp_ortho_slices(
+                arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
+        except Exception:
+            nz, ny, nx = arr.shape
+            fig, axes = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
+            for ax, (plane, ttl) in zip(axes, (
+                    (arr[:, ny // 2, :], f"inline y={ny // 2}"),
+                    (arr[:, :, nx // 2], f"crossline x={nx // 2}"),
+                    (arr[nz // 2, :, :], f"depth z={nz // 2}"))):
+                im = ax.imshow(plane, aspect="auto", cmap="jet")
+                ax.set_title(ttl)
+            fig.colorbar(im, ax=list(axes), label=args.cbar_label)
+            fig.suptitle(args.title or f"{main_label} {arr.shape}")
+    else:
+        return {"error": f"plot_model supports 2-D / 3-D models; got shape {arr.shape}"}
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +458,7 @@ class PlotConvergenceParams(BaseModel):
     task_dir: str = Field(..., description="FWI task directory from run_task — must contain output/loss.npy.")
     loss_name: str = Field("loss.npy", description="Which loss file under <task_dir>/output to read.")
     logy: bool = Field(True, description="Log-scale y-axis (default True).")
-    out_name: str = Field("convergence.png", description="Output PNG filename under <task_dir>/output/.")
+    out_path: str | None = Field(None, description=_out_doc("convergence.png"))
     title: str | None = Field(None, description="Plot title.")
 
 
@@ -431,7 +483,7 @@ def plot_convergence(args: PlotConvergenceParams) -> dict[str, Any]:
         return _mpl_err
     from sweepx.tasks.viz import convergence
 
-    out = rd / "output" / args.out_name
+    out = _out_file(args.out_path, rd / "output", "convergence.png")
     fig, ax = plt.subplots(figsize=(7, 4), constrained_layout=True)
     convergence.plot_loss(loss, ax=ax, logy=args.logy, title=args.title or "FWI convergence")
     fig.savefig(out, dpi=130)
@@ -440,7 +492,7 @@ def plot_convergence(args: PlotConvergenceParams) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# plot_observed_data — plot a shot gather straight from a record .npy file
+# record helpers
 # ---------------------------------------------------------------------------
 
 def _record_to_2d(rec: np.ndarray, shot: int, channel: int) -> np.ndarray:
@@ -451,48 +503,6 @@ def _record_to_2d(rec: np.ndarray, shot: int, channel: int) -> np.ndarray:
     if rec.ndim == 2:        # (nt, nrec)
         return rec
     raise ValueError(f"unexpected record shape {rec.shape}")
-
-
-class PlotObservedDataParams(BaseModel):
-    npy_path: str = Field(..., description="Path to an observed/synthetic data .npy — (nshots,nt,nrec,nch), (nshots,nt,nrec) or (nt,nrec).")
-    shot: int = Field(0, description="Which shot to display.")
-    channel: int = Field(0, description="Which channel/component.")
-    dt: float | None = Field(None, description="Time step (s) for the time axis.")
-    dh: float | None = Field(None, description="Receiver spacing (m) for the offset axis.")
-    out_path: str = Field("/tmp/observed_gather.png", description="Full output PNG path.")
-    title: str | None = Field(None, description="Plot title.")
-
-
-@register(
-    name="plot_observed_data",
-    description=(
-        "Plot a shot gather directly from a data .npy FILE (observed or synthetic), without needing a "
-        "task directory. Use when the user points at a data file / 观测数据 and wants to see the record. "
-        "Returns the saved image path and the displayed (nt, nrec) shape."
-    ),
-    params_model=PlotObservedDataParams,
-)
-def plot_observed_data(args: PlotObservedDataParams) -> dict[str, Any]:
-    p = Path(args.npy_path).expanduser()
-    if not p.is_file():
-        return {"error": f"data file not found: {args.npy_path}"}
-    rec = np.load(p)
-    try:
-        arr = _record_to_2d(rec, args.shot, args.channel)
-    except ValueError as exc:
-        return {"error": str(exc)}
-    plt, _mpl_err = _require_matplotlib()
-    if _mpl_err is not None:
-        return _mpl_err
-    from sweepx.tasks.viz import seismic
-
-    out = Path(args.out_path).expanduser()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
-    seismic.plot_shot(arr, dt=args.dt, dh=args.dh, ax=ax, title=args.title or "shot gather")
-    fig.savefig(out, dpi=130)
-    plt.close(fig)
-    return {"image_path": str(out), "shape": list(arr.shape)}
 
 
 # ---------------------------------------------------------------------------
@@ -613,83 +623,6 @@ def compare_shot_gathers(args: CompareShotGathersParams) -> dict[str, Any]:
     plt.close(fig)
     rel = float(np.linalg.norm(diff) / (np.linalg.norm(a) + 1e-30))
     return {"image_path": str(out), "shape": list(a.shape), "relative_residual": round(rel, 4)}
-
-
-# ---------------------------------------------------------------------------
-# plot_velocity_model — visualise an INPUT model file (before running anything)
-# ---------------------------------------------------------------------------
-
-class PlotVelocityModelParams(BaseModel):
-    model_path: str = Field(..., description="Path to a velocity-model .npy — (nz,nx) for 2-D or (nz,ny,nx) for 3-D.")
-    dh: float | None = Field(None, description="Grid spacing (m) for physical axes; samples if omitted.")
-    out_path: str = Field("/tmp/velocity_model.png", description="Full output PNG path.")
-    title: str | None = Field(None, description="Figure title.")
-    cbar_label: str = Field("vp (m/s)", description="Colour-bar label.")
-
-
-@register(
-    name="plot_velocity_model",
-    description=(
-        "Plot a velocity/parameter model from a .npy FILE so the user can SEE what a model looks like "
-        "BEFORE running anything (2-D heat-map, or three orthogonal slices for a 3-D cube). Use when the "
-        "user uploads/points at a model and asks to see it / 看看这个模型 / what does this model look like. "
-        "Drawn with matplotlib (works without the sweepx.tasks stack); 3-D orthogonal slices use "
-        "sweepx.tasks.viz when it's installed. Returns the saved image path and the model shape."
-    ),
-    params_model=PlotVelocityModelParams,
-)
-def plot_velocity_model(args: PlotVelocityModelParams) -> dict[str, Any]:
-    p = Path(args.model_path).expanduser()
-    if not p.is_file():
-        return {"error": f"model file not found: {args.model_path}"}
-    arr = np.load(p)
-    plt, _mpl_err = _require_matplotlib()
-    if _mpl_err is not None:
-        return _mpl_err
-
-    out = Path(args.out_path).expanduser()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    if arr.ndim == 2:
-        # Plain matplotlib heat-map — NO sweepx.tasks needed, so plotting a model
-        # works on a base install (e.g. right after make_synthetic_model).
-        nz, nx = arr.shape
-        extent = [0, nx * args.dh, nz * args.dh, 0] if args.dh else [0, nx, nz, 0]
-        unit = "m" if args.dh else "samples"
-        fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-        im = ax.imshow(arr, aspect="auto", cmap="jet", extent=extent)
-        ax.set_title(args.title or f"velocity model {arr.shape}")
-        ax.set_xlabel(f"x ({unit})")
-        ax.set_ylabel(f"depth ({unit})")
-        fig.colorbar(im, ax=ax, label=args.cbar_label)
-        fig.savefig(out, dpi=130)
-        plt.close(fig)
-    elif arr.ndim == 3:
-        # 3-D: prefer sweepx.tasks' orthogonal-slice helper; fall back to a plain
-        # 3-panel matplotlib view when sweepx.tasks isn't installed.
-        try:
-            from sweepx.tasks.viz import model as vizmodel
-            dh = args.dh or 1.0
-            fig, _axes = vizmodel.plot_vp_ortho_slices(
-                arr, dh_xyz=(dh, dh, dh), title_prefix=args.title or "vp", cbar_label=args.cbar_label)
-        except Exception:
-            nz, ny, nx = arr.shape
-            fig, axes = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
-            for ax, (plane, ttl) in zip(axes, (
-                    (arr[:, ny // 2, :], f"inline y={ny // 2}"),
-                    (arr[:, :, nx // 2], f"crossline x={nx // 2}"),
-                    (arr[nz // 2, :, :], f"depth z={nz // 2}"))):
-                im = ax.imshow(plane, aspect="auto", cmap="jet")
-                ax.set_title(ttl)
-            fig.colorbar(im, ax=list(axes), label=args.cbar_label)
-            fig.suptitle(args.title or f"velocity model {arr.shape}")
-        fig.savefig(out, dpi=130)
-        plt.close(fig)
-    else:
-        return {"error": f"plot_velocity_model supports 2-D / 3-D; got shape {arr.shape}"}
-    return {
-        "image_path": str(out), "shape": list(arr.shape),
-        "vp_min": float(np.nanmin(arr)), "vp_max": float(np.nanmax(arr)),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +757,7 @@ class AnimateFwiEvolutionParams(BaseModel):
     task_dir: str = Field(..., description="FWI task directory from run_task — must contain output/epochs/vp_epoch_*.npy.")
     true_model_path: str | None = Field(None, description="Optional ground-truth vp .npy to fix the colour scale (else per-run percentile).")
     dh: float | None = Field(None, description="Grid spacing (m) for physical axes.")
-    out_name: str = Field("fwi_evolution.gif", description="Output GIF filename under <task_dir>/output/.")
+    out_path: str | None = Field(None, description=_out_doc("fwi_evolution.gif"))
     fps: int = Field(4, ge=1, le=30, description="Frames per second.")
 
 
@@ -862,7 +795,7 @@ def animate_fwi_evolution(args: AnimateFwiEvolutionParams) -> dict[str, Any]:
         return _io_err
     from sweepx.tasks.viz.colormaps import VP_CMAP
 
-    out = rd / "output" / args.out_name
+    out = _out_file(args.out_path, rd / "output", "fwi_evolution.gif")
     extent = None
     if args.dh:
         nz, nx = mats[0].shape

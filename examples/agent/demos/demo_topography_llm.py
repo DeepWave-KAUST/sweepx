@@ -40,7 +40,7 @@ def main() -> None:
 
     # Pure natural language — no tool names, no equation names, no parameters.
     # The system prompt's intent routing makes the LLM pick wavefield +
-    # AcousticCurvilinear + topography + make_wavefield_gif on its own.
+    # AcousticCurvilinear + topography + animate_wavefield on its own.
     drive(
         f"我有一个起伏地表的速度模型 {vp_path}(网格间距 10 米),地形文件 {topo_path}。"
         f"帮我看看地震波在这个起伏地表下面是怎么传播的,做成一个动画。输出放到 {out}。"

@@ -99,7 +99,7 @@ def _figure_check(user_message: str, reply: str, produced: set[str]) -> str | No
     if asked and not produced:
         return (
             "The user asked for a figure or an animation, but no tool made one this turn. "
-            "Call the tool that produces it now (for example run_forward_and_plot, "
+            "Call the tool that produces it now (for example run_forward_sweep, "
             "animate_wavefield, run_fwi or a plot_* tool) instead of describing it."
         )
     return None

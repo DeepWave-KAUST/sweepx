@@ -52,21 +52,18 @@ def test_output_file_takes_a_directory():
 
 
 @pytest.mark.timeout(180)
-def test_run_forward_and_plot_one_shot_into_a_directory(tmp_path):
-    pytest.importorskip("sweepx.tasks")
+def test_run_forward_sweep_places_the_one_source_by_fraction(tmp_path):
+    pytest.importorskip("sweep")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((40, 60), 2000.0, dtype=np.float32))
-    r = registry.get("run_forward_and_plot").invoke({
-        "vp_path": str(vp), "out_path": str(tmp_path / "out"), "dh": 10.0,
-        "record_length_s": 0.2, "fm": 12.0, "receiver_step": 2,
-        "output_dir": str(tmp_path / "runs"), "spatial_order": 4, "abcn": 10,
-    })
-    assert r.ok and "error" not in r.value, r.value
-    assert r.value["image_path"] == str(tmp_path / "out" / "shot_gather.png")
-    assert Path(r.value["image_path"]).is_file()
-    out = Path(r.value["task_dir"]) / "output"
-    assert np.load(out / "record.npy").shape[0] == 1                       # one shot
-    assert np.load(out / "sources.npy").tolist() == [[30, 1]]              # in the middle
+    common = {"vp_path": str(vp), "dh": 10.0, "record_length_s": 0.2, "fm": 12.0, "receiver_step": 2,
+              "spatial_order": 4, "abcn": 10, "device": "cpu", "plot": False}
+    mid = registry.get("run_forward_sweep").invoke({**common, "out_dir": str(tmp_path / "mid")})
+    right = registry.get("run_forward_sweep").invoke({**common, "source_x_frac": 1.0, "out_dir": str(tmp_path / "right")})
+    assert mid.ok and right.ok, (mid.error, right.error)
+    assert mid.value["physics"]["source_m"][0] == 300.0     # column 30 of 0..59, in the middle
+    assert right.value["physics"]["source_m"][0] == 590.0   # the last column
+    assert np.load(mid.value["record_path"]).ndim == 2      # one shot: (nt, nrec)
 
 
 def test_shot_gather_axis_is_the_receiver_positions(tmp_path):
@@ -92,7 +89,7 @@ def test_shot_gather_axis_is_the_receiver_positions(tmp_path):
 
 def test_elastic_animation_source_radiates_p_and_s():
     pytest.importorskip("sweep")
-    from sweepx.agent.tools.build_wavefield import _p_and_s_source
+    from sweepx.agent.tools.build_forward import _p_and_s_source
 
     assert _p_and_s_source("Elastic") == ["vz"]
     assert _p_and_s_source("Acoustic") is None
@@ -105,9 +102,9 @@ def test_wavefield_builder_defaults_an_elastic_source_to_p_and_s(tmp_path):
     common = {"vp_path": str(tmp_path / "vp.npy"), "equation": "Elastic", "dh": 10.0, "dt": 1e-3,
               "nt": 50, "snapshot_times": [40], "extra_models": {"vs": str(tmp_path / "vs.npy"),
               "rho": str(tmp_path / "rho.npy")}, "output_dir": str(tmp_path / "runs")}
-    b = registry.get("build_wavefield_spec").invoke(common)
+    b = registry.get("build_forward_spec").invoke(common)
     assert b.ok and b.value["spec"]["physics"]["source_type"] == ["vz"], b.value
-    b = registry.get("build_wavefield_spec").invoke({**common, "source_type": ["sxx", "szz"]})
+    b = registry.get("build_forward_spec").invoke({**common, "source_type": ["sxx", "szz"]})
     assert b.value["spec"]["physics"]["source_type"] == ["sxx", "szz"]
 
 

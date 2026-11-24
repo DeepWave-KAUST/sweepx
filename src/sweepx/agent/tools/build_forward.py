@@ -139,6 +139,36 @@ class BuildForwardParams(BaseModel):
         None,
         description="Deep-merged overrides for ForwardSpec fields not exposed here, e.g. {'physics':{'abcn':40}}.",
     )
+    # --- Wavefield snapshots -----------------------------------------------
+    snapshot_times: list[int] | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Give it to save full-wavefield snapshots (a wavefield task, for movies / QC / figures): "
+            "time-step indices in [0, nt), e.g. [100, 200, 300]. On an elastic medium the default "
+            "source is then a vertical force (P and S waves); source_type=['sxx','szz'] is an explosion (P only)."
+        ),
+    )
+    plot_snapshots: bool = Field(True, description="With snapshot_times: also render a PNG of each snapshot.")
+
+
+# An explosion: normal stresses only. In an isotropic elastic medium it radiates
+# P and no S at all.
+_EXPLOSION = ({"sxx", "szz"}, {"sxx", "syy", "szz"})
+
+
+def _p_and_s_source(equation: str) -> list[str] | None:
+    """A vertical force ``['vz']`` for an elastic equation whose own default source
+    is an explosion, so a wavefield shows the S ring too; ``None`` (the
+    equation's default) for everything else."""
+    try:
+        from sweepx.agent.tools.introspect import equation_default_fields
+        src, rec = equation_default_fields(equation)
+    except Exception:
+        return None
+    if set(src) in _EXPLOSION and "vz" in rec:
+        return ["vz"]
+    return None
 
 
 def _resolve_models(p: BuildForwardParams) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -477,6 +507,8 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
         spec["physics"]["topography"] = p.topography
     if p.task_id is not None:
         spec["task_id"] = p.task_id
+    if p.snapshot_times is not None:
+        spec.update(task_type="wavefield", snapshot_times=p.snapshot_times, plot=p.plot_snapshots)
     if p.extra:
         spec = _deep_merge(spec, p.extra)
     return spec
@@ -485,8 +517,10 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
 @register(
     name="build_forward_spec",
     description=(
-        "Construct a validated sweepx.tasks.ForwardSpec for a 2-D / 3-D forward modelling run. "
-        "Returns the spec as a dict, the YAML path it was written to, and a human summary. "
+        "Construct a validated sweepx.tasks spec for a 2-D / 3-D forward modelling run — or, with "
+        "snapshot_times, a wavefield run that also saves full-wavefield snapshots. "
+        "Returns the spec as a dict, the YAML path it was written to, and a human summary; then "
+        "run_task(yaml_path) or submit_task. "
         "ALWAYS call `inspect_file` on the velocity model first to learn its shape/dtype, then "
         "pick dh/dt/nt/fm consistent with CFL and pts-per-wavelength constraints. The default "
         "geometry is line sources/receivers at small depths (surface acquisition); override "
@@ -500,7 +534,7 @@ def _construct_spec_dict(p: BuildForwardParams, models: list[dict[str, Any]], ge
 def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     # Import lazily so the package keeps importing without sweepx.tasks installed.
     try:
-        from sweepx.tasks.schemas import ForwardSpec
+        from sweepx.tasks.schemas import ForwardSpec, WavefieldSpec
         from sweepx.tasks import dump_task
     except ImportError as exc:
         return {"error": f"sweepx.tasks is not importable: {exc}"}
@@ -513,6 +547,14 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     nt_eff, nt_err = _resolve_nt(args)
     if nt_err is not None:
         return nt_err
+
+    wavefield = args.snapshot_times is not None
+    if not wavefield and "plot_snapshots" in args.model_fields_set:
+        return {"error": "plot_snapshots applies only with snapshot_times (a wavefield run)."}
+    if wavefield:
+        bad = [t for t in args.snapshot_times if t < 0 or t >= args.nt]
+        if bad:
+            return {"error": f"snapshot_times {bad} out of range; must be in [0, nt={args.nt})."}
 
     import numpy as _np
     try:
@@ -528,7 +570,10 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
     models, err = _resolve_models(args)
     if err is not None:
         return err
-    args.backend_impl = _auto_impl(args.backend_impl, args.device, args.equation)
+    if wavefield and args.source_type is None:
+        args.source_type = _p_and_s_source(args.equation)
+    # Snapshots are captured only by the eager backend.
+    args.backend_impl = _auto_impl(args.backend_impl, args.device, args.equation, snapshots=wavefield)
 
     try:
         geometry = _resolve_geometry(args, vp_shape)
@@ -536,15 +581,16 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
         return {"error": str(exc)}
 
     spec_dict = _absolute_paths(_construct_spec_dict(args, models, geometry))
+    schema = WavefieldSpec if wavefield else ForwardSpec
     try:
-        spec = ForwardSpec.model_validate(spec_dict)
+        spec = schema.model_validate(spec_dict)
     except Exception as exc:
         # Surface validation errors as data, not exceptions — the agent loop
         # feeds them back to the LLM so it can retry.
-        return {"error": f"ForwardSpec validation failed: {exc}", "spec_attempted": spec_dict}
+        return {"error": f"{schema.__name__} validation failed: {exc}", "spec_attempted": spec_dict}
 
     # Pick an effective task_id for the yaml filename even if the spec leaves it None.
-    eff_task_id = args.task_id or _slug(Path(args.vp_path).stem) + "-forward"
+    eff_task_id = args.task_id or _slug(Path(args.vp_path).stem) + ("-wavefield" if wavefield else "-forward")
     yaml_path: str | None = None
     if args.save_yaml:
         out_root = Path(args.output_dir).expanduser()
@@ -554,8 +600,9 @@ def build_forward_spec(args: BuildForwardParams) -> dict[str, Any]:
 
     nshots_estimate = "depends on grid.shape; resolved at runtime"
     summary = (
-        f"ForwardSpec ready: equation={args.equation}, backend={args.backend_impl}, "
-        f"grid dh={args.dh}m, nt={args.nt}, dt={args.dt}s, Ricker fm={args.fm}Hz. "
+        f"{schema.__name__} ready: equation={args.equation}, backend={args.backend_impl}, "
+        + (f"snapshots at steps {args.snapshot_times}, " if wavefield else "")
+        + f"grid dh={args.dh}m, nt={args.nt}, dt={args.dt}s, Ricker fm={args.fm}Hz. "
         f"Line geometry: sources step={args.source_step} depth={args.source_depth}, "
         f"receivers step={args.receiver_step} depth={args.receiver_depth}. "
         f"Output → {args.output_dir}/<task_id>/."

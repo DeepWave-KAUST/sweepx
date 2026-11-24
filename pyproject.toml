@@ -44,7 +44,7 @@ segy     = ["segyio>=1.9"]
 hdf5     = ["h5py>=3.6"]
 animate  = ["imageio>=2.9"]                  # GIFs in sweepx.tasks.viz / sweepx.agent
 agent-ui = ["gradio>=4.0", "ipywidgets>=8.0"]
-mcp      = ["mcp>=0.9"]
+mcp      = ["mcp>=1.19,<2"]                  # `sweep-agent mcp`
 vllm     = ["vllm>=0.5"]                     # serve the agent's model locally; not in `all`
 all      = ["sweepx[segy,hdf5,animate,agent-ui,mcp]"]
 test     = ["pytest>=7", "segyio>=1.9", "h5py>=3.6", "imageio>=2.9"]

@@ -14,6 +14,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from sweepx.agent.tools import register
+from sweepx.agent.tools._modelmeta import write_model_meta
 
 
 class MakeSyntheticModelParams(BaseModel):
@@ -32,6 +33,7 @@ class MakeSyntheticModelParams(BaseModel):
     vp_max: float = Field(3200.0, gt=0, description="High velocity (m/s) — bottom / anomaly.")
     n_layers: int = Field(4, ge=2, description="Number of layers when kind='layered'.")
     out_path: str = Field("/tmp/synthetic_vp.npy", description="Where to save the .npy model (.npy appended if missing).")
+    dh: float = Field(10.0, gt=0, description="Grid spacing (m) of the model. Recorded beside the .npy, so the modelling tools use it without being told.")
     elastic: bool = Field(
         False,
         description=(
@@ -86,7 +88,7 @@ def _fault(nz, nx, lo, hi):
         "('smooth' = a smooth depth-gradient, the usual FWI starting model). "
         "For an ELASTIC medium pass elastic=true to also get vs + rho (returns vp_path/vs_path/rho_path). "
         "Returns the saved path(s), shape and vp range; feed straight into build_forward_spec / run_fwi / "
-        "animate_wavefield / plot_velocity_model. Use when the user asks to create/make a model / 生成/造一个模型."
+        "animate_wavefield / plot_model. Use when the user asks to create/make a model / 生成/造一个模型."
     ),
     params_model=MakeSyntheticModelParams,
 )
@@ -120,9 +122,10 @@ def make_synthetic_model(args: MakeSyntheticModelParams) -> dict[str, Any]:
         for name, arr in (("vp", vp), ("vs", vs), ("rho", rho)):
             p = f"{stem}_{name}.npy"
             np.save(p, arr)
+            write_model_meta(p, dh=args.dh, shape=arr.shape, source=f"make_synthetic_model kind={args.kind}")
             paths[f"{name}_path"] = p
         return {
-            **paths, "kind": args.kind, "shape": list(vp.shape), "elastic": True,
+            **paths, "kind": args.kind, "shape": list(vp.shape), "dh": args.dh, "elastic": True,
             "summary": (
                 f"elastic {args.kind} set saved: vp {vp.min():.0f}-{vp.max():.0f}, "
                 f"vs {vs.min():.0f}-{vs.max():.0f} m/s, rho {rho.min():.0f}-{rho.max():.0f} kg/m³. "
@@ -131,11 +134,13 @@ def make_synthetic_model(args: MakeSyntheticModelParams) -> dict[str, Any]:
         }
 
     np.save(out, m.astype(np.float32))
+    write_model_meta(out, dh=args.dh, shape=m.shape, source=f"make_synthetic_model kind={args.kind}")
     return {
         "model_path": str(out),
         "kind": args.kind,
         "shape": list(m.shape),
+        "dh": args.dh,
         "vp_min": float(m.min()),
         "vp_max": float(m.max()),
-        "summary": f"{args.kind} model {m.shape}, vp {m.min():.0f}–{m.max():.0f} m/s saved to {out}",
+        "summary": f"{args.kind} model {m.shape}, dh={args.dh:g} m, vp {m.min():.0f}–{m.max():.0f} m/s saved to {out}",
     }

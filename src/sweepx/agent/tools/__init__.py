@@ -15,6 +15,34 @@ from typing import Any, Callable, Type
 
 from pydantic import BaseModel, ValidationError
 
+from sweepx.agent.tools._modelmeta import DH_OMIT_NOTE, MODEL_PATH_ARGS, fill_dh
+
+
+def _compact_schema(node: Any) -> Any:
+    """Shrink a Pydantic JSON schema for the prompt without changing what it accepts
+    in practice: drop ``title`` everywhere, collapse ``Optional[X]`` (``anyOf`` with
+    ``null``) to ``X``, and drop ``default: null``. Arguments are still validated by
+    the full Pydantic model in :meth:`Tool.invoke`."""
+    if isinstance(node, list):
+        return [_compact_schema(v) for v in node]
+    if not isinstance(node, dict):
+        return node
+    out = {k: _compact_schema(v) for k, v in node.items() if k != "title"}
+    if "properties" in node:  # property names may themselves be "title"
+        out["properties"] = {k: _compact_schema(v) for k, v in node["properties"].items()}
+    any_of = out.get("anyOf")
+    if isinstance(any_of, list):
+        rest = [a for a in any_of if a != {"type": "null"}]
+        if len(rest) < len(any_of):
+            if len(rest) == 1:
+                out.pop("anyOf")
+                out = {**rest[0], **out}
+            else:
+                out["anyOf"] = rest
+    if "default" in out and out["default"] is None:
+        out.pop("default")
+    return out
+
 
 @dataclass
 class ToolResult:
@@ -39,13 +67,18 @@ class Tool:
     fn: Callable[[BaseModel], Any]
 
     def openai_spec(self) -> dict[str, Any]:
+        params = _compact_schema(self.params_model.model_json_schema())
+        props = params.get("properties", {})
+        if "dh" in props and any(k in props for k in MODEL_PATH_ARGS):
+            # Tool.invoke fills dh from the model's recorded metadata, so the
+            # caller may omit it (and is told what happens if it does not).
+            params["required"] = [r for r in params.get("required", []) if r != "dh"] or None
+            if params["required"] is None:
+                params.pop("required")
+            props["dh"]["description"] = (props["dh"].get("description", "Grid spacing (m).") + DH_OMIT_NOTE)
         return {
             "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.params_model.model_json_schema(),
-            },
+            "function": {"name": self.name, "description": self.description, "parameters": params},
         }
 
     def invoke(self, raw_args: dict[str, Any]) -> ToolResult:
@@ -56,9 +89,23 @@ class Tool:
             return ToolResult(ok=False, error=(
                 f"{self.name} takes no argument(s) {unknown}; its arguments are "
                 f"{sorted(self.params_model.model_fields)}."))
+        raw_args, dh_error = fill_dh(self.params_model.model_fields, raw_args or {})
+        if dh_error is not None:
+            return ToolResult(ok=False, error=dh_error)
         try:
             args = self.params_model.model_validate(raw_args)
         except ValidationError as exc:
+            if any(e["loc"] == ("dh",) and e["type"] == "missing" for e in exc.errors()):
+                from pathlib import Path
+
+                missing = [raw_args[k] for k in MODEL_PATH_ARGS
+                           if isinstance(raw_args.get(k), str) and not Path(raw_args[k]).is_file()]
+                if missing:  # say what is actually wrong, not "dh is missing"
+                    return ToolResult(ok=False, error=(
+                        f"model file not found: {missing[0]} (pass the path a tool returned)."))
+                return ToolResult(ok=False, error=(
+                    "dh (grid spacing, m) is required: the model file has no recorded dh "
+                    "(only get_benchmark_model / make_synthetic_model record one)."))
             return ToolResult(ok=False, error=f"validation: {exc}")
         try:
             value = self.fn(args)
@@ -116,7 +163,6 @@ import sweepx.agent.tools.inspect          # noqa: E402,F401
 import sweepx.agent.tools.introspect       # noqa: E402,F401
 import sweepx.agent.tools.build_forward    # noqa: E402,F401
 import sweepx.agent.tools.build_fwi        # noqa: E402,F401
-import sweepx.agent.tools.build_wavefield  # noqa: E402,F401
 import sweepx.agent.tools.build_spec       # noqa: E402,F401
 import sweepx.agent.tools.execute          # noqa: E402,F401
 import sweepx.agent.tools.status           # noqa: E402,F401
@@ -126,5 +172,7 @@ import sweepx.agent.tools.synth            # noqa: E402,F401
 import sweepx.agent.tools.analysis         # noqa: E402,F401
 import sweepx.agent.tools.forward_sweep    # noqa: E402,F401
 import sweepx.agent.tools.datasets         # noqa: E402,F401
+import sweepx.agent.tools.tasks_cli        # noqa: E402,F401
+import sweepx.agent.tools.slurm            # noqa: E402,F401
 
 __all__ = ["Tool", "ToolResult", "Registry", "registry", "register"]

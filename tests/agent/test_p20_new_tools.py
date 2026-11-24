@@ -1,4 +1,4 @@
-"""P20: the practical extras — make_synthetic_model, plot_velocity_model,
+"""P20: the practical extras — make_synthetic_model, plot_model (model file),
 plot_velocity_slice, plot_wavelet, animate_fwi_evolution."""
 
 from __future__ import annotations
@@ -36,17 +36,17 @@ def test_smooth_is_a_gradient_alias(tmp_path):
     assert np.array_equal(np.load(g), np.load(s))  # smooth ≡ gradient
 
 
-def test_plot_velocity_model_2d_and_3d(tmp_path):
+def test_plot_model_file_2d_and_3d(tmp_path):
     pytest.importorskip("sweepx.tasks.viz")
     m2 = tmp_path / "m2.npy"
     np.save(m2, np.linspace(1800, 3000, 60 * 80).reshape(60, 80).astype(np.float32))
-    r = registry.get("plot_velocity_model").invoke({"model_path": str(m2), "dh": 10.0, "out_path": str(tmp_path / "m2.png")})
+    r = registry.get("plot_model").invoke({"model_path": str(m2), "dh": 10.0, "out_path": str(tmp_path / "m2.png")})
     assert "error" not in r.value and Path(r.value["image_path"]).is_file()
     assert r.value["shape"] == [60, 80]
 
     m3 = tmp_path / "m3.npy"
     np.save(m3, np.full((20, 24, 28), 2200.0, dtype=np.float32))
-    r = registry.get("plot_velocity_model").invoke({"model_path": str(m3), "dh": 10.0, "out_path": str(tmp_path / "m3.png")})
+    r = registry.get("plot_model").invoke({"model_path": str(m3), "dh": 10.0, "out_path": str(tmp_path / "m3.png")})
     assert "error" not in r.value and Path(r.value["image_path"]).is_file()
 
 
@@ -94,6 +94,6 @@ def test_animate_fwi_evolution(tmp_path):
     assert r.value["n_frames"] == 3
 
 
-def test_plot_velocity_model_missing_file(tmp_path):
-    r = registry.get("plot_velocity_model").invoke({"model_path": str(tmp_path / "nope.npy")})
+def test_plot_model_file_missing_file(tmp_path):
+    r = registry.get("plot_model").invoke({"model_path": str(tmp_path / "nope.npy")})
     assert "error" in r.value

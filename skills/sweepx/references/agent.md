@@ -15,27 +15,29 @@ are still handy as plain Python functions (below).
 | `sweepx agent ui [--port 7860] [--share]` | Gradio web UI with file drag-and-drop (`pip install "sweepx[agent-ui]"`) |
 | `sweepx agent serve-llm --model qwen2.5-14b-instruct [--port 8000]` | start a local vLLM server (`pip install "sweepx[vllm]"`) |
 | `sweepx agent tools [--json]` | list tools (or their OpenAI tool specs) |
+| `sweepx agent mcp [--workdir DIR] [--tools core\|all\|a,b] [--no-images]` | serve the tools to an MCP client over stdio; `core` (default) = 18 general tools (`pip install "sweepx[mcp]"`) |
 
 Environment: `SWEEP_AGENT_LLM_URL`, `SWEEP_AGENT_LLM_MODEL`,
 `SWEEP_AGENT_LLM_API_KEY` (the CLI flags win). Tool calling needs a capable
 model; heavily quantized (Q4) local models drift and mis-call tools — prefer
 q8 or full precision. Custom backends subclass `sweepx.agent.llm.BaseLLM`.
-`sweepx[mcp]` installs the MCP dependency.
+`sweepx[mcp]` installs the MCP dependency. Models saved by `get_benchmark_model` /
+`make_synthetic_model` record their grid spacing in `<stem>.meta.json`; tools use it
+when `dh` is omitted and refuse a `dh` that disagrees.
 
 ## Intent → tool (what the agent's system prompt maps)
 
 | request | tool(s) |
 |---|---|
-| forward + show the gather | `run_forward_and_plot` (or `build_forward_spec` → `run_task` → `plot_shot_gather`) |
-| animate / snapshot a wavefield | `animate_wavefield`; `build_wavefield_spec` → `run_task` → `plot_wavefield` / `make_wavefield_gif` |
+| forward + show the gather | `run_forward_sweep` (one shot, returns the gather and a `physics` block); many shots: `build_forward_spec` → `run_task` → `plot_shot_gather` |
+| animate / snapshot a wavefield | `animate_wavefield(vp_path=…)`; `build_forward_spec(snapshot_times=…)` → `run_task` → `plot_wavefield` / `animate_wavefield(task_dir=…)` |
 | compare equations' wavefronts | `compare_equation_wavefields` |
 | FWI (+ figures) | `run_fwi`; multiscale `run_multiscale_fwi`; advanced: `describe_task_schema` → `build_spec` → `run_task` |
 | RTM / LSRTM / any advanced key | `describe_task_schema(task_type, section)` → `build_spec` → `run_task` |
 | which equations / models | `list_equations` |
 | stability / dispersion check | `check_parameters` |
-| look at files | `inspect_file`, `plot_velocity_model`, `plot_velocity_slice`, `plot_segy`, `plot_observed_data`, `compare_shot_gathers`, `plot_wavelet` |
+| look at files | `inspect_file`, `plot_model(model_path=…)`, `plot_velocity_slice`, `plot_segy`, `plot_shot_gather(npy_path=…)`, `compare_shot_gathers`, `plot_wavelet` |
 | no data yet | `make_synthetic_model` (`elastic=true` gives vp/vs/rho), `list_benchmark_models`, `get_benchmark_model` |
-| solver-only install | `run_forward_sweep` |
 
 ## Tools as Python functions
 

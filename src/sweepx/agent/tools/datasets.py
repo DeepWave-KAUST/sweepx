@@ -16,6 +16,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from sweepx.agent.tools import register
+from sweepx.agent.tools._modelmeta import meta_path, write_model_meta
 
 
 def _require_datasets():
@@ -123,6 +124,10 @@ def get_benchmark_model(args: GetBenchmarkModelParams) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     vp_path = out_dir / f"{args.name}_{(variant or 'default').replace(':', '_')}_vp.npy"
     np.save(vp_path, vp.astype(np.float32))
+    if dh_scalar is not None:
+        write_model_meta(vp_path, dh=dh_scalar, shape=vp.shape, source=f"sweep.datasets {args.name}:{variant}")
+    else:
+        meta_path(vp_path).unlink(missing_ok=True)  # never leave a stale one from an earlier save
 
     dh_txt = f"{dh_scalar} m" if dh_scalar is not None else "unknown (set dh yourself)"
     return {
@@ -136,5 +141,5 @@ def get_benchmark_model(args: GetBenchmarkModelParams) -> dict[str, Any]:
         "citation": citation,
         "summary": (f"{args.name}:{variant} vp {list(vp.shape)}, native dh={dh_txt}, "
                     f"vp {vp.min():.0f}–{vp.max():.0f} m/s → {vp_path}. "
-                    f"Run it with run_forward_sweep(vp_path=..., dh={dh_scalar})."),
+                    f"dh is recorded with the file, so the modelling tools need only vp_path."),
     }

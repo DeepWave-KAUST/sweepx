@@ -1,4 +1,4 @@
-"""`sweep-agent` CLI — `chat`, `serve-llm`, `tools` subcommands."""
+"""`sweep-agent` CLI — `chat`, `serve-llm`, `ui`, `tools`, `mcp` subcommands."""
 
 from __future__ import annotations
 
@@ -112,6 +112,14 @@ def _build_argparser() -> argparse.ArgumentParser:
     pt = sub.add_parser("tools", help="List the tools the LLM can call.")
     pt.add_argument("--json", action="store_true", help="Emit OpenAI tool specs as JSON.")
     pt.set_defaults(func=_cmd_tools)
+
+    # mcp -----------------------------------------------------------------
+    pm = sub.add_parser("mcp", help="Serve the tools to an MCP client (Claude Code, Claude Desktop, ...) over stdio.")
+    pm.add_argument("--workdir", default=None, help="Directory to run in; tools write to ./sweep_runs under it (default: current directory).")
+    pm.add_argument("--no-images", action="store_true", help="Return saved figures as file paths only, not as image content.")
+    pm.add_argument("--tools", default="core",
+                    help="Tools to offer: 'core' (default, ~18 general ones), 'all', or a comma-separated list of names.")
+    pm.set_defaults(func=_cmd_mcp)
 
     return p
 
@@ -227,6 +235,22 @@ def _cmd_tools(args: argparse.Namespace) -> int:
         desc = tool.description.split("\n")[0]
         print(f"  {tool.name:30s}  {desc}")
     return 0
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    import importlib.util
+    if importlib.util.find_spec("mcp") is None:
+        print('[sweep-agent] the MCP server needs the mcp SDK — install it with:\n'
+              '    pip install "sweepx[mcp]"', file=sys.stderr)
+        return 1
+    from sweepx.agent.mcp_server import resolve_tool_names, serve
+
+    try:
+        resolve_tool_names(args.tools)
+    except ValueError as exc:
+        print(f"[sweep-agent] --tools: {exc}", file=sys.stderr)
+        return 2
+    return serve(workdir=args.workdir, images=not args.no_images, tools=args.tools)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

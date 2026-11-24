@@ -1,4 +1,4 @@
-"""P5: build_wavefield_spec flat tool."""
+"""P5: build_forward_spec with snapshot_times (a wavefield run)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def test_build_wavefield_ok(tmp_path):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
-    res = registry.get("build_wavefield_spec").invoke({
+    res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 100,
         "snapshot_times": [30, 60, 90],
         "output_dir": str(tmp_path / "r"), "task_id": "wf",
@@ -30,7 +30,7 @@ def test_build_wavefield_ok(tmp_path):
 def test_build_wavefield_snaptime_out_of_range(tmp_path):
     pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
-    res = registry.get("build_wavefield_spec").invoke({
+    res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 50,
         "snapshot_times": [30, 80],  # 80 >= nt
         "output_dir": str(tmp_path / "r"),
@@ -43,7 +43,7 @@ def test_build_wavefield_bad_equation(tmp_path):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
-    res = registry.get("build_wavefield_spec").invoke({
+    res = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 100,
         "snapshot_times": [50], "equation": "VTI",
         "output_dir": str(tmp_path / "r"),
@@ -57,12 +57,12 @@ def test_wavefield_e2e_cpu(tmp_path):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
     vp = _vp(tmp_path / "vp.npy")
-    b = registry.get("build_wavefield_spec").invoke({
+    b = registry.get("build_forward_spec").invoke({
         "vp_path": vp, "dh": 12.5, "dt": 0.001, "nt": 80, "fm": 15.0,
         "snapshot_times": [20, 50],
         "source_step": 20, "source_depth": 2, "receiver_step": 5, "receiver_depth": 8,
         "spatial_order": 4, "abcn": 10, "device": "cpu", "backend_impl": "eager",
-        "use_compile": False, "plot": False,
+        "use_compile": False, "plot_snapshots": False,
         "output_dir": str(tmp_path / "r"), "task_id": "wf_e2e",
     })
     assert b.ok and "error" not in b.value, b.value

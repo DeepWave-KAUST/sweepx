@@ -41,7 +41,7 @@ def test_build_wavefield_vp0_primary(tmp_path):
         "epsilon": npy("eps", 0.2), "delta": npy("del", 0.05),
         "gamma": npy("gam", 0.1), "theta": npy("theta", 0.5), "phi": npy("phi", 0.0),
     }
-    b = registry.get("build_wavefield_spec").invoke({
+    b = registry.get("build_forward_spec").invoke({
         "vp_path": vp0, "equation": "ElasticTTI", "extra_models": extra,
         "dh": 10.0, "dt": 8e-4, "nt": 40, "fm": 18.0, "snapshot_times": [20, 39],
         "abcn": 10, "spatial_order": 4, "source_at_center": True,
@@ -62,7 +62,7 @@ def test_wrong_equation_for_extra_models_hint(tmp_path):
     np.save(vp, np.full((40, 40), 2500.0, dtype=np.float32))
     for n in ("vs", "rho"):
         np.save(tmp_path / f"{n}.npy", np.full((40, 40), 1500.0, dtype=np.float32))
-    r = registry.get("build_wavefield_spec").invoke({
+    r = registry.get("build_forward_spec").invoke({
         "vp_path": str(vp), "equation": "Acoustic",
         "extra_models": {"vs": str(tmp_path / "vs.npy"), "rho": str(tmp_path / "rho.npy")},
         "dh": 10.0, "dt": 1e-3, "nt": 20, "fm": 12.0, "snapshot_times": [10],
