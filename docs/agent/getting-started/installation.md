@@ -17,6 +17,7 @@ Extras:
 pip install "sweepx[agent-ui]"   # Gradio web UI
 pip install "sweepx[animate]"    # GIF export
 pip install "sweepx[segy]"       # SEG-Y files
+pip install "sweepx[mcp]"        # serve the tools to an MCP client (`sweep-agent mcp`)
 ```
 
 ## You also need a local LLM

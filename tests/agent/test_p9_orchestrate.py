@@ -42,7 +42,7 @@ def test_compare_equation_missing_model(tmp_path):
     np.save(vp, np.full((40, 56), 2500.0, dtype=np.float32))
     res = registry.get("compare_equation_wavefields").invoke({
         "vp_path": str(vp), "equations": ["Acoustic", "AcousticVTI"],
-        "out_path": str(tmp_path / "cmp.png"), "output_dir": str(tmp_path / "runs"), "nt": 50,
+        "out_path": str(tmp_path / "cmp.png"), "output_dir": str(tmp_path / "runs"), "nt": 50, "dh": 10.0,
     })
     assert "error" in res.value
     assert "epsilon" in res.value["error"] or "delta" in res.value["error"]

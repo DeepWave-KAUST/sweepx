@@ -18,12 +18,49 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from sweepx.agent.tools import register
+from sweepx.agent.tools._modelmeta import read_model_meta
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _slug(text: str) -> str:
     return _SLUG_RE.sub("-", text).strip("-_") or "task"
+
+
+def _model_paths(node: Any):
+    """Every ``"path": "<file>.npy"`` value in a spec dict (models, true models, ...)."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "path" and isinstance(v, str) and v.endswith(".npy"):
+                yield v
+            else:
+                yield from _model_paths(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _model_paths(v)
+
+
+def _check_grid_dh(raw: dict[str, Any]) -> str | None:
+    """Fill ``grid.dh`` from the models' recorded dh when it is missing; reject a
+    spec whose ``grid.dh`` (or whose models) disagree with what the files record."""
+    recorded = {p: float(m["dh"]) for p in _model_paths(raw) if (m := read_model_meta(p)) is not None}
+    if not recorded:
+        return None
+    if len(set(recorded.values())) > 1:
+        return "the spec's model files record different grid spacings: " + ", ".join(
+            f"{p}: {v:g} m" for p, v in recorded.items())
+    ref = next(iter(recorded.values()))
+    grid = raw.get("grid")
+    if grid is None:
+        raw["grid"] = {"dh": ref}
+        return None
+    if isinstance(grid, dict):
+        if grid.get("dh") is None:
+            grid["dh"] = ref
+        elif isinstance(grid["dh"], (int, float)) and abs(float(grid["dh"]) - ref) > 1e-6 * ref:
+            return (f"grid.dh={grid['dh']:g} m disagrees with the {ref:g} m recorded for "
+                    f"{next(iter(recorded))}. Drop grid.dh or set it to {ref:g}.")
+    return None
 
 
 class BuildSpecParams(BaseModel):
@@ -67,6 +104,9 @@ def build_spec(args: BuildSpecParams) -> dict[str, Any]:
 
     raw: dict[str, Any] = dict(args.spec)
     raw["task_type"] = args.task_type
+    dh_error = _check_grid_dh(raw)
+    if dh_error is not None:
+        return {"error": dh_error}
     raw.setdefault("output_dir", args.output_dir)
     if args.task_id is not None:
         raw["task_id"] = args.task_id

@@ -15,7 +15,7 @@ def test_core_always_present():
 
 def test_routing_picks_relevant_groups():
     fwd = select_tool_names("do forward modelling and plot the shot gather")
-    assert "run_forward_and_plot" in fwd
+    assert "build_forward_spec" in fwd and "plot_shot_gather" in fwd
     wave = select_tool_names("animate how the wave propagates")
     assert "animate_wavefield" in wave
     fwi = select_tool_names("run a full waveform inversion")
@@ -35,7 +35,7 @@ def test_subset_is_smaller_than_full():
 
 def test_unmatched_falls_back_broad():
     names = select_tool_names("hello there")
-    assert "run_forward_and_plot" in names  # fallback includes the common tasks
+    assert "animate_wavefield" in names and "run_fwi" in names  # fallback includes the common tasks
 
 
 def test_filter_to_available():

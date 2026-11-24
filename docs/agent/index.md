@@ -29,6 +29,10 @@ user (natural language + files)
             └─ build + execute + viz  ──►  sweepx.tasks.TaskRunner   (production runner)
 ```
 
+The same tools can also be served to an MCP client such as Claude Code
+(`sweep-agent mcp`, see the [user guide](user-guide/index.md#mcp-clients)); the client's
+model then replaces the local LLM and agent loop.
+
 Tools import the geophysics stack **lazily** — a tool whose dependencies fail to
 import returns a clear `{"error": "… not importable"}` instead of crashing, so the
 agent always starts.

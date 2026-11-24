@@ -17,6 +17,14 @@ from pydantic import BaseModel, Field
 from sweepx.agent.tools import register
 
 
+class RunTaskTimeout(BaseException):
+    """Raised by the SIGALRM handler when ``timeout_s`` runs out.
+
+    A BaseException, so the runner's ``except Exception`` blocks (the run-metadata
+    dump, for one) cannot swallow it and let the task run on with no budget left.
+    """
+
+
 class RunTaskParams(BaseModel):
     """Run a previously-built spec YAML through sweepx.tasks.TaskRunner."""
 
@@ -97,7 +105,7 @@ def run_task(args: RunTaskParams) -> dict[str, Any]:
         import signal
 
         def _on_timeout(signum, frame):  # pragma: no cover - exercised via integration
-            raise TimeoutError(f"run_task exceeded {args.timeout_s}s budget")
+            raise RunTaskTimeout(f"run_task exceeded {args.timeout_s}s budget")
 
         signal.signal(signal.SIGALRM, _on_timeout)
         signal.setitimer(signal.ITIMER_REAL, args.timeout_s)
@@ -105,6 +113,8 @@ def run_task(args: RunTaskParams) -> dict[str, Any]:
 
     try:
         result = TaskRunner().run(spec)
+    except RunTaskTimeout as exc:
+        return {"error": f"TimeoutError: {exc}"}
     except Exception as exc:
         return {"error": f"TaskRunner raised: {type(exc).__name__}: {exc}"}
     finally:

@@ -1,6 +1,6 @@
 """P17: wavefield equation coverage + schema introspection breadth.
 
-build_wavefield_spec across equation families (validation), and
+build_forward_spec(snapshot_times) across equation families (validation), and
 describe_task_schema / list_equations exercised on their nested variants so the
 discovery path the LLM relies on stays correct.
 """
@@ -28,7 +28,7 @@ def test_build_wavefield_equation_families(tmp_path, equation):
     for m, p in paths.items():
         np.save(p, np.full(shape, np.float32(defaults.get(m, 1.0))))
     extra = {m: paths[m] for m in required[1:]}
-    r = registry.get("build_wavefield_spec").invoke({
+    r = registry.get("build_forward_spec").invoke({
         "vp_path": paths[required[0]], "equation": equation, "extra_models": extra or None,
         "dh": 10.0, "dt": 1e-3, "nt": 80, "fm": 12.0, "snapshot_times": [20, 50, 79],
         "device": "cpu", "backend_impl": "eager", "use_compile": False,
@@ -44,7 +44,7 @@ def test_snapshot_times_out_of_range(tmp_path):
     pytest.importorskip("sweepx.tasks")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((40, 40), 2500.0, dtype=np.float32))
-    r = registry.get("build_wavefield_spec").invoke({
+    r = registry.get("build_forward_spec").invoke({
         "vp_path": str(vp), "dh": 10.0, "dt": 1e-3, "nt": 50, "fm": 12.0,
         "snapshot_times": [10, 60], "output_dir": str(tmp_path / "runs"),
     })

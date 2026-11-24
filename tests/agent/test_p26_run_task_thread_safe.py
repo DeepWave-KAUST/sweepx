@@ -58,3 +58,23 @@ def test_run_task_with_timeout_on_main_thread_still_works(tmp_path):
     yaml_path = _tiny_forward_yaml(tmp_path)
     r = registry.get("run_task").invoke({"yaml_path": yaml_path, "timeout_s": 60})
     assert r.ok and r.value.get("state") == "success", r.value
+
+
+def test_run_task_timeout_not_swallowed_by_metadata_dump(tmp_path, monkeypatch):
+    """The timeout fires while the runner dumps run metadata (a slow ``git status``
+    on a network mount), inside its ``except Exception`` guard. It must still end
+    the run instead of being swallowed and leaving the task with no budget."""
+    import time
+
+    import sweepx.tasks.runner as runner
+
+    yaml_path = _tiny_forward_yaml(tmp_path)
+
+    def _slow_dump(*args, **kwargs):
+        time.sleep(5)
+
+    monkeypatch.setattr(runner, "_dump_run_metadata", _slow_dump)
+    t0 = time.monotonic()
+    r = registry.get("run_task").invoke({"yaml_path": yaml_path, "timeout_s": 0.5})
+    assert time.monotonic() - t0 < 4
+    assert "TimeoutError" in r.value.get("error", ""), r.value

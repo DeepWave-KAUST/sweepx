@@ -1,4 +1,4 @@
-"""P8: visualization tools — plot_wavefield / make_wavefield_gif / compare_wavefields."""
+"""P8: visualization tools — plot_wavefield / animate_wavefield(task_dir) / compare_wavefields."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from sweepx.agent.tools import registry
 def _run_wavefield(tmp_path, task_id, snaps=(20, 50, 80)):
     vp = tmp_path / f"{task_id}_vp.npy"
     np.save(vp, np.full((40, 56), 1800.0, dtype=np.float32))
-    b = registry.get("build_wavefield_spec").invoke({
+    b = registry.get("build_forward_spec").invoke({
         "vp_path": str(vp), "dh": 12.5, "dt": 0.001, "nt": max(snaps) + 1, "fm": 12.0,
         "snapshot_times": list(snaps), "source_step": 20, "source_depth": 2,
         "receiver_step": 5, "receiver_depth": 8, "spatial_order": 4, "abcn": 10,
@@ -66,7 +66,7 @@ def test_make_gif(tmp_path, wavefield_runs):
     pytest.importorskip("sweep")
     pytest.importorskip("sweepx.tasks")
     td = _copy_run(wavefield_runs["wf1"], tmp_path)
-    res = registry.get("make_wavefield_gif").invoke({"task_dir": td, "abcn": 10, "fps": 6})
+    res = registry.get("animate_wavefield").invoke({"task_dir": td, "abcn": 10, "fps": 6})
     assert res.ok and "error" not in res.value, res.value
     assert Path(res.value["gif_path"]).is_file()
     assert res.value["n_frames"] == 3
@@ -79,7 +79,7 @@ def test_gif_path_fallback(tmp_path, wavefield_runs):
     pytest.importorskip("sweepx.tasks")
     td = _copy_run(wavefield_runs["wf1"], tmp_path)
     wrong = str(Path(td).parent / "hallucinated-name")
-    res = registry.get("make_wavefield_gif").invoke({"task_dir": wrong, "abcn": 10})
+    res = registry.get("animate_wavefield").invoke({"task_dir": wrong, "abcn": 10})
     assert res.ok and "error" not in res.value, res.value
     assert Path(res.value["gif_path"]).is_file()
 

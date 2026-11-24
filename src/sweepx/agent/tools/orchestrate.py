@@ -13,25 +13,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sweepx.agent.tools import register
-from sweepx.agent.tools.build_forward import _output_file
-from sweepx.agent.tools.build_wavefield import _p_and_s_source
-
-
-def _deliver(produced: str | None, dest: Path) -> str:
-    """Copy a figure a tool wrote under its task_dir to where the caller asked."""
-    if not produced:
-        return str(dest)
-    try:
-        if Path(produced).resolve() != dest.resolve():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copyfile(produced, dest)
-        return str(dest)
-    except OSError:
-        return produced
+from sweepx.agent.tools.build_forward import _output_file, _p_and_s_source
 
 
 class CompareEquationWavefieldsParams(BaseModel):
@@ -50,7 +35,7 @@ class CompareEquationWavefieldsParams(BaseModel):
             "{'epsilon':'/p/e.npy','delta':'/p/d.npy','theta':'/p/t.npy'}."
         ),
     )
-    dh: float = Field(10.0, gt=0)
+    dh: float = Field(..., gt=0, description="Grid spacing (m).")
     dt: float = Field(1.0e-3, gt=0)
     nt: int = Field(300, ge=2)
     fm: float = Field(12.0, gt=0)
@@ -148,7 +133,7 @@ def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[s
         }
         if extra_override is not None:
             build_args["extra"] = extra_override
-        b = registry.get("build_wavefield_spec").invoke(build_args)
+        b = registry.get("build_forward_spec").invoke(build_args)
         if not b.ok or "error" in b.value:
             return {"error": f"build {eq}: {b.value.get('error') if b.ok else b.error}"}
         r = registry.get("run_task").invoke({"yaml_path": b.value["yaml_path"], "timeout_s": 400})
@@ -168,8 +153,11 @@ def compare_equation_wavefields(args: CompareEquationWavefieldsParams) -> dict[s
 
 
 class AnimateWavefieldParams(BaseModel):
-    vp_path: str = Field(..., description="Primary velocity model .npy (vp, or vp0 for elastic-TTI — the equation's FIRST model).")
-    out_path: str = Field(..., description="Output GIF path (a directory gets wavefield.gif).")
+    vp_path: str | None = Field(None, description="Simulate on this primary velocity model .npy (vp, or vp0 for elastic-TTI — the equation's FIRST model). Give this OR task_dir.")
+    task_dir: str | None = Field(None, description="Only animate the snapshots of an existing wavefield run (from build_forward_spec with snapshot_times + run_task); pass the abcn / free_surface / topography_path it used. Give this OR vp_path.")
+    out_path: str | None = Field(None, description="Output GIF (or .mp4) path; a directory gets wavefield.gif. Omit for <task_dir>/output/wavefield.gif.")
+    fps: int = Field(8, ge=1, le=30, description="Frames per second.")
+    shot: int = Field(0, ge=0, description="With task_dir: which shot's wavefield.")
     equation: str | None = Field(
         None,
         description=(
@@ -186,7 +174,7 @@ class AnimateWavefieldParams(BaseModel):
             "theta/phi are in RADIANS. vp comes from vp_path."
         ),
     )
-    dh: float = Field(10.0, gt=0)
+    dh: float | None = Field(None, gt=0, description="Grid spacing (m); needed to simulate (vp_path).")
     dt: float = Field(1.0e-3, gt=0)
     nt: int = Field(300, ge=2)
     fm: float = Field(12.0, gt=0)
@@ -215,12 +203,19 @@ class AnimateWavefieldParams(BaseModel):
     device: str = Field("auto", description="'auto' (the GPU if there is one), 'cuda', 'mps' or 'cpu'.")
     output_dir: str = Field("./sweep_runs")
 
+    @model_validator(mode="after")
+    def check_one_source(self):
+        if (self.vp_path is None) == (self.task_dir is None):
+            raise ValueError("give exactly one of vp_path (simulate, then animate) or task_dir (animate an existing run).")
+        return self
+
 
 @register(
     name="animate_wavefield",
     description=(
-        "Simulate a wavefield and animate it to a GIF in ONE call — build + run + make_wavefield_gif, "
-        "so you don't manage snapshot_times, the task_dir, or the source geometry. Ideal for 'show me "
+        "Simulate a wavefield and animate it to a GIF in ONE call (vp_path), so you don't manage "
+        "snapshot_times, the task_dir, or the source geometry — or animate the snapshots of an existing "
+        "wavefield run (task_dir). Ideal for 'show me "
         "how the wave propagates' on a homogeneous model (elastic P/S rings, anisotropic wavefronts). "
         "Auto-detects the equation from the models you pass (vp_path + extra_models), centres the source, "
         "and picks evenly-spaced frames. Pass topography_path for an irregular free surface. Returns the "
@@ -230,6 +225,17 @@ class AnimateWavefieldParams(BaseModel):
 )
 def animate_wavefield(args: AnimateWavefieldParams) -> dict[str, Any]:
     from sweepx.agent.tools import registry
+    from sweepx.agent.tools.visualize import render_wavefield_gif
+
+    if args.task_dir is not None:
+        return render_wavefield_gif(
+            args.task_dir, abcn=args.abcn, free_surface=args.free_surface, shot=args.shot,
+            field=args.field, out_path=args.out_path, fps=args.fps, topography_path=args.topography_path,
+        )
+    if not Path(args.vp_path).is_file():
+        return {"error": f"model file not found: {args.vp_path} (pass the path a tool returned)."}
+    if args.dh is None:
+        return {"error": "dh (grid spacing, m) is required to simulate: the model file has no recorded dh."}
 
     # 1. Resolve the equation from the extra models when not given. vp_path is
     # the primary model; extra_models are everything after it.
@@ -278,7 +284,7 @@ def animate_wavefield(args: AnimateWavefieldParams) -> dict[str, Any]:
         # from the surface); a corner source would hardly reach the relief.
         build_args.update(topography=args.topography_path, source_at_center=False,
                           source_x_frac=0.5, source_depth=2)
-    b = registry.get("build_wavefield_spec").invoke(build_args)
+    b = registry.get("build_forward_spec").invoke(build_args)
     if not b.ok or "error" in b.value:
         return {"error": f"build {equation}: {b.value.get('error') if b.ok else b.error}"}
 
@@ -287,26 +293,23 @@ def animate_wavefield(args: AnimateWavefieldParams) -> dict[str, Any]:
     if r.value.get("state") != "success":
         return {"error": f"run {equation}: {r.value.get('error')}"}
 
-    # 5. Animate. make_wavefield_gif writes to <task_dir>/output/<out_name>;
-    # copy it to the caller's out_path afterwards so they get it where asked.
-    dest = _output_file(args.out_path, "wavefield.gif")
-    gif_args: dict[str, Any] = {
-        "task_dir": r.value["task_dir"], "abcn": args.abcn, "field": args.field,
-        "free_surface": args.free_surface, "out_name": dest.name,
-    }
+    # 5. Animate.
+    sources = None
     if args.topography_path is not None:
-        gif_args["topography_path"] = args.topography_path
         nx = int(np.load(args.vp_path, mmap_mode="r").shape[-1])
-        gif_args["sources"] = [[int(round(0.5 * (nx - 1))), 2]]   # [x, rows below the surface]
-    g = registry.get("make_wavefield_gif").invoke(gif_args)
-    if not g.ok or "error" in g.value:
-        return {"error": f"animate: {g.value.get('error') if g.ok else g.error}"}
-    final = _deliver(g.value.get("gif_path"), dest)
+        sources = [[int(round(0.5 * (nx - 1))), 2]]   # [x, rows below the surface]
+    g = render_wavefield_gif(
+        r.value["task_dir"], abcn=args.abcn, free_surface=args.free_surface, shot=0, field=args.field,
+        out_path=str(_output_file(args.out_path, "wavefield.gif")) if args.out_path else None,
+        fps=args.fps, topography_path=args.topography_path, sources=sources,
+    )
+    if "error" in g:
+        return {"error": f"animate: {g['error']}"}
     return {
-        "gif_path": final,
+        "gif_path": g["gif_path"],
         "equation": equation,
         "source_type": source_type,
-        "n_frames": g.value.get("n_frames", len(snaps)),
+        "n_frames": g.get("n_frames", len(snaps)),
         "task_dir": r.value["task_dir"],
     }
 
@@ -417,71 +420,6 @@ def run_fwi(args: RunFwiParams) -> dict[str, Any]:
         out["convergence_image"] = c.value.get("image_path")
     out["inverted_vp"] = str(inverted)
     return out
-
-
-class RunForwardPlotParams(BaseModel):
-    vp_path: str = Field(..., description="Velocity model .npy.")
-    out_path: str = Field(..., description="Output PNG path for the shot gather (a directory gets shot_gather.png).")
-    equation: str = Field("Acoustic", description="Wave equation; Acoustic for standard acoustic.")
-    extra_models: dict[str, str] | None = Field(None, description="Extra model files for non-acoustic equations (vs/rho/epsilon/...).")
-    dh: float = Field(..., gt=0)
-    dt: float = Field(1.0e-3, gt=0)
-    record_length_s: float | None = Field(None, gt=0, description="Record length in seconds (e.g. 1.5). Give this OR nt.")
-    nt: int | None = Field(None, ge=1, description="Time samples; give this OR record_length_s.")
-    fm: float = Field(10.0, gt=0)
-    source_depth: int = Field(1, ge=0)
-    source_x_frac: float = Field(
-        0.5, ge=0.0, le=1.0,
-        description="Where the one source sits across x (0=left, 0.5=centre, 1=right). Use for 'source on the left/right'.",
-    )
-    receiver_step: int = Field(2, ge=1)
-    receiver_depth: int = Field(4, ge=0)
-    abcn: int = Field(20, ge=0)
-    spatial_order: int = Field(8)
-    free_surface: bool = Field(False)
-    wiggle: bool = Field(False, description="Wiggle display instead of image.")
-    device: str = Field("auto", description="'auto' (the GPU if there is one), 'cuda', 'mps' or 'cpu'.")
-    output_dir: str = Field("./sweep_runs")
-
-
-@register(
-    name="run_forward_and_plot",
-    description=(
-        "Run forward modelling AND plot the shot gather in ONE call — build_forward_spec + run_task + "
-        "plot_shot_gather, managing the task_dir internally so the gather is ALWAYS from the run you just "
-        "did (never a stale one). This is the preferred way to do 'forward + shot gather / 正演并画炮记录'. "
-        "Give record_length_s (seconds) or nt. Returns the gather image path + the record shape."
-    ),
-    params_model=RunForwardPlotParams,
-)
-def run_forward_and_plot(args: RunForwardPlotParams) -> dict[str, Any]:
-    from sweepx.agent.tools import registry
-
-    # One shot: the tool draws one gather, so it models one.
-    b = registry.get("build_forward_spec").invoke({
-        "vp_path": args.vp_path, "equation": args.equation, "extra_models": args.extra_models or None,
-        "dh": args.dh, "dt": args.dt, "nt": args.nt, "record_length_s": args.record_length_s, "fm": args.fm,
-        "source_depth": args.source_depth, "source_x_frac": args.source_x_frac,
-        "receiver_step": args.receiver_step, "receiver_depth": args.receiver_depth,
-        "abcn": args.abcn, "spatial_order": args.spatial_order, "free_surface": args.free_surface,
-        "device": args.device, "backend_impl": "auto", "use_compile": False,
-        "output_dir": args.output_dir, "task_id": "forward",
-    })
-    if not b.ok or "error" in b.value:
-        return {"error": f"build_forward: {b.value.get('error') if b.ok else b.error}"}
-    r = registry.get("run_task").invoke({"yaml_path": b.value["yaml_path"], "timeout_s": 1200})
-    if r.value.get("state") != "success":
-        return {"error": f"run: {r.value.get('error')}"}
-    task_dir = r.value["task_dir"]  # the REAL task_dir — no hallucination
-
-    dest = _output_file(args.out_path, "shot_gather.png")
-    g = registry.get("plot_shot_gather").invoke({
-        "task_dir": task_dir, "dt": args.dt, "dh": args.dh, "wiggle": args.wiggle, "out_name": dest.name,
-    })
-    if not g.ok or "error" in g.value:
-        return {"error": f"plot: {g.value.get('error') if g.ok else g.error}", "task_dir": task_dir}
-    final = _deliver(g.value.get("image_path"), dest)
-    return {"image_path": final, "task_dir": task_dir, "shape": g.value.get("shape"), "equation": b.value["spec"]["physics"]["equation"]}
 
 
 class RunMultiscaleFwiParams(BaseModel):

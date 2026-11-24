@@ -1,4 +1,4 @@
-"""P21: QC + data-I/O tools — check_parameters, plot_observed_data,
+"""P21: QC + data-I/O tools — check_parameters, plot_shot_gather(npy_path),
 compare_shot_gathers, plot_segy, and a tiny multiscale FWI chain."""
 
 from __future__ import annotations
@@ -35,12 +35,12 @@ def test_check_parameters_needs_velocities():
     assert "error" in r.value
 
 
-def test_plot_observed_data(tmp_path):
+def test_plot_shot_gather_from_npy(tmp_path):
     pytest.importorskip("sweepx.tasks.viz")
     rec = np.random.randn(1, 200, 50, 1).astype(np.float32)
     p = tmp_path / "rec.npy"
     np.save(p, rec)
-    r = registry.get("plot_observed_data").invoke({"npy_path": str(p), "dt": 1e-3, "out_path": str(tmp_path / "g.png")})
+    r = registry.get("plot_shot_gather").invoke({"npy_path": str(p), "dt": 1e-3, "out_path": str(tmp_path / "g.png")})
     assert "error" not in r.value and Path(r.value["image_path"]).is_file()
     assert r.value["shape"] == [200, 50]
 
@@ -69,25 +69,20 @@ def test_plot_segy(tmp_path):
 
 
 @pytest.mark.timeout(180)
-def test_run_forward_and_plot_uses_its_own_run(tmp_path):
-    """The one-call forward+plot must plot the gather from THE RUN IT JUST DID
-    (record_length_s honoured), never a stale task_dir."""
+def test_run_forward_sweep_honours_the_record_length(tmp_path):
+    """The one-call forward+plot plots THE RUN IT JUST DID, with record_length_s honoured."""
     pytest.importorskip("sweep")
-    pytest.importorskip("sweepx.tasks")
-    pytest.importorskip("sweepx.tasks.viz")
     vp = tmp_path / "vp.npy"
     np.save(vp, np.full((60, 80), 2000.0, dtype=np.float32))
-    r = registry.get("run_forward_and_plot").invoke({
-        "vp_path": str(vp), "out_path": str(tmp_path / "g.png"),
-        "dh": 10.0, "dt": 1e-3, "record_length_s": 0.4, "fm": 12.0,
-        "receiver_step": 2, "output_dir": str(tmp_path / "runs"),
+    r = registry.get("run_forward_sweep").invoke({
+        "vp_path": str(vp), "dh": 10.0, "dt": 1e-3, "record_length_s": 0.4, "fm": 12.0,
+        "receiver_step": 2, "device": "cpu", "out_dir": str(tmp_path / "run"),
     })
     assert r.ok and "error" not in r.value, r.value
     assert Path(r.value["image_path"]).is_file()
-    # 0.4 s @ dt=1e-3 → 400 samples; the gather is from this run, not a stale one.
-    assert r.value["shape"][0] == 400
-    rec = np.load(Path(r.value["task_dir"]) / "output" / "record.npy")
-    assert rec.shape[1] == 400
+    # 0.4 s @ dt=1e-3 → 400 samples.
+    assert r.value["shape"][0] == 400 and r.value["physics"]["record_length_s"] == pytest.approx(0.4)
+    assert np.load(r.value["record_path"]).shape == (400, 40)
 
 
 @pytest.mark.timeout(300)
